@@ -6,8 +6,10 @@ edition = "2024"
 [dependencies]
 async-trait = "0.1.92"
 ieum-engine = { path = "../ieum-engine" }
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
 notify = "8.2.2"
 pdf-extract = "0.12.1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
@@ -15,5 +17,5 @@ tokio = { version = "1.54.1", default-features = false, features = ["sync", "pro
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1.54.1", default-features = false, features = ["sync", "rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.54.1", default-features = false, features = ["sync", "rt", "rt-multi-thread", "macros", "time", "net", "io-util"] }
 tokio-util = "0.7.20"

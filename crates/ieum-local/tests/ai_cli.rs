@@ -456,7 +456,7 @@ async fn stderr_flood_is_capped_and_drained() {
 
 #[tokio::test]
 async fn unsupported_provider_fails() {
-    for p in ["cli:codex", "cli:gemini", "api:anthropic", "x"] {
+    for p in ["cli:codex", "cli:gemini", "api:ollama", "x"] {
         let err = run(&AiRunner::new(), json!({"provider": p, "prompt": "p"}))
             .await
             .unwrap_err();

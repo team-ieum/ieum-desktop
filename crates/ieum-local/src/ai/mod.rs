@@ -1,7 +1,9 @@
 //! `local.ai` — AI 노드. 출력 칸 규칙·검증은 `ieum-agent/core/output_fields.py`를 옮겼다(메시지 그대로).
 
+mod api;
 mod cli;
 mod content;
+pub mod keys;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -11,8 +13,10 @@ use async_trait::async_trait;
 use ieum_engine::{ExecEvent, NodeCtx, NodeError, NodeRunner};
 use serde_json::{Map, Value, json};
 
+pub use api::{API_TIMEOUT, ApiKind, ApiProvider};
 pub use cli::{CliKind, CliProvider, DetectedCli, detect_clis, parse_stream};
 pub use content::{MAX_CHARS, MAX_PDF_BYTES, Skip, file_text, file_text_bounded, read_file_text};
+pub use keys::{ApiKey, KeyStore, Keychain};
 
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
@@ -51,10 +55,14 @@ impl AiRunner {
         }
     }
 
-    /// 구독 CLI 공급원을 단다. 지금은 claude만 — `cli:codex`는 보류(`CliKind::Codex` 주석).
+    /// 구독 CLI(claude만 — `cli:codex`는 보류, `CliKind::Codex` 주석) + API 키 공급원 셋.
     pub fn new() -> Self {
         let k = CliKind::Claude;
-        Self::empty().with_provider(k.id(), Arc::new(CliProvider::new(k)))
+        let mut r = Self::empty().with_provider(k.id(), Arc::new(CliProvider::new(k)));
+        for k in [ApiKind::Anthropic, ApiKind::OpenAi, ApiKind::Gemini] {
+            r = r.with_provider(k.id(), Arc::new(ApiProvider::new(k)));
+        }
+        r
     }
 
     pub fn with_provider(mut self, id: &str, provider: Arc<dyn AiProvider>) -> Self {
