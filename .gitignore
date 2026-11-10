@@ -9,3 +9,4 @@ dist-ssr/
 !.vscode/extensions.json
 .idea
 src-tauri/gen/schemas
+graphify-out/

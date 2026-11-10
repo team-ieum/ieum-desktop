@@ -1,9 +1,16 @@
 mod catalog;
+mod event;
 mod model;
 mod render;
+mod run;
 mod validate;
 
 pub use catalog::{Catalog, CatalogError, EventDef, InputField, NodeType};
+pub use event::{EventSink, ExecEvent, RunStatus};
 pub use model::{Edge, Node, Workflow};
 pub use render::{Outputs, referenced_node_ids, render_deep};
+pub use run::{
+    NodeCtx, NodeError, NodeRecord, NodeRunner, NodeStatus, RejectReason, RunResult, Runners,
+    run_workflow,
+};
 pub use validate::{ErrorCode, ValidationError, validate};
