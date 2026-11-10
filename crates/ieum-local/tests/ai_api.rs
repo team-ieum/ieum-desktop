@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ieum_engine::{ExecEvent, Node, NodeCtx, NodeError, NodeRunner};
+use ieum_local::ai::keys::KeyError;
 use ieum_local::ai::{
     AiError, AiProvider, AiRequest, AiRunner, ApiKey, ApiKind, ApiProvider, KeyStore,
 };
@@ -15,11 +16,20 @@ use tokio_util::sync::CancellationToken;
 const KEY: &str = "test-key-123";
 const KINDS: [ApiKind; 3] = [ApiKind::Anthropic, ApiKind::OpenAi, ApiKind::Gemini];
 
-struct Store(Option<&'static str>);
+/// 주입 키 저장소. `Err`면 키체인 접근 오류 흉내.
+struct Store(Result<Option<&'static str>, &'static str>);
 
 impl KeyStore for Store {
-    fn get(&self, _account: &str) -> Option<String> {
-        self.0.map(String::from)
+    fn get(&self, _account: &str) -> Result<Option<String>, KeyError> {
+        self.0
+            .map(|k| k.map(String::from))
+            .map_err(|e| KeyError(e.into()))
+    }
+    fn set(&self, _account: &str, _key: &str) -> Result<(), KeyError> {
+        Ok(())
+    }
+    fn delete(&self, _account: &str) -> Result<(), KeyError> {
+        Ok(())
     }
 }
 
@@ -149,7 +159,7 @@ fn text_response(kind: ApiKind, pieces: &[&str]) -> String {
 }
 
 fn provider(kind: ApiKind, base: &str, key: Option<&'static str>) -> ApiProvider {
-    ApiProvider::with(kind, base, Arc::new(Store(key)))
+    ApiProvider::with(kind, base, Arc::new(Store(Ok(key))))
 }
 
 async fn ask(
@@ -274,6 +284,176 @@ async fn missing_key_fails_with_message() {
         assert!(err.0.contains("API 키가 없어요"), "{err}");
         assert!(log.lock().unwrap().is_empty(), "키 없이 요청을 보냄");
     }
+}
+
+#[tokio::test]
+async fn keychain_error_is_not_missing_key() {
+    let (base, log) = serve(anthropic_text(&["x"])).await;
+    let store = Store(Err("접근 거부됨"));
+    let err = ApiProvider::with(ApiKind::Anthropic, &base, Arc::new(store))
+        .ask(
+            AiRequest {
+                prompt: "p".into(),
+                model: None,
+                schema: None,
+            },
+            &|_: &str| {},
+        )
+        .await
+        .unwrap_err();
+    assert!(!err.0.contains("키가 없어요"), "{err}");
+    assert!(
+        err.0.contains("키체인") && err.0.contains("접근 거부됨"),
+        "{err}"
+    );
+    assert!(log.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn stream_without_end_marker_fails() {
+    for kind in KINDS {
+        // 조각은 왔지만 끝 표시(message_stop·[DONE]·finishReason) 없이 연결이 닫힘.
+        let body = match kind {
+            ApiKind::Anthropic => sse(&[
+                json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"파"}}),
+            ]),
+            ApiKind::OpenAi => sse(&[json!({"choices":[{"index":0,"delta":{"content":"파"}}]})]),
+            ApiKind::Gemini => {
+                sse(&[json!({"candidates":[{"content":{"role":"model","parts":[{"text":"파"}]}}]})])
+            }
+        };
+        let (base, _) = serve(body).await;
+        let err = ask(kind, &base, Some("m")).await.1.unwrap_err();
+        assert!(err.0.contains("중간에 끊겼어요"), "{kind:?}: {err}");
+    }
+}
+
+#[tokio::test]
+async fn sse_line_split_across_chunks() {
+    for kind in KINDS {
+        let whole = text_response(kind, &["파랑", "하늘"]).into_bytes();
+        // 헤더 뒤 본문을 `data:` 줄 중간과 한글 글자 바이트 중간에서 끊어 따로 보낸다.
+        let body_at = whole.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        let han = whole.windows(3).position(|w| w == "랑".as_bytes()).unwrap() + 1;
+        let cuts = [body_at, body_at + 3, han, han + 1, whole.len() - 5];
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", l.local_addr().unwrap());
+        tokio::spawn(async move {
+            let (mut sock, _) = l.accept().await.unwrap();
+            read_request(&mut sock).await;
+            let mut from = 0;
+            for to in cuts.into_iter().chain([whole.len()]) {
+                sock.write_all(&whole[from..to]).await.unwrap();
+                sock.flush().await.unwrap();
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                from = to;
+            }
+            let _ = sock.shutdown().await;
+        });
+        let (chunks, r) = ask(kind, &base, Some("m")).await;
+        assert_eq!(r.unwrap(), "파랑하늘", "{kind:?}");
+        assert_eq!(chunks, vec!["파랑", "하늘"], "{kind:?}");
+    }
+}
+
+#[tokio::test]
+async fn truncated_or_refused_fails() {
+    let delta = |text: &str| json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":text}});
+    let anthropic = |reason: &str| {
+        sse(&[
+            delta("반쯤"),
+            json!({"type":"message_delta","delta":{"stop_reason":reason}}),
+            json!({"type":"message_stop"}),
+        ])
+    };
+    let openai = |reason: &str| {
+        let mut s = sse(&[
+            json!({"choices":[{"index":0,"delta":{"content":"반쯤"}}]}),
+            json!({"choices":[{"index":0,"delta":{},"finish_reason":reason}]}),
+        ]);
+        s.push_str("data: [DONE]\n\n");
+        s
+    };
+    let gemini = |reason: &str| {
+        sse(&[
+            json!({"candidates":[{"content":{"role":"model","parts":[{"text":"반쯤"}]},"finishReason":reason}]}),
+        ])
+    };
+    const CUT: &str = "답이 잘렸어요";
+    const NO: &str = "AI가 요청을 거절했어요";
+    let cases = [
+        (ApiKind::Anthropic, anthropic("max_tokens"), CUT),
+        (ApiKind::Anthropic, anthropic("refusal"), NO),
+        (ApiKind::OpenAi, openai("length"), CUT),
+        (ApiKind::OpenAi, openai("content_filter"), NO),
+        (
+            ApiKind::OpenAi,
+            {
+                let mut s = sse(&[json!({"choices":[{"index":0,"delta":{"refusal":"못 해요"}}]})]);
+                s.push_str("data: [DONE]\n\n");
+                s
+            },
+            NO,
+        ),
+        (ApiKind::Gemini, gemini("MAX_TOKENS"), CUT),
+        (ApiKind::Gemini, gemini("SAFETY"), NO),
+        (ApiKind::Gemini, gemini("RECITATION"), NO),
+        (
+            ApiKind::Gemini,
+            sse(&[json!({"promptFeedback":{"blockReason":"SAFETY"}})]),
+            NO,
+        ),
+    ];
+    for (kind, body, want) in cases {
+        let (base, _) = serve(body).await;
+        let err = ask(kind, &base, Some("m")).await.1.unwrap_err();
+        assert!(err.0.contains(want), "{kind:?}: {err}");
+    }
+    // 정상 끝 사유는 성공.
+    for (kind, body) in [
+        (ApiKind::Anthropic, anthropic("end_turn")),
+        (ApiKind::OpenAi, openai("stop")),
+        (ApiKind::Gemini, gemini("STOP")),
+    ] {
+        let (base, _) = serve(body).await;
+        assert_eq!(
+            ask(kind, &base, Some("m")).await.1.unwrap(),
+            "반쯤",
+            "{kind:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn anthropic_uses_output_config_not_tool_choice() {
+    let (base, log) = serve(anthropic_text(&[r#"{"color":"#, r#""파랑"}"#])).await;
+    let cfg = json!({
+        "provider": "api:anthropic", "model": "claude-opus-5-5", "prompt": "색은?",
+        "outputFields": [{"key": "color", "type": "text"}],
+    });
+    let (r, events) = run_with(
+        &runner(ApiKind::Anthropic, &base),
+        cfg,
+        &CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(r.unwrap()["color"], "파랑");
+    // 답은 text 블록으로 와서 조각 알림도 나간다.
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, ExecEvent::NodeChunk { .. })),
+        "{events:?}"
+    );
+    let body = log.lock().unwrap()[0].body.clone();
+    for absent in ["tool_choice", "tools", "thinking", "temperature"] {
+        assert!(body.get(absent).is_none(), "{absent}: {body}");
+    }
+    let f = &body["output_config"]["format"];
+    assert_eq!(f["type"], "json_schema");
+    assert_eq!(f["schema"]["additionalProperties"], false);
+    assert_eq!(f["schema"]["required"], json!(["color"]));
+    assert_eq!(f["schema"]["properties"]["color"]["type"], "string");
 }
 
 #[tokio::test]
@@ -417,18 +597,7 @@ async fn cancel_aborts_request() {
 async fn structured_output_each_provider() {
     let answer = r#"{"color":"파랑"}"#;
     for kind in KINDS {
-        let response = match kind {
-            ApiKind::Anthropic => sse(&[
-                json!({"type":"message_start","message":{"id":"m","content":[]}}),
-                json!({"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"output","input":{}}}),
-                json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"color\":"}}),
-                json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"파랑\"}"}}),
-                json!({"type":"content_block_stop","index":0}),
-                json!({"type":"message_stop"}),
-            ]),
-            _ => text_response(kind, &[&answer[..9], &answer[9..]]),
-        };
-        let (base, log) = serve(response).await;
+        let (base, log) = serve(text_response(kind, &[&answer[..9], &answer[9..]])).await;
         let cfg = json!({
             "provider": kind.id(), "model": "m", "prompt": "색은?",
             "outputFields": [{"key": "color", "type": "text", "description": "색 이름"}],
@@ -438,13 +607,9 @@ async fn structured_output_each_provider() {
         let body = log.lock().unwrap()[0].body.clone();
         match kind {
             ApiKind::Anthropic => {
+                assert_eq!(body["output_config"]["format"]["type"], "json_schema");
                 assert_eq!(
-                    body["tool_choice"],
-                    json!({"type": "tool", "name": "output"})
-                );
-                assert_eq!(body["tools"][0]["name"], "output");
-                assert_eq!(
-                    body["tools"][0]["input_schema"]["required"],
+                    body["output_config"]["format"]["schema"]["required"],
                     json!(["color"])
                 );
             }

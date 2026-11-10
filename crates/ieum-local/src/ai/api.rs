@@ -94,13 +94,11 @@ impl ApiKind {
                     "stream": true,
                     "messages": [{"role": "user", "content": req.prompt}],
                 });
+                // 강제 tool_choice는 Opus·Sonnet 5.5 등에서 400 — output_config로 받는다(답은 text 블록).
+                // thinking·temperature는 모델마다 400이 나므로 보내지 않는다.
                 if let Some(s) = &req.schema {
-                    body["tools"] = json!([{
-                        "name": OUTPUT_NAME,
-                        "description": "출력 칸에 맞춰 답한다.",
-                        "input_schema": s,
-                    }]);
-                    body["tool_choice"] = json!({"type": "tool", "name": OUTPUT_NAME});
+                    body["output_config"] =
+                        json!({"format": {"type": "json_schema", "schema": strict_schema(s)}});
                 }
                 (format!("{base}/v1/messages"), body)
             }
@@ -111,12 +109,9 @@ impl ApiKind {
                     "messages": [{"role": "user", "content": req.prompt}],
                 });
                 if let Some(s) = &req.schema {
-                    // strict는 additionalProperties: false와 전부 required를 요구한다(required는 이미 전부).
-                    let mut s = s.clone();
-                    s["additionalProperties"] = Value::Bool(false);
                     body["response_format"] = json!({
                         "type": "json_schema",
-                        "json_schema": {"name": OUTPUT_NAME, "strict": true, "schema": s},
+                        "json_schema": {"name": OUTPUT_NAME, "strict": true, "schema": strict_schema(s)},
                     });
                 }
                 (format!("{base}/v1/chat/completions"), body)
@@ -138,6 +133,14 @@ impl ApiKind {
             }
         }
     }
+}
+
+/// OpenAI strict·Anthropic output_config는 additionalProperties: false와 전부 required를 요구한다
+/// (required는 `build_output_schema`가 이미 전부, 속성은 원시 타입뿐).
+fn strict_schema(s: &Value) -> Value {
+    let mut s = s.clone();
+    s["additionalProperties"] = Value::Bool(false);
+    s
 }
 
 /// Gemini `responseSchema`의 type은 OpenAPI 대문자 enum(`OBJECT`·`STRING` …).
@@ -247,7 +250,8 @@ impl ApiProvider {
         }
 
         let mut st = Stream::new(self.kind);
-        let (mut buf, mut total) = (Vec::new(), 0usize);
+        // scanned: 줄바꿈이 없음을 이미 확인한 길이 — 다시 훑지 않아 긴 줄도 선형 시간.
+        let (mut buf, mut total, mut scanned) = (Vec::new(), 0usize, 0usize);
         while let Some(c) = resp
             .chunk()
             .await
@@ -261,10 +265,19 @@ impl ApiProvider {
                 )));
             }
             buf.extend_from_slice(&c);
-            while let Some(i) = buf.iter().position(|&b| b == b'\n') {
-                let line: Vec<u8> = buf.drain(..=i).collect();
-                st.line(String::from_utf8_lossy(&line).trim_end(), key, chunk)?;
+            let mut start = 0;
+            while let Some(i) = buf[scanned..].iter().position(|&b| b == b'\n') {
+                let end = scanned + i;
+                st.line(
+                    String::from_utf8_lossy(&buf[start..end]).trim_end(),
+                    key,
+                    chunk,
+                )?;
+                start = end + 1;
+                scanned = start;
             }
+            buf.drain(..start);
+            scanned = buf.len();
         }
         st.line(String::from_utf8_lossy(&buf).trim_end(), key, chunk)?;
         st.finish()
@@ -286,6 +299,7 @@ impl AiProvider for ApiProvider {
         let key = self
             .keys
             .get(self.kind.account())
+            .map_err(|e| AiError(format!("키체인에서 {name} API 키를 읽지 못했어요: {e}")))?
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty())
             .map(ApiKey::new)
@@ -341,8 +355,6 @@ fn http_error(name: &str, status: u16, v: &Value, key: &ApiKey) -> String {
 struct Stream {
     kind: ApiKind,
     text: String,
-    /// Anthropic 강제 도구의 입력 JSON.
-    tool_json: Option<String>,
     /// 끝 표시(message_stop·[DONE]·finishReason)를 봤는지 — 없으면 중간에 끊긴 것.
     done: bool,
 }
@@ -352,7 +364,6 @@ impl Stream {
         Stream {
             kind,
             text: String::new(),
-            tool_json: None,
             done: false,
         }
     }
@@ -384,37 +395,62 @@ impl Stream {
         }
         match self.kind {
             ApiKind::Anthropic => match v["type"].as_str() {
-                Some("content_block_delta") => {
-                    let d = &v["delta"];
-                    match d["type"].as_str() {
-                        Some("text_delta") => self.push(d["text"].as_str().unwrap_or(""), chunk),
-                        Some("input_json_delta") => self
-                            .tool_json
-                            .get_or_insert_default()
-                            .push_str(d["partial_json"].as_str().unwrap_or("")),
-                        _ => {}
-                    }
+                Some("content_block_delta") if v["delta"]["type"] == "text_delta" => {
+                    self.push(v["delta"]["text"].as_str().unwrap_or(""), chunk)
                 }
+                Some("message_delta") => match v["delta"]["stop_reason"].as_str() {
+                    Some("max_tokens" | "model_context_window_exceeded") => {
+                        return Err(self.cut());
+                    }
+                    Some("refusal") => return Err(self.refused()),
+                    _ => {}
+                },
                 Some("message_stop") => self.done = true,
                 _ => {}
             },
             ApiKind::OpenAi => {
                 for c in v["choices"].as_array().into_iter().flatten() {
+                    if c["delta"]["refusal"].is_string() {
+                        return Err(self.refused());
+                    }
                     self.push(c["delta"]["content"].as_str().unwrap_or(""), chunk);
+                    match c["finish_reason"].as_str() {
+                        Some("length") => return Err(self.cut()),
+                        Some("content_filter") => return Err(self.refused()),
+                        _ => {}
+                    }
                 }
             }
             ApiKind::Gemini => {
+                if v["promptFeedback"]["blockReason"].is_string() {
+                    return Err(self.refused());
+                }
                 for c in v["candidates"].as_array().into_iter().flatten() {
                     for p in c["content"]["parts"].as_array().into_iter().flatten() {
                         self.push(p["text"].as_str().unwrap_or(""), chunk);
                     }
-                    if c["finishReason"].is_string() {
-                        self.done = true;
+                    match c["finishReason"].as_str() {
+                        Some("MAX_TOKENS") => return Err(self.cut()),
+                        // STOP 말고는 안전·인용·차단 계열(SAFETY·RECITATION·BLOCKLIST …) — 거절로 본다.
+                        Some("STOP") => self.done = true,
+                        Some(_) => return Err(self.refused()),
+                        None => {}
                     }
                 }
             }
         }
         Ok(())
+    }
+
+    fn cut(&self) -> AiError {
+        AiError(format!(
+            "{}: 답이 잘렸어요(최대 길이에 닿음).",
+            self.kind.name()
+        ))
+    }
+
+    fn refused(&self) -> AiError {
+        AiError(format!("{}: AI가 요청을 거절했어요.", self.kind.name()))
     }
 
     fn finish(self) -> Result<String, AiError> {
@@ -424,6 +460,6 @@ impl Stream {
                 self.kind.name()
             )));
         }
-        Ok(self.tool_json.unwrap_or(self.text))
+        Ok(self.text)
     }
 }
