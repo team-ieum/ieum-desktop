@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use ieum_engine::{NodeCtx, NodeError, NodeRunner};
 use serde_json::{Map, Value, json};
 
-use crate::journal::{FileOp, FileOpKind, Journal, RecentWrites};
+use crate::journal::{FileId, FileOp, FileOpKind, Journal, RecentWrites};
 use crate::paths::{AllowedRoots, numbered, resolve_in_base, sanitize_name, truncate_keep_ext};
 
 /// `name (n).ext`를 시도하는 최대 번호.
@@ -92,7 +92,7 @@ fn path_str(p: &Path) -> Value {
 /// 대상이 없을 때만 원자적으로 rename. 있으면 `AlreadyExists`.
 /// 경로 어디에든 심볼릭 링크가 있으면 거부한다(검사 뒤 링크로 바뀌는 경합 차단).
 #[cfg(target_os = "macos")]
-fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
+pub(crate) fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
     use std::ffi::{CString, c_char, c_int, c_uint};
     use std::os::unix::ffi::OsStrExt;
 
@@ -127,7 +127,7 @@ fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
 
 /// 1단계는 macOS만 지원 — 원자적 "없을 때만" rename이 없으면 옮기지 않는다.
 #[cfg(not(target_os = "macos"))]
-fn rename_excl(_from: &Path, _to: &Path) -> io::Result<()> {
+pub(crate) fn rename_excl(_from: &Path, _to: &Path) -> io::Result<()> {
     Err(no_excl())
 }
 
@@ -181,6 +181,7 @@ fn record(journal: &Journal, recent: &RecentWrites, kind: FileOpKind, from: Path
         kind,
         from,
         to: to.to_path_buf(),
+        file_id: FileId::of(to).ok(),
     });
 }
 
