@@ -18,6 +18,27 @@ pub struct EventDef {
     pub output_keys: Option<BTreeSet<String>>,
     pub output_dynamic: bool,
     pub outputs_from: Option<String>,
+    pub input_fields: Vec<InputField>,
+}
+
+/// 입력 칸 정의 중 정적 검증이 보는 부분.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputField {
+    pub key: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    /// `false`면 참조식을 넣을 수 없다. 없으면 허용.
+    #[serde(default, rename = "ref")]
+    pub ref_allowed: Option<bool>,
+    #[serde(default)]
+    pub list: bool,
+    #[serde(default)]
+    pub fields_source: Option<String>,
+    #[serde(default)]
+    pub children: Vec<InputField>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -52,6 +73,8 @@ struct RawEvent {
     output_dynamic: bool,
     #[serde(default)]
     outputs_from: Option<String>,
+    #[serde(default)]
+    input_fields: Vec<InputField>,
 }
 
 #[derive(Deserialize)]
@@ -100,6 +123,7 @@ impl Catalog {
                     output_keys,
                     output_dynamic: raw.output_dynamic,
                     outputs_from: raw.outputs_from,
+                    input_fields: raw.input_fields,
                 },
             );
         }

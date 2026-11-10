@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 /// 노드 id → 그 노드의 출력.
 pub type Outputs = HashMap<String, Map<String, Value>>;
 
-static VARIABLE: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static VARIABLE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\{\{nodes\.([a-zA-Z0-9-]+)\.output\.([a-zA-Z0-9_.]+)\}\}").unwrap()
 });
 
