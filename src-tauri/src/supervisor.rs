@@ -12,9 +12,11 @@ use ieum_engine::{
     BuiltinRunners, Catalog, ExecEvent, NodeRunner, Runners, ValidationError, Workflow,
     run_workflow, validate,
 };
+use ieum_local::ai::AiRunner;
 use ieum_local::{
     AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, Journal,
-    NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo,
+    NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo, user_folders,
+    validate_user_folder,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -40,15 +42,19 @@ pub enum AppEvent {
         ok: bool,
         message: String,
     },
+    /// 화면 이벤트 `queue-dropped` — 줄이 넘쳐 버린 실행(트리거 파일 경로).
+    QueueDropped { workflow_id: String, path: String },
 }
 
 pub type Emit = Arc<dyn Fn(AppEvent) + Send + Sync>;
 
 pub struct Deps {
     pub store: Store,
+    /// 사용자 폴더 정책의 홈(운영 = 실제 홈).
+    pub home: PathBuf,
     pub trash_dir: PathBuf,
-    /// `local.ai` 러너(운영 = 키체인을 쓰는 `AiRunner`).
-    pub ai: Arc<dyn NodeRunner>,
+    /// `local.ai` 러너(운영 = 키체인을 쓰는 `AiRunner::new()`). 실행마다 그 실행의 허용 폴더를 붙인다.
+    pub ai: Arc<AiRunner>,
     pub emit: Emit,
     pub timing: WatchTiming,
     /// 감시 폴더 재확인 간격(운영 30초).
@@ -198,7 +204,32 @@ impl Supervisor {
             .collect())
     }
 
+    /// 사용자 폴더 정책(`validate_user_folder`) — 홈·앱 데이터 폴더는 주입값.
+    fn check_folder(&self, folder: &Path) -> Result<(), String> {
+        validate_user_folder(folder, &self.0.deps.home, self.store().root())
+    }
+
+    fn check_folders(&self, wf: &Workflow) -> Result<(), String> {
+        user_folders(wf)
+            .iter()
+            .try_for_each(|f| self.check_folder(f))
+    }
+
+    /// AI 공급원은 지원 목록(빈 칸은 아직 안 고름)만.
+    fn check_providers(&self, wf: &Workflow) -> Result<(), String> {
+        for n in wf.nodes.iter().filter(|n| n.event == "local.ai") {
+            match n.config.get("provider") {
+                None | Some(Value::Null) => {}
+                Some(Value::String(p)) if p.is_empty() || self.0.deps.ai.has_provider(p) => {}
+                Some(p) => return Err(format!("지원하지 않는 AI 공급원이에요: {p}")),
+            }
+        }
+        Ok(())
+    }
+
     pub fn save_workflow(&self, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
+        self.check_folders(&wf.workflow)?;
+        self.check_providers(&wf.workflow)?;
         let saved = self.store().save_workflow(wf)?;
         self.sync();
         Ok(saved)
@@ -210,8 +241,11 @@ impl Supervisor {
         Ok(())
     }
 
-    /// 저장된 워크플로우에 맞춰 감시를 다시 건다. 폴더가 그대로인 감시는 유지한다.
+    /// 저장된 워크플로우에 맞춰 감시를 다시 건다. 폴더가 그대로이고 살아 있는 감시는 유지하고,
+    /// 오류 상태면 바로 다시 건다. 꺼지거나·지워지거나·폴더가 바뀐 워크플로우의 대기 실행은 버린다.
     pub fn sync(&self) {
+        let mut watches = lock(&self.0.watches);
+        // 목록을 잠금 안에서 읽어 동시 저장이 낡은 목록으로 감시를 지우지 않게.
         let list = match self.store().list_workflows() {
             Ok(l) => l,
             Err(e) => return eprintln!("[ieum] 워크플로우 목록을 읽지 못했어요: {e}"),
@@ -220,8 +254,15 @@ impl Supervisor {
             .iter()
             .filter_map(|w| Some((w.id.clone(), trigger_folder(w)?)))
             .collect();
-        let mut watches = lock(&self.0.watches);
-        watches.retain(|id, w| wanted.get(id) == Some(&w.folder));
+        let mut stopped = Vec::new();
+        watches.retain(|id, w| {
+            let same = wanted.get(id) == Some(&w.folder);
+            if !same {
+                stopped.push(id.clone());
+            }
+            same && w.watcher.is_some()
+        });
+        self.drop_queued(&stopped);
         for (id, folder) in wanted {
             if watches.contains_key(&id) {
                 continue;
@@ -240,6 +281,21 @@ impl Supervisor {
                 }
             }
             watches.insert(id, w);
+        }
+    }
+
+    /// 대기 중인 실행만 버린다(진행 중인 실행은 끝까지).
+    fn drop_queued(&self, workflow_ids: &[String]) {
+        let mut lanes = lock(&self.0.lanes);
+        for id in workflow_ids {
+            let Some(lane) = lanes.get_mut(id) else {
+                continue;
+            };
+            for job in lane.jobs.drain(..) {
+                if let Some(reply) = job.reply {
+                    let _ = reply.send(Err("워크플로우가 꺼지거나 바뀌어 취소됐어요.".into()));
+                }
+            }
         }
     }
 
@@ -281,13 +337,19 @@ impl Supervisor {
                 let alive = fs::read_dir(&w.folder).is_ok()
                     && fs::metadata(&w.folder).is_ok_and(|m| m.ino() == w.ino);
                 if !alive {
-                    let msg = format!(
-                        "감시 폴더가 사라졌거나 열 수 없어요: {}",
-                        w.folder.display()
-                    );
                     w.watcher = None;
-                    w.error = Some(msg.clone());
-                    self.emit_status(id, false, msg);
+                    // 지웠다 다시 만든 폴더면 다음 주기를 기다리지 않고 바로 다시 건다.
+                    match self.open_watch(id, &w.folder) {
+                        Ok((watcher, ino)) => (w.watcher, w.ino) = (Some(watcher), ino),
+                        Err(_) => {
+                            let msg = format!(
+                                "감시 폴더가 사라졌거나 열 수 없어요: {}",
+                                w.folder.display()
+                            );
+                            w.error = Some(msg.clone());
+                            self.emit_status(id, false, msg);
+                        }
+                    }
                 }
             } else {
                 match self.open_watch(id, &w.folder) {
@@ -320,10 +382,11 @@ impl Supervisor {
             let Some(old) = lane.jobs.pop_front() else {
                 break;
             };
-            eprintln!(
-                "[ieum] 실행 줄이 넘쳐 가장 오래된 실행을 버렸어요: 워크플로우 {workflow_id}, 파일 {}",
-                old.trigger.get("path").unwrap_or(&Value::Null)
-            );
+            let path = old.trigger.get("path").and_then(Value::as_str);
+            (self.0.deps.emit)(AppEvent::QueueDropped {
+                workflow_id: workflow_id.to_string(),
+                path: path.unwrap_or_default().to_string(),
+            });
             if let Some(reply) = old.reply {
                 let _ = reply.send(Err("실행 줄이 넘쳐 취소됐어요.".into()));
             }
@@ -365,11 +428,16 @@ impl Supervisor {
         trigger: Map<String, Value>,
     ) -> Result<String, String> {
         let wf = self.store().get_workflow(workflow_id)?;
+        // 저장 때 검사했지만 저장소에 직접 심은 정의도 막는다.
+        self.check_folders(&wf.workflow)?;
         let roots = roots_for_workflow(&wf.workflow);
         let (journal, recent) = (Journal::default(), self.0.recent.clone());
         let mut runners = Runners::with_builtin();
         let local: [(&str, Arc<dyn NodeRunner>); 4] = [
-            ("local.ai", self.0.deps.ai.clone()),
+            (
+                "local.ai",
+                Arc::new(self.0.deps.ai.with_roots(roots.clone())),
+            ),
             (
                 "local.file_move",
                 Arc::new(FileMoveRunner::new(
@@ -434,20 +502,34 @@ impl Supervisor {
     }
 
     /// 고른 파일로 시험 실행(같은 줄을 탄다). 끝나면 run_id.
+    /// 파일은 그 워크플로우의 허용 폴더 안 일반 파일(심볼릭 링크 아님)이어야 한다.
     pub async fn run_now(&self, workflow_id: &str, file: &Path) -> Result<String, String> {
-        self.store().get_workflow(workflow_id)?;
-        let meta = fs::metadata(file).map_err(|e| format!("{}: {e}", file.display()))?;
-        if !meta.is_file() {
-            return Err(format!("파일이 아니에요: {}", file.display()));
+        let wf = self.store().get_workflow(workflow_id)?;
+        self.check_folders(&wf.workflow)?;
+        let meta = fs::symlink_metadata(file).map_err(|e| format!("{}: {e}", file.display()))?;
+        if !meta.file_type().is_file() {
+            return Err(format!(
+                "일반 파일이 아니에요(폴더·심볼릭 링크): {}",
+                file.display()
+            ));
+        }
+        let real = file
+            .canonicalize()
+            .map_err(|e| format!("{}: {e}", file.display()))?;
+        if !roots_for_workflow(&wf.workflow).contains(&real) {
+            return Err(format!(
+                "이 워크플로우가 다루는 폴더 밖 파일이에요: {}",
+                real.display()
+            ));
         }
         let lossy = |s: Option<&std::ffi::OsStr>| {
             s.map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default()
         };
         let trigger = trigger_output(&NewFile {
-            path: file.to_path_buf(),
-            name: lossy(file.file_name()),
-            extension: lossy(file.extension()),
+            name: lossy(real.file_name()),
+            extension: lossy(real.extension()),
+            path: real.clone(),
             size: meta.len(),
         });
         let (tx, rx) = oneshot::channel();
@@ -468,7 +550,13 @@ impl Supervisor {
         if run.undo.is_some() {
             return Err("이미 되돌린 실행이에요.".into());
         }
-        let roots = AllowedRoots::new(run.allowed_roots.clone());
+        // 기록이 심어졌어도 정책 밖 폴더에서는 움직이지 않는다.
+        let roots = AllowedRoots::new(
+            run.allowed_roots
+                .iter()
+                .filter(|r| self.check_folder(r).is_ok())
+                .cloned(),
+        );
         let report = undo(
             &run.file_ops,
             &roots,

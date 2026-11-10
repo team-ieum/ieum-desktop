@@ -6,12 +6,14 @@ mod content;
 pub mod keys;
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use ieum_engine::{ExecEvent, NodeCtx, NodeError, NodeRunner};
 use serde_json::{Map, Value, json};
+
+use crate::paths::AllowedRoots;
 
 pub use api::{API_TIMEOUT, ApiKind, ApiProvider};
 pub use cli::{CliKind, CliProvider, DetectedCli, detect_clis, parse_stream};
@@ -43,8 +45,10 @@ pub trait AiProvider: Send + Sync {
 const ATTEMPTS: usize = 2;
 
 /// `local.ai` 러너. provider 문자열(`cli:claude` 등) → 공급원.
+/// `file` 칸은 `roots` 안의 파일만 읽는다(기본 비어 있음 = 어떤 파일도 안 보냄).
 pub struct AiRunner {
     providers: HashMap<String, Arc<dyn AiProvider>>,
+    roots: AllowedRoots,
 }
 
 impl AiRunner {
@@ -52,7 +56,32 @@ impl AiRunner {
     pub fn empty() -> Self {
         AiRunner {
             providers: HashMap::new(),
+            roots: AllowedRoots::default(),
         }
+    }
+
+    /// 같은 공급원으로, 이 실행의 허용 폴더만 읽는 러너.
+    pub fn with_roots(&self, roots: AllowedRoots) -> Self {
+        AiRunner {
+            providers: self.providers.clone(),
+            roots,
+        }
+    }
+
+    pub fn has_provider(&self, id: &str) -> bool {
+        self.providers.contains_key(id)
+    }
+
+    /// `file` 칸 → 실제 경로. 허용 폴더 밖(심볼릭 링크로 빠져나가는 경우 포함)이면 실패.
+    fn allowed_file(&self, file: &str) -> Result<PathBuf, NodeError> {
+        let p = Path::new(file);
+        let real = p
+            .canonicalize()
+            .map_err(|e| fail(format!("파일을 찾을 수 없어요: {file}: {e}")))?;
+        if !p.is_absolute() || !self.roots.contains(&real) {
+            return Err(fail("허용된 폴더 밖 파일은 AI에 보낼 수 없어요."));
+        }
+        Ok(real)
     }
 
     /// 구독 CLI(claude만 — `cli:codex`는 보류, `CliKind::Codex` 주석) + API 키 공급원 셋.
@@ -90,11 +119,10 @@ fn opt_str<'a>(cfg: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
 }
 
 /// 프롬프트 = 지시 + (파일이 있으면) 파일 이름·내용. 내용을 못 읽으면 `notice`로 한 줄 알린다.
-async fn build_prompt(prompt: &str, file: Option<&str>, notice: &ChunkFn<'_>) -> String {
-    let Some(file) = file else {
+async fn build_prompt(prompt: &str, file: Option<&Path>, notice: &ChunkFn<'_>) -> String {
+    let Some(path) = file else {
         return prompt.to_string();
     };
-    let path = Path::new(file);
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     let text = file_text_bounded(path).await.unwrap_or_else(|skip| {
         notice(skip.notice());
@@ -115,6 +143,9 @@ impl NodeRunner for AiRunner {
             .ok_or_else(|| fail(format!("지원하지 않는 공급원이에요: {provider_id}")))?;
         let prompt = opt_str(cfg, "prompt").ok_or_else(|| fail("'prompt' 칸이 비었어요."))?;
         let model = opt_str(cfg, "model");
+        let file = opt_str(cfg, "file")
+            .map(|f| self.allowed_file(f))
+            .transpose()?;
         let node_id = &ctx.node.id;
         let events = ctx.events;
         let chunk = |text: &str| {
@@ -127,7 +158,7 @@ impl NodeRunner for AiRunner {
         let work = async {
             // 파일 읽기(PDF 추출)도 취소 select 안에서.
             let req = AiRequest {
-                prompt: build_prompt(prompt, opt_str(cfg, "file"), &chunk).await,
+                prompt: build_prompt(prompt, file.as_deref(), &chunk).await,
                 model: model.map(str::to_string),
                 schema: fields.as_deref().map(build_output_schema),
             };

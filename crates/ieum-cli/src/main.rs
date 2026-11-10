@@ -142,7 +142,10 @@ async fn run(workflow: &Path, input: Option<&Path>, json: bool) -> Result<ExitCo
     let (journal, recent) = (Journal::default(), RecentWrites::default());
     let mut runners = Runners::with_builtin();
     let local: [(&str, Arc<dyn NodeRunner>); 4] = [
-        ("local.ai", Arc::new(AiRunner::new())),
+        (
+            "local.ai",
+            Arc::new(AiRunner::new().with_roots(roots.clone())),
+        ),
         (
             "local.file_move",
             Arc::new(FileMoveRunner::new(

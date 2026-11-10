@@ -57,14 +57,23 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 "watch-status",
                 json!({"workflowId": workflow_id, "ok": ok, "message": message}),
             ),
+            AppEvent::QueueDropped { workflow_id, path } => {
+                eprintln!("[ieum] 실행 줄이 넘쳐 버렸어요: 워크플로우 {workflow_id}, 파일 {path}");
+                handle.emit(
+                    "queue-dropped",
+                    json!({"workflowId": workflow_id, "path": path}),
+                )
+            }
         };
         if let Err(e) = sent {
             eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");
         }
     });
+    let home = app.path().home_dir()?;
     let deps = Deps {
         store: store.clone(),
-        trash_dir: app.path().home_dir()?.join(".Trash"),
+        trash_dir: home.join(".Trash"),
+        home,
         ai: Arc::new(AiRunner::new()),
         emit,
         timing: WatchTiming::default(),

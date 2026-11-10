@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use ieum_engine::{ExecEvent, Node, NodeCtx, NodeError, NodeRunner};
+use ieum_local::AllowedRoots;
 use ieum_local::ai::{
     AiError, AiProvider, AiRequest, AiRunner, ChunkFn, CliKind, CliProvider, Skip, file_text,
     parse_stream, read_file_text,
@@ -140,8 +141,50 @@ async fn run(runner: &AiRunner, config: Value) -> Result<Map<String, Value>, Nod
     run_with(runner, config, &CancellationToken::new()).await.0
 }
 
+/// 임시 폴더 파일은 AI에 보낼 수 있다.
 fn fake_runner(fake: &Arc<Fake>) -> AiRunner {
-    AiRunner::empty().with_provider("cli:claude", fake.clone())
+    AiRunner::empty()
+        .with_provider("cli:claude", fake.clone())
+        .with_roots(AllowedRoots::new([std::env::temp_dir()]))
+}
+
+/// `~/.ssh/id_rsa` 흉내: 허용 폴더 밖 파일·밖을 가리키는 링크는 노드 실패, AI는 호출되지 않는다.
+#[tokio::test]
+async fn ai_file_outside_roots_rejected() {
+    let t = tempfile::tempdir().unwrap();
+    let (allowed, ssh) = (t.path().join("Downloads"), t.path().join(".ssh"));
+    fs::create_dir_all(&allowed).unwrap();
+    fs::create_dir_all(&ssh).unwrap();
+    let key = ssh.join("id_rsa");
+    fs::write(&key, "-----BEGIN OPENSSH PRIVATE KEY----- SECRET").unwrap();
+    let link = allowed.join("innocent.txt");
+    std::os::unix::fs::symlink(&key, &link).unwrap();
+    let ok = allowed.join("memo.txt");
+    fs::write(&ok, "회의록").unwrap();
+
+    let fake = Fake::new(vec!["ok", "ok"]);
+    let runner = AiRunner::empty()
+        .with_provider("cli:claude", fake.clone())
+        .with_roots(AllowedRoots::new([allowed.clone()]));
+    for f in [&key, &link] {
+        let err = run(
+            &runner,
+            json!({"provider": "cli:claude", "prompt": "p", "file": f.to_str().unwrap()}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.message, "허용된 폴더 밖 파일은 AI에 보낼 수 없어요.");
+    }
+    assert!(fake.last.lock().unwrap().is_none());
+
+    run(
+        &runner,
+        json!({"provider": "cli:claude", "prompt": "p", "file": ok.to_str().unwrap()}),
+    )
+    .await
+    .unwrap();
+    let req = fake.last.lock().unwrap().take().unwrap();
+    assert!(req.prompt.contains("회의록") && !req.prompt.contains("SECRET"));
 }
 
 #[tokio::test]

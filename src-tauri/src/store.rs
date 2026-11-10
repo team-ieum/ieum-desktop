@@ -135,6 +135,11 @@ impl Store {
         Self { root }
     }
 
+    /// 앱 데이터 폴더.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     fn workflow_path(&self, id: &str) -> Result<PathBuf, String> {
         check_id(id)?;
         Ok(self.root.join("workflows").join(format!("{id}.json")))
