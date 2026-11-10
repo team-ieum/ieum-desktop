@@ -51,7 +51,15 @@
       "key": "file",
       "title": "읽을 파일",
       "type": "string",
-      "description": "보통 트리거의 파일 경로를 넣어요. 텍스트·PDF 내용을 AI에게 함께 보내요."
+      "description": "보통 트리거의 파일 경로를 넣어요. 기본으로 파일 이름·확장자·크기만 AI에게 보내요."
+    },
+    {
+      "key": "sendContent",
+      "title": "파일 내용도 보내기",
+      "type": "boolean",
+      "default": false,
+      "ref": false,
+      "description": "켜면 텍스트·PDF 내용을 함께 보내요. 파일 내용이 AI 회사(Anthropic·OpenAI·Google)로 전송돼요."
     },
     {
       "key": "outputFields",

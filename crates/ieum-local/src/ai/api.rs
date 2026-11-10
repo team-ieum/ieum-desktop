@@ -10,7 +10,7 @@ use reqwest::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use super::keys::{ApiKey, KeyStore, Keychain};
-use super::{AiError, AiProvider, AiRequest, ChunkFn};
+use super::{AiError, AiProvider, AiRequest, ChunkFn, SYSTEM_INSTRUCTION};
 
 pub const API_TIMEOUT: Duration = Duration::from_secs(300);
 /// 응답 본문 전체 상한.
@@ -92,6 +92,7 @@ impl ApiKind {
                     "model": model,
                     "max_tokens": ANTHROPIC_MAX_TOKENS,
                     "stream": true,
+                    "system": SYSTEM_INSTRUCTION,
                     "messages": [{"role": "user", "content": req.prompt}],
                 });
                 // 강제 tool_choice는 Opus·Sonnet 5.5 등에서 400 — output_config로 받는다(답은 text 블록).
@@ -106,7 +107,10 @@ impl ApiKind {
                 let mut body = json!({
                     "model": model,
                     "stream": true,
-                    "messages": [{"role": "user", "content": req.prompt}],
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_INSTRUCTION},
+                        {"role": "user", "content": req.prompt},
+                    ],
                 });
                 if let Some(s) = &req.schema {
                     body["response_format"] = json!({
@@ -118,6 +122,7 @@ impl ApiKind {
             }
             ApiKind::Gemini => {
                 let mut body = json!({
+                    "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
                     "contents": [{"role": "user", "parts": [{"text": req.prompt}]}],
                 });
                 if let Some(s) = &req.schema {

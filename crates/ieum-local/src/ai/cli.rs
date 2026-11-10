@@ -11,7 +11,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use super::{AiError, AiProvider, AiRequest, ChunkFn};
+use super::{AiError, AiProvider, AiRequest, ChunkFn, SYSTEM_INSTRUCTION};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 /// 실패 메시지에 붙이는 stderr 끝부분(글자).
@@ -85,6 +85,8 @@ impl CliKind {
                 "--safe-mode",
                 "--no-session-persistence",
                 "--disable-slash-commands",
+                "--append-system-prompt",
+                SYSTEM_INSTRUCTION,
             ]
             .map(String::from)
             .to_vec(),
