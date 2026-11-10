@@ -84,14 +84,57 @@ struct RawField {
 
 impl Catalog {
     pub fn load(files: &[(String, PathBuf)]) -> Result<Catalog, CatalogError> {
-        let mut events = HashMap::new();
+        let mut sources = Vec::new();
         for (event, path) in files {
             let text = std::fs::read_to_string(path).map_err(|source| CatalogError::Io {
                 path: path.clone(),
                 source,
             })?;
+            sources.push((event.clone(), path.clone(), text));
+        }
+        Self::parse(sources)
+    }
+
+    /// 실행 파일에 묶은 1단계 노드 정의(빌드 시 `catalog/events/branch/if.json` + `crates/ieum-local/defs/*.json`).
+    /// 배포된 CLI·앱은 이걸 쓴다. `stage1`(디스크)은 테스트·개발용.
+    pub fn embedded() -> Result<Catalog, CatalogError> {
+        macro_rules! src {
+            ($event:literal, $rel:literal) => {
+                (
+                    $event.to_string(),
+                    PathBuf::from($rel),
+                    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../", $rel)).to_string(),
+                )
+            };
+        }
+        Self::parse(vec![
+            src!("branch.if", "catalog/events/branch/if.json"),
+            src!("local.ai", "crates/ieum-local/defs/local.ai.json"),
+            src!(
+                "local.file_move",
+                "crates/ieum-local/defs/local.file_move.json"
+            ),
+            src!(
+                "local.file_rename",
+                "crates/ieum-local/defs/local.file_rename.json"
+            ),
+            src!(
+                "local.file_trash",
+                "crates/ieum-local/defs/local.file_trash.json"
+            ),
+            src!(
+                "local.folder_new_file",
+                "crates/ieum-local/defs/local.folder_new_file.json"
+            ),
+        ])
+    }
+
+    /// (event, 에러에 쓸 경로, JSON 본문).
+    fn parse(sources: Vec<(String, PathBuf, String)>) -> Result<Catalog, CatalogError> {
+        let mut events = HashMap::new();
+        for (event, path, text) in &sources {
             let raw: RawEvent =
-                serde_json::from_str(&text).map_err(|source| CatalogError::Json {
+                serde_json::from_str(text).map_err(|source| CatalogError::Json {
                     path: path.clone(),
                     source,
                 })?;

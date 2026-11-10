@@ -26,6 +26,27 @@ fn stage1_catalog_has_six_events() {
 }
 
 #[test]
+fn embedded_catalog_matches_disk() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let disk = Catalog::stage1(&root).unwrap();
+    let embedded = Catalog::embedded().unwrap();
+    // 디스크에 정의 파일이 늘면 내장 목록도 늘려야 한다
+    let mut events = vec!["branch.if".to_string()];
+    for entry in std::fs::read_dir(root.join("crates/ieum-local/defs")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "json") {
+            events.push(path.file_stem().unwrap().to_string_lossy().into_owned());
+        }
+    }
+    assert_eq!(events.len(), 6);
+    for event in &events {
+        let (d, e) = (disk.get(event).unwrap(), embedded.get(event));
+        let e = e.unwrap_or_else(|| panic!("{event} 내장 안 됨"));
+        assert_eq!(format!("{d:?}"), format!("{e:?}"), "{event}");
+    }
+}
+
+#[test]
 fn config_null_and_missing_edges_parse() {
     let wf: Workflow = serde_json::from_value(serde_json::json!({
         "nodes": [

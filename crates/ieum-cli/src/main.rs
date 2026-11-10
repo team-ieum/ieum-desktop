@@ -107,29 +107,34 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, Fail> {
     serde_json::from_str(&text).map_err(|e| io(format!("{}: {e}", path.display())))
 }
 
-/// 트리거 출력 — 없으면 빈 맵, 객체가 아니면 사용법 에러.
+/// input 모양 검사 후 트리거 출력. 최상위·`trigger`·`nodeOutputs`가 객체가 아니면 사용법 에러(키는 없어도 된다).
 fn trigger_of(input: &Value) -> Result<Map<String, Value>, Fail> {
+    let usage = |message: &str| Fail {
+        code: "USAGE",
+        message: message.into(),
+    };
+    let input = input
+        .as_object()
+        .ok_or_else(|| usage("input은 객체여야 해요."))?;
+    if input.get("nodeOutputs").is_some_and(|v| !v.is_object()) {
+        return Err(usage("input의 nodeOutputs는 객체여야 해요."));
+    }
     match input.get("trigger") {
-        None | Some(Value::Null) => Ok(Map::new()),
+        None => Ok(Map::new()),
         Some(Value::Object(m)) => Ok(m.clone()),
-        Some(_) => Err(Fail {
-            code: "USAGE",
-            message: "input의 trigger는 객체여야 해요.".into(),
-        }),
+        Some(_) => Err(usage("input의 trigger는 객체여야 해요.")),
     }
 }
 
-// ponytail: 카탈로그를 빌드한 소스 트리에서 읽는다 — CLI를 배포하게 되면 include_str!로 묶는다.
 fn catalog() -> Result<Catalog, Fail> {
-    Catalog::stage1(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
-        .map_err(|e| io(format!("노드 정의를 읽지 못했어요: {e}")))
+    Catalog::embedded().map_err(|e| io(format!("노드 정의를 읽지 못했어요: {e}")))
 }
 
 // ── ieum run ─────────────────────────────────────────────
 
 async fn run(workflow: &Path, input: Option<&Path>, json: bool) -> Result<ExitCode, Fail> {
     let wf: Workflow = read_json(workflow)?;
-    let input: Value = input.map_or(Ok(Value::Null), read_json)?;
+    let input: Value = input.map_or(Ok(json!({})), read_json)?;
     let trigger = trigger_of(&input)?;
     let catalog = catalog()?;
 

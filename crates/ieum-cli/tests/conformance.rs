@@ -88,6 +88,17 @@ fn cli_exit_codes() {
     assert_eq!(out.status.code(), Some(3), "{}", text(&out));
     let out = ieum(&["run"]);
     assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    // --input 모양: 최상위·trigger·nodeOutputs가 객체가 아니면 사용법 에러
+    for bad in [
+        json!([1]),
+        json!({"trigger": "a.pdf"}),
+        json!({"nodeOutputs": []}),
+    ] {
+        let input = dir.path().join("bad-input.json");
+        fs::write(&input, bad.to_string()).unwrap();
+        let out = ieum(&["run", &ok, "--input", input.to_str().unwrap()]);
+        assert_eq!(out.status.code(), Some(3), "{bad}: {}", text(&out));
+    }
     let out = ieum(&["conformance", missing.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(3), "{}", text(&out));
 }

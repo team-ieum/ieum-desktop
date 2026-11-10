@@ -685,3 +685,27 @@ fn roots_for_workflow_collects_folders() {
     // 트리거 폴더 + file_move 기준 폴더만, 없는 폴더는 버린다
     assert_eq!(roots_for_workflow(&wf), AllowedRoots::new([inbox, sorted]));
 }
+
+#[test]
+fn relative_folder_never_becomes_root() {
+    // 상대 경로는 cwd 기준으로 풀린다 — Finder에서 띄운 앱은 cwd가 `/`라 허용 폴더가 디스크 전체가 된다.
+    for folder in [
+        json!("."),
+        json!("Users/me"),
+        json!(""),
+        json!(3),
+        json!("{{nodes.x.output.path}}"),
+    ] {
+        let wf: Workflow = serde_json::from_value(json!({"nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": folder}},
+            {"id": "m", "type": "ACTION", "event": "local.file_move", "config": {"baseFolder": folder}}
+        ]}))
+        .unwrap();
+        assert_eq!(roots_for_workflow(&wf), AllowedRoots::default(), "{folder}");
+    }
+    // 공유 지점에서 막는다 — 다른 호출자가 상대 경로를 넘겨도 버린다
+    assert_eq!(
+        AllowedRoots::new([PathBuf::from("."), PathBuf::from("..")]),
+        AllowedRoots::default()
+    );
+}

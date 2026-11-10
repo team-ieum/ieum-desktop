@@ -6,7 +6,7 @@ use ieum_engine::Workflow;
 const MAX_NAME_BYTES: usize = 255;
 
 /// 파일 노드가 원본을 집어도 되는 폴더들(트리거 폴더 + 각 `file_move`의 기준 폴더).
-/// 실제 경로(canonicalize)로 보관하고, 없는 폴더는 버린다.
+/// 실제 경로(canonicalize)로 보관하고, 상대 경로·없는 폴더는 버린다.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AllowedRoots(Vec<PathBuf>);
 
@@ -28,6 +28,8 @@ impl AllowedRoots {
         Self(
             roots
                 .into_iter()
+                // 상대 경로는 cwd 기준으로 풀려(Finder 실행 = `/`) 디스크 전체가 될 수 있다
+                .filter(|r| r.is_absolute())
                 .filter_map(|r| r.canonicalize().ok())
                 .collect(),
         )
