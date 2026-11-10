@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use ieum_engine::{Catalog, NodeType, Workflow};
+use ieum_engine::{Catalog, CatalogError, NodeType, Workflow};
 
 #[test]
 fn stage1_catalog_has_six_events() {
@@ -23,6 +23,53 @@ fn stage1_catalog_has_six_events() {
         .map(String::from)
         .into();
     assert_eq!(branch.output_keys.as_ref(), Some(&keys));
+}
+
+#[test]
+fn config_null_and_missing_edges_parse() {
+    let wf: Workflow = serde_json::from_value(serde_json::json!({
+        "nodes": [
+            {"id": "a", "event": "local.ai", "config": null},
+            {"id": "b", "event": "local.file_trash"}
+        ]
+    }))
+    .unwrap();
+    assert!(wf.nodes[0].config.is_empty());
+    assert!(wf.nodes[1].config.is_empty());
+    assert!(wf.edges.is_empty());
+}
+
+#[test]
+fn ai_event_gets_common_output() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let catalog = Catalog::stage1(&root).unwrap();
+    let ai = catalog.get("local.ai").unwrap();
+    assert_eq!(ai.node_type, NodeType::Ai);
+    assert!(ai.output_keys.as_ref().unwrap().contains("output"));
+    assert_eq!(ai.outputs_from.as_deref(), Some("config.outputFields"));
+}
+
+#[test]
+fn load_errors_do_not_panic() {
+    let dir = std::env::temp_dir().join(format!("ieum-catalog-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let unknown = dir.join("unknown.json");
+    let broken = dir.join("broken.json");
+    std::fs::write(&unknown, r#"{"node_type": "HTTP"}"#).unwrap();
+    std::fs::write(&broken, "{ not json").unwrap();
+    assert!(matches!(
+        Catalog::load(&[("x.unknown".into(), unknown)]),
+        Err(CatalogError::UnknownNodeType { .. })
+    ));
+    assert!(matches!(
+        Catalog::load(&[("x.broken".into(), broken)]),
+        Err(CatalogError::Json { .. })
+    ));
+    assert!(matches!(
+        Catalog::load(&[("x.missing".into(), dir.join("missing.json"))]),
+        Err(CatalogError::Io { .. })
+    ));
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

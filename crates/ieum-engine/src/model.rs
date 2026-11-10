@@ -1,9 +1,14 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
+
+fn null_as_empty<'de, D: Deserializer<'de>>(d: D) -> Result<Map<String, Value>, D::Error> {
+    Ok(Option::deserialize(d)?.unwrap_or_default())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Workflow {
     pub nodes: Vec<Node>,
+    #[serde(default)]
     pub edges: Vec<Edge>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
@@ -22,7 +27,8 @@ pub struct Node {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<Value>,
-    #[serde(default)]
+    /// BE `Node.config`는 nullable — null·없음 = 빈 맵.
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub config: Map<String, Value>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,

@@ -82,7 +82,7 @@
           "required": true,
           "choices": [
             {
-              "id": "string",
+              "id": "text",
               "name": "텍스트"
             },
             {
