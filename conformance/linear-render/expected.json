@@ -1,0 +1,10 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/ExecutionCursor.java:166 (doRender — 문자열 안 참조식을 한 번에 치환, 조건 config 전체가 SyncExecutionRuntime.java:818 renderDeep을 거침)",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED", "output": {"path": "/Users/me/Downloads/report.pdf", "name": "report.pdf", "extension": "pdf", "size": 2048}},
+    "a": {"status": "SUCCEEDED", "output": {"category": "문서"}},
+    "c": {"status": "SUCCEEDED", "output": {"branch": "문서", "branches": ["문서"], "matched": true, "result": true, "_branchKeys": ["b_00000001"]}},
+    "m": {"status": "SUCCEEDED", "output": {"path": "/Users/me/Sorted/문서/report.pdf", "name": "report.pdf"}}
+  }
+}

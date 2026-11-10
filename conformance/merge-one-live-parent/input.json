@@ -1,0 +1,8 @@
+{
+  "trigger": {"path": "/Users/me/Downloads/report.pdf", "name": "report.pdf", "extension": "pdf", "size": 2048},
+  "nodeOutputs": {
+    "x1": {"path": "/Users/me/Downloads/문서.pdf", "name": "문서.pdf"},
+    "x2": {"path": "/Users/me/Downloads/사진.png", "name": "사진.png"},
+    "m": {"path": "/Users/me/Sorted/정리/문서.pdf", "name": "문서.pdf"}
+  }
+}

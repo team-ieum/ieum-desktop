@@ -1,0 +1,12 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/executor/ConditionNodeExecutor.java:104 (pick all — 맞은 갈래 전부, branch는 첫 갈래 이름 :113)",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED"},
+    "c": {"status": "SUCCEEDED", "output": {"branch": "PDF", "branches": ["PDF", "큰 파일"], "matched": true, "result": true, "_branchKeys": ["b_00000002", "b_00000003"]}},
+    "x1": {"status": "SKIPPED"},
+    "x2": {"status": "SUCCEEDED", "output": {"path": "/Users/me/.Trash/report.pdf"}},
+    "x3": {"status": "SUCCEEDED", "output": {"path": "/Users/me/.Trash/report (1).pdf"}},
+    "x4": {"status": "SKIPPED"}
+  }
+}

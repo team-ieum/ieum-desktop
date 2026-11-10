@@ -1,0 +1,8 @@
+{
+  "trigger": {"path": "/Users/me/Downloads/setup.zip", "name": "setup.zip", "extension": "zip", "size": 10},
+  "nodeOutputs": {
+    "x1": {"path": "/Users/me/.Trash/setup.zip"},
+    "x2": {"path": "/Users/me/.Trash/setup.zip"},
+    "x3": {"path": "/Users/me/.Trash/setup.zip"}
+  }
+}

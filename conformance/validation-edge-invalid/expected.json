@@ -1,0 +1,7 @@
+{
+  "source": "ieum-agent/core/validators/static_validator.py:128 (연결이 없는 노드 ghost를 가리킴 — nodeId 없음)",
+  "validationErrors": [
+    {"nodeId": null, "field": null, "code": "EDGE_INVALID"}
+  ],
+  "nodes": {}
+}

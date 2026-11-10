@@ -1,0 +1,10 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/SyncExecutionRuntime.java:757 (otherwise=stop이면 _branchKeys 빈 목록 — 입력이 모두 dead인 노드는 skip하고 그 아래로 dead 전파)",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED"},
+    "c": {"status": "SUCCEEDED", "output": {"branch": null, "branches": [], "matched": false, "result": false, "_branchKeys": []}},
+    "x1": {"status": "SKIPPED"},
+    "x2": {"status": "SKIPPED"}
+  }
+}

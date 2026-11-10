@@ -1,0 +1,7 @@
+{
+  "trigger": {"path": "/Users/me/Downloads/report.pdf", "name": "report.pdf", "extension": "pdf", "size": 2048},
+  "nodeOutputs": {
+    "x1": {"path": "/Users/me/Downloads/사진.png", "name": "사진.png"},
+    "x2": {"path": "/Users/me/.Trash/사진.png"}
+  }
+}

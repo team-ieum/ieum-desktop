@@ -1,0 +1,11 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/executor/ConditionNodeExecutor.java:108 (아무 갈래도 안 맞고 otherwise=branch면 key 'else', 이름 '그 외', matched·result=false)",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED"},
+    "c": {"status": "SUCCEEDED", "output": {"branch": "그 외", "branches": ["그 외"], "matched": false, "result": false, "_branchKeys": ["else"]}},
+    "x1": {"status": "SKIPPED"},
+    "x2": {"status": "SKIPPED"},
+    "x3": {"status": "SUCCEEDED", "output": {"path": "/Users/me/.Trash/setup.zip"}}
+  }
+}

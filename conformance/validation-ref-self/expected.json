@@ -1,0 +1,7 @@
+{
+  "source": "ieum-agent/core/validators/static_validator.py:453 (자기 자신의 출력 참조)",
+  "validationErrors": [
+    {"nodeId": "a", "field": "config.prompt", "code": "REF_SELF"}
+  ],
+  "nodes": {}
+}

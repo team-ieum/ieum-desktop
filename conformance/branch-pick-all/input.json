@@ -1,0 +1,9 @@
+{
+  "trigger": {"path": "/Users/me/Downloads/report.pdf", "name": "report.pdf", "extension": "pdf", "size": 2048},
+  "nodeOutputs": {
+    "x1": {"path": "/Users/me/.Trash/report.pdf"},
+    "x2": {"path": "/Users/me/.Trash/report.pdf"},
+    "x3": {"path": "/Users/me/.Trash/report (1).pdf"},
+    "x4": {"path": "/Users/me/.Trash/report.pdf"}
+  }
+}

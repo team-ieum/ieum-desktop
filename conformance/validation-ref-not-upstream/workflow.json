@@ -1,0 +1,11 @@
+{
+  "nodes": [
+    {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": "/Users/me/Downloads"}},
+    {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "분류해 줘", "outputFields": [{"key": "category", "type": "text"}]}},
+    {"id": "b", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "{{nodes.a.output.category}} 기준으로 요약해 줘", "outputFields": [{"key": "summary", "type": "text"}]}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "t", "target": "a"},
+    {"id": "e2", "source": "t", "target": "b"}
+  ]
+}

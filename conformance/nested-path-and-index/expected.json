@@ -1,0 +1,9 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/ExecutionCursor.java:191 (resolveField — Map 키·목록 인덱스로 내려가고, 중간에 스칼라를 만나면 그 값(:207), 범위 밖 인덱스는 빈 문자열(:229), Map·List는 JSON(:239))",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED"},
+    "a": {"status": "SUCCEEDED", "output": {"items": [{"name": "x"}, {"name": "y"}], "meta": {"tags": ["a", "b"], "n": 1}, "count": 3}},
+    "c": {"status": "SUCCEEDED", "output": {"branch": "일치", "branches": ["일치"], "matched": true, "result": true, "_branchKeys": ["b_00000001"]}}
+  }
+}

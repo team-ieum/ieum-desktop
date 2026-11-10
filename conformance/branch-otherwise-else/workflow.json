@@ -1,0 +1,18 @@
+{
+  "nodes": [
+    {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "label": "다운로드 새 파일", "config": {"folder": "/Users/me/Downloads"}},
+    {"id": "c", "type": "CONDITION", "event": "branch.if", "label": "종류 나누기", "config": {"otherwise": "branch", "branches": [
+      {"key": "b_00000001", "name": "이미지", "rules": [{"left": "{{nodes.t.output.extension}}", "operator": "equals", "right": "png"}]},
+      {"key": "b_00000002", "name": "PDF", "match": "any", "rules": [{"left": "{{nodes.t.output.extension}}", "operator": "equals", "right": "pdf"}, {"left": "{{nodes.t.output.size}}", "operator": "greaterThan", "right": "1000"}]}
+    ]}},
+    {"id": "x1", "type": "ACTION", "event": "local.file_trash", "label": "이미지 버리기", "config": {"path": "{{nodes.t.output.path}}"}},
+    {"id": "x2", "type": "ACTION", "event": "local.file_trash", "label": "PDF 버리기", "config": {"path": "{{nodes.t.output.path}}"}},
+    {"id": "x3", "type": "ACTION", "event": "local.file_trash", "label": "그 외 버리기", "config": {"path": "{{nodes.t.output.path}}"}}
+  ],
+  "edges": [
+    {"id": "e0", "source": "t", "target": "c"},
+    {"id": "e1", "source": "c", "target": "x1", "conditionType": "b_00000001"},
+    {"id": "e2", "source": "c", "target": "x2", "conditionType": "b_00000002"},
+    {"id": "e3", "source": "c", "target": "x3", "conditionType": "else"}
+  ]
+}

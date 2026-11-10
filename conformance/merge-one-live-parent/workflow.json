@@ -1,0 +1,19 @@
+{
+  "nodes": [
+    {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "label": "다운로드 새 파일", "config": {"folder": "/Users/me/Downloads"}},
+    {"id": "c", "type": "CONDITION", "event": "branch.if", "label": "종류 나누기", "config": {"otherwise": "stop", "branches": [
+      {"key": "b_00000001", "name": "PDF", "rules": [{"left": "{{nodes.t.output.extension}}", "operator": "equals", "right": "pdf"}]},
+      {"key": "b_00000002", "name": "이미지", "rules": [{"left": "{{nodes.t.output.extension}}", "operator": "equals", "right": "png"}]}
+    ]}},
+    {"id": "x1", "type": "ACTION", "event": "local.file_rename", "label": "PDF 이름", "config": {"path": "{{nodes.t.output.path}}", "newName": "문서.pdf"}},
+    {"id": "x2", "type": "ACTION", "event": "local.file_rename", "label": "이미지 이름", "config": {"path": "{{nodes.t.output.path}}", "newName": "사진.png"}},
+    {"id": "m", "type": "ACTION", "event": "local.file_move", "label": "모으기", "config": {"path": "{{nodes.x1.output.path}}", "baseFolder": "/Users/me/Sorted", "destination": "정리"}}
+  ],
+  "edges": [
+    {"id": "e0", "source": "t", "target": "c"},
+    {"id": "e1", "source": "c", "target": "x1", "conditionType": "b_00000001"},
+    {"id": "e2", "source": "c", "target": "x2", "conditionType": "b_00000002"},
+    {"id": "e3", "source": "x1", "target": "m"},
+    {"id": "e4", "source": "x2", "target": "m"}
+  ]
+}

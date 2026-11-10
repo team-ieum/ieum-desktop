@@ -90,10 +90,11 @@ impl Catalog {
                 path: path.clone(),
                 source,
             })?;
-            let raw: RawEvent = serde_json::from_str(&text).map_err(|source| CatalogError::Json {
-                path: path.clone(),
-                source,
-            })?;
+            let raw: RawEvent =
+                serde_json::from_str(&text).map_err(|source| CatalogError::Json {
+                    path: path.clone(),
+                    source,
+                })?;
             let node_type = match raw.node_type.as_str() {
                 "TRIGGER" => NodeType::Trigger,
                 "AI" => NodeType::Ai,

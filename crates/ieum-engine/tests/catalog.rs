@@ -89,7 +89,10 @@ fn workflow_roundtrip_keeps_unknown_keys() {
     assert_eq!(wf.nodes[0].extra["foo"], json["nodes"][0]["foo"]);
     let mut expected = json;
     // conditionType: null 은 None 으로 읽혀 쓰기 때 빠진다.
-    expected["edges"][0].as_object_mut().unwrap().remove("conditionType");
+    expected["edges"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("conditionType");
     assert_eq!(serde_json::to_value(&wf).unwrap(), expected);
     // Value 비교는 키 순서를 안 보므로 문자열로 순서까지 확인.
     assert_eq!(serde_json::to_string(&wf).unwrap(), expected.to_string());

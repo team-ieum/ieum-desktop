@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "label": "다운로드 새 파일", "config": {"folder": "/Users/me/Downloads"}},
+    {"id": "a", "type": "AI", "event": "local.ai", "label": "분류", "config": {"provider": "cli:claude", "prompt": "{{nodes.t.output.name}} 파일을 분류해 줘", "file": "{{nodes.t.output.path}}", "outputFields": [{"key": "category", "type": "text"}]}},
+    {"id": "c", "type": "CONDITION", "event": "branch.if", "label": "치환 확인", "config": {"caseSensitive": true, "otherwise": "stop", "branches": [{"key": "b_00000001", "name": "문서", "rules": [{"left": "{{nodes.t.output.name}}/{{nodes.a.output.category}}", "operator": "equals", "right": "report.pdf/문서"}]}]}},
+    {"id": "m", "type": "ACTION", "event": "local.file_move", "label": "옮기기", "config": {"path": "{{nodes.t.output.path}}", "baseFolder": "/Users/me/Sorted", "destination": "{{nodes.a.output.category}}"}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "t", "target": "a"},
+    {"id": "e2", "source": "a", "target": "c"},
+    {"id": "e3", "source": "c", "target": "m", "conditionType": "b_00000001"}
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/executor/ConditionNodeExecutor.java:186 (branches가 없으면 레거시 — 갈래 key 'true' 이름 '참', 안 맞으면 'false'; caseSensitive 기본 false라 대소문자 무시 ConditionValues.java:62)",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED"},
+    "c": {"status": "SUCCEEDED", "output": {"branch": "참", "branches": ["참"], "matched": true, "result": true, "_branchKeys": ["true"]}},
+    "x1": {"status": "SUCCEEDED", "output": {"path": "/Users/me/.Trash/report.pdf"}},
+    "x2": {"status": "SKIPPED"}
+  }
+}

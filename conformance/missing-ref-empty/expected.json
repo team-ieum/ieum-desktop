@@ -1,0 +1,10 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/ExecutionCursor.java:193 (출력이 비었으면 빈 문자열, :215 값이 null·없으면 빈 문자열)",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED"},
+    "a": {"status": "SUCCEEDED", "output": {"note": null}},
+    "b": {"status": "SUCCEEDED", "output": {}},
+    "c": {"status": "SUCCEEDED", "output": {"branch": "모두 빈 값", "branches": ["모두 빈 값"], "matched": true, "result": true, "_branchKeys": ["b_00000001"]}}
+  }
+}

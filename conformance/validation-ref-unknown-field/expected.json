@@ -1,0 +1,7 @@
+{
+  "source": "ieum-agent/core/validators/static_validator.py:465 (트리거 출력에 없는 칸 color — 선언 출력은 path·name·extension·size)",
+  "validationErrors": [
+    {"nodeId": "a", "field": "config.prompt", "code": "REF_UNKNOWN_FIELD"}
+  ],
+  "nodes": {}
+}

@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "label": "다운로드 새 파일", "config": {"folder": "/Users/me/Downloads"}},
+    {"id": "c", "type": "CONDITION", "event": "branch.if", "label": "PDF인가", "config": {"operator": "equals", "left": "{{nodes.t.output.extension}}", "right": "PDF"}},
+    {"id": "x1", "type": "ACTION", "event": "local.file_trash", "label": "참이면", "config": {"path": "{{nodes.t.output.path}}"}},
+    {"id": "x2", "type": "ACTION", "event": "local.file_trash", "label": "거짓이면", "config": {"path": "{{nodes.t.output.path}}"}}
+  ],
+  "edges": [
+    {"id": "e0", "source": "t", "target": "c"},
+    {"id": "e1", "source": "c", "target": "x1", "conditionType": "true"},
+    {"id": "e2", "source": "c", "target": "x2", "conditionType": "false"}
+  ]
+}

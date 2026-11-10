@@ -1,0 +1,10 @@
+{
+  "nodes": [
+    {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": "/Users/me/Downloads"}},
+    {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "분류해 줘", "outputFields": [{"key": "category", "type": "text"}]}},
+    {"id": "b", "type": "ACTION", "event": "local.file_trash", "config": {"path": "/Users/me/Downloads/old.zip"}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "t", "target": "a"}
+  ]
+}

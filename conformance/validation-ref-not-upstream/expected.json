@@ -1,0 +1,7 @@
+{
+  "source": "ieum-agent/core/validators/static_validator.py:458 (나란한 갈래의 노드 — 조상이 아닌 노드 참조)",
+  "validationErrors": [
+    {"nodeId": "b", "field": "config.prompt", "code": "REF_NOT_UPSTREAM"}
+  ],
+  "nodes": {}
+}

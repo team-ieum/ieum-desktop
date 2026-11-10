@@ -1,0 +1,7 @@
+{
+  "source": "ieum-agent/core/validators/static_validator.py:335 (ref: false 칸(local.ai model)에 참조식)",
+  "validationErrors": [
+    {"nodeId": "a", "field": "config.model", "code": "REF_NOT_ALLOWED"}
+  ],
+  "nodes": {}
+}

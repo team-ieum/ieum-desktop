@@ -5,10 +5,10 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use ieum_engine::{Node, NodeCtx, NodeError, NodeRunner};
+use ieum_engine::{Node, NodeCtx, NodeError, NodeRunner, Workflow};
 use ieum_local::{
     AllowedRoots, FileMoveRunner, FileOpKind, FileRenameRunner, FileTrashRunner, Journal,
-    RecentWrites, resolve_in_base, sanitize_name,
+    RecentWrites, resolve_in_base, roots_for_workflow, sanitize_name,
 };
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -665,4 +665,23 @@ fn exfat_concurrent_moves_never_overwrite() {
             n - files - errs
         );
     }
+}
+
+#[test]
+fn roots_for_workflow_collects_folders() {
+    let dir = TempDir::new().unwrap();
+    let [inbox, sorted, other] = ["in", "out", "x"].map(|d| dir.path().join(d));
+    for d in [&inbox, &sorted, &other] {
+        fs::create_dir(d).unwrap();
+    }
+    let wf: Workflow = serde_json::from_value(json!({"nodes": [
+        {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": inbox}},
+        {"id": "m", "type": "ACTION", "event": "local.file_move",
+         "config": {"path": "{{nodes.t.output.path}}", "baseFolder": sorted, "destination": "a"}},
+        {"id": "r", "type": "ACTION", "event": "local.file_rename", "config": {"path": other, "newName": "b"}},
+        {"id": "g", "type": "ACTION", "event": "local.file_move", "config": {"baseFolder": dir.path().join("없음")}}
+    ]}))
+    .unwrap();
+    // 트리거 폴더 + file_move 기준 폴더만, 없는 폴더는 버린다
+    assert_eq!(roots_for_workflow(&wf), AllowedRoots::new([inbox, sorted]));
 }

@@ -1,0 +1,6 @@
+{
+  "trigger": {"path": "/Users/me/Downloads/report.pdf", "name": "report.pdf", "extension": "pdf", "size": 2048},
+  "nodeOutputs": {
+    "a": {"items": [{"name": "x"}, {"name": "y"}], "meta": {"tags": ["a", "b"], "n": 1}, "count": 3}
+  }
+}

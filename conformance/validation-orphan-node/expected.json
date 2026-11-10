@@ -1,0 +1,7 @@
+{
+  "source": "ieum-agent/core/validators/static_validator.py:151 (트리거에서 닿지 않는 노드 b)",
+  "validationErrors": [
+    {"nodeId": "b", "field": null, "code": "ORPHAN_NODE"}
+  ],
+  "nodes": {}
+}

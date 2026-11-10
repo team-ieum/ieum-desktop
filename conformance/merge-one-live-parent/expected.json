@@ -1,0 +1,11 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/SyncExecutionRuntime.java:747 (live 입력이 하나라도 있으면 hasLive — 남은 입력이 다 해소되면 실행)",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED"},
+    "c": {"status": "SUCCEEDED", "output": {"branch": "PDF", "branches": ["PDF"], "matched": true, "result": true, "_branchKeys": ["b_00000001"]}},
+    "x1": {"status": "SUCCEEDED", "output": {"path": "/Users/me/Downloads/문서.pdf", "name": "문서.pdf"}},
+    "x2": {"status": "SKIPPED"},
+    "m": {"status": "SUCCEEDED", "output": {"path": "/Users/me/Sorted/정리/문서.pdf", "name": "문서.pdf"}}
+  }
+}

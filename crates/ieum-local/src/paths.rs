@@ -1,12 +1,27 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use ieum_engine::Workflow;
+
 const MAX_NAME_BYTES: usize = 255;
 
 /// 파일 노드가 원본을 집어도 되는 폴더들(트리거 폴더 + 각 `file_move`의 기준 폴더).
 /// 실제 경로(canonicalize)로 보관하고, 없는 폴더는 버린다.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AllowedRoots(Vec<PathBuf>);
+
+/// 워크플로우의 허용 폴더 — 트리거 `folder` + 모든 `local.file_move`의 `baseFolder`. CLI와 앱이 같이 쓴다.
+pub fn roots_for_workflow(wf: &Workflow) -> AllowedRoots {
+    AllowedRoots::new(wf.nodes.iter().filter_map(|n| {
+        let key = match n.event.as_str() {
+            "local.folder_new_file" => "folder",
+            "local.file_move" => "baseFolder",
+            _ => return None,
+        };
+        let dir = n.config.get(key)?.as_str().filter(|s| !s.is_empty())?;
+        Some(PathBuf::from(dir))
+    }))
+}
 
 impl AllowedRoots {
     pub fn new(roots: impl IntoIterator<Item = PathBuf>) -> Self {

@@ -631,3 +631,39 @@ fn far_future_rfc_date_does_not_panic() {
         }
     }
 }
+
+// ── 의도된 차이(conformance/GAPS.md) ─────────────────────
+
+#[test]
+fn gap_non_ascii_digits_are_not_numbers() {
+    // BE `new BigDecimal`은 전각·아랍 숫자를 읽지만 러스트는 ASCII 숫자만 — 판단 불가(거짓).
+    assert!(!check("numberEquals", json!("１２"), json!(12), false));
+    assert!(!check("numberEquals", json!("١٢"), json!(12), false));
+    assert!(check("numberEquals", json!("12"), json!(12), false));
+}
+
+#[tokio::test]
+async fn gap_runner_drops_warnings() {
+    // BE는 경고를 실행 detail에 싣지만, 러너 출력에는 갈래 결과만 남는다(경고는 `evaluate`에서만 보인다).
+    let config = one(vec![rule(json!("1"), "lessThan", json!("x"))]);
+    assert!(!eval(config.clone()).unwrap().warnings.is_empty());
+    let node: Node =
+        serde_json::from_value(json!({"id": "c", "event": "branch.if", "type": "CONDITION"}))
+            .unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let cancel = CancellationToken::new();
+    let out = ConditionRunner::at(now())
+        .run(NodeCtx {
+            node: &node,
+            config: config.as_object().unwrap().clone(),
+            events: &tx,
+            cancel: &cancel,
+        })
+        .await
+        .unwrap();
+    let keys: Vec<&str> = out.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        ["branch", "branches", "matched", "result", "_branchKeys"]
+    );
+}
