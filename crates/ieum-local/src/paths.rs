@@ -3,6 +3,27 @@ use std::path::{Component, Path, PathBuf};
 
 const MAX_NAME_BYTES: usize = 255;
 
+/// 파일 노드가 원본을 집어도 되는 폴더들(트리거 폴더 + 각 `file_move`의 기준 폴더).
+/// 실제 경로(canonicalize)로 보관하고, 없는 폴더는 버린다.
+#[derive(Debug, Clone, Default)]
+pub struct AllowedRoots(Vec<PathBuf>);
+
+impl AllowedRoots {
+    pub fn new(roots: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self(
+            roots
+                .into_iter()
+                .filter_map(|r| r.canonicalize().ok())
+                .collect(),
+        )
+    }
+
+    /// `path`는 실제 경로여야 한다.
+    pub(crate) fn contains(&self, path: &Path) -> bool {
+        self.0.iter().any(|r| path.starts_with(r))
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PathError {
     #[error("절대 경로는 쓸 수 없어요: {0}")]
@@ -71,7 +92,7 @@ pub(crate) fn numbered(name: &str, n: u32) -> String {
     format!("{}{suffix}{ext}", floor_char(stem, room))
 }
 
-fn truncate_keep_ext(name: &str) -> String {
+pub(crate) fn truncate_keep_ext(name: &str) -> String {
     if name.len() <= MAX_NAME_BYTES {
         return name.into();
     }

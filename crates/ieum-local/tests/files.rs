@@ -7,10 +7,11 @@ use std::time::Duration;
 
 use ieum_engine::{Node, NodeCtx, NodeError, NodeRunner};
 use ieum_local::{
-    FileMoveRunner, FileOpKind, FileRenameRunner, FileTrashRunner, Journal, RecentWrites,
-    resolve_in_base, sanitize_name,
+    AllowedRoots, FileMoveRunner, FileOpKind, FileRenameRunner, FileTrashRunner, Journal,
+    RecentWrites, resolve_in_base, sanitize_name,
 };
 use serde_json::{Map, Value, json};
+use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 async fn run(runner: &dyn NodeRunner, config: Value) -> Result<Map<String, Value>, NodeError> {
@@ -27,6 +28,13 @@ async fn run(runner: &dyn NodeRunner, config: Value) -> Result<Map<String, Value
         .await
 }
 
+/// 임시 폴더와 그 실제 경로(macOS `/var` → `/private/var`).
+fn tmp() -> (TempDir, PathBuf) {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().canonicalize().unwrap();
+    (t, root)
+}
+
 fn write(p: &Path, body: &str) -> PathBuf {
     fs::create_dir_all(p.parent().unwrap()).unwrap();
     fs::write(p, body).unwrap();
@@ -37,16 +45,32 @@ fn s(p: &Path) -> String {
     p.to_str().unwrap().to_string()
 }
 
-fn mover() -> (FileMoveRunner, Journal, RecentWrites) {
-    let (j, r) = (Journal::default(), RecentWrites::default());
-    (FileMoveRunner::new(j.clone(), r.clone()), j, r)
+fn roots(r: &Path) -> AllowedRoots {
+    AllowedRoots::new([r.to_path_buf()])
+}
+
+fn mover(r: &Path) -> (FileMoveRunner, Journal, RecentWrites) {
+    let (j, w) = (Journal::default(), RecentWrites::default());
+    (FileMoveRunner::new(j.clone(), w.clone(), roots(r)), j, w)
+}
+
+fn renamer(r: &Path) -> (FileRenameRunner, Journal) {
+    let j = Journal::default();
+    (
+        FileRenameRunner::new(j.clone(), RecentWrites::default(), roots(r)),
+        j,
+    )
+}
+
+fn name_of(out: &Map<String, Value>) -> &str {
+    out["name"].as_str().unwrap()
 }
 
 #[test]
 fn rejects_escape_paths() {
-    let tmp = tempfile::tempdir().unwrap();
-    let base = tmp.path().join("base");
-    let outside = tmp.path().join("outside");
+    let (_t, root) = tmp();
+    let base = root.join("base");
+    let outside = root.join("outside");
     fs::create_dir_all(&base).unwrap();
     fs::create_dir_all(&outside).unwrap();
     symlink(&outside, base.join("link")).unwrap();
@@ -68,11 +92,11 @@ fn rejects_escape_paths() {
 
 #[tokio::test]
 async fn move_rejects_escape_destination() {
-    let tmp = tempfile::tempdir().unwrap();
-    let base = tmp.path().join("base");
+    let (_t, root) = tmp();
+    let base = root.join("base");
     fs::create_dir_all(&base).unwrap();
-    let src = write(&tmp.path().join("in/a.pdf"), "a");
-    let (m, j, _) = mover();
+    let src = write(&root.join("in/a.pdf"), "a");
+    let (m, j, _) = mover(&root);
 
     for dest in ["../x", "/etc", "a/../../x"] {
         let err = run(
@@ -84,17 +108,34 @@ async fn move_rejects_escape_destination() {
         assert!(!err.message.is_empty());
     }
     assert!(src.exists());
-    assert!(!tmp.path().join("x").exists());
+    assert!(!root.join("x").exists());
     assert!(j.ops().is_empty());
 
-    // 기준 폴더가 상대 경로거나 없으면 실패
-    for b in ["base", "/nope/ieum-test-missing"] {
-        assert!(
-            run(&m, json!({"path": s(&src), "baseFolder": b}))
-                .await
-                .is_err()
-        );
-    }
+    assert!(
+        run(
+            &m,
+            json!({"path": s(&src), "baseFolder": "/nope/ieum-test-missing"})
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn move_rejects_relative_base_folder() {
+    // "src"는 테스트 실행 위치(크레이트 폴더)에 실제로 있는 폴더다.
+    assert!(Path::new("src").is_dir());
+    let (_t, root) = tmp();
+    let src = write(&root.join("in/a.pdf"), "a");
+    let (m, j, _) = mover(&root);
+
+    assert!(
+        run(&m, json!({"path": s(&src), "baseFolder": "src"}))
+            .await
+            .is_err()
+    );
+    assert!(src.exists());
+    assert!(j.ops().is_empty());
 }
 
 #[test]
@@ -117,12 +158,12 @@ fn sanitizes_names() {
 
 #[tokio::test]
 async fn move_never_overwrites() {
-    let tmp = tempfile::tempdir().unwrap();
-    let base = tmp.path().join("base");
+    let (_t, root) = tmp();
+    let base = root.join("base");
     let old = write(&base.join("report.pdf"), "old");
-    let (m, _, _) = mover();
+    let (m, _, _) = mover(&root);
 
-    let a = write(&tmp.path().join("in/report.pdf"), "new1");
+    let a = write(&root.join("in/report.pdf"), "new1");
     let out = run(
         &m,
         json!({"path": s(&a), "baseFolder": s(&base), "destination": ""}),
@@ -132,7 +173,7 @@ async fn move_never_overwrites() {
     assert_eq!(out["path"], json!(s(&base.join("report (1).pdf"))));
     assert_eq!(out["name"], json!("report (1).pdf"));
 
-    let b = write(&tmp.path().join("in/report.pdf"), "new2");
+    let b = write(&root.join("in/report.pdf"), "new2");
     let out = run(&m, json!({"path": s(&b), "baseFolder": s(&base)}))
         .await
         .unwrap();
@@ -151,12 +192,66 @@ async fn move_never_overwrites() {
 }
 
 #[tokio::test]
+async fn move_numbers_hidden_and_extensionless_names() {
+    let (_t, root) = tmp();
+    let base = root.join("base");
+    write(&base.join(".bashrc"), "old");
+    write(&base.join("README"), "old");
+    let (m, _, _) = mover(&root);
+
+    let a = write(&root.join("in/.bashrc"), "new");
+    let out = run(&m, json!({"path": s(&a), "baseFolder": s(&base)}))
+        .await
+        .unwrap();
+    assert_eq!(name_of(&out), ".bashrc (1)");
+
+    let b = write(&root.join("in/README"), "new");
+    let out = run(&m, json!({"path": s(&b), "baseFolder": s(&base)}))
+        .await
+        .unwrap();
+    assert_eq!(name_of(&out), "README (1)");
+}
+
+#[tokio::test]
+async fn move_long_name_collision_truncated() {
+    let (_t, root) = tmp();
+    let base = root.join("base");
+    let long = format!("{}.pdf", "a".repeat(251)); // 정확히 255바이트
+    write(&base.join(&long), "old");
+    let (m, _, _) = mover(&root);
+
+    let src = write(&root.join("in").join(&long), "new");
+    let out = run(&m, json!({"path": s(&src), "baseFolder": s(&base)}))
+        .await
+        .unwrap();
+    let name = name_of(&out);
+    assert!(name.len() <= 255, "{}", name.len());
+    assert!(name.ends_with(" (1).pdf"), "{name}");
+    assert_eq!(fs::read_to_string(base.join(&long)).unwrap(), "old");
+}
+
+#[tokio::test]
+async fn move_in_place_not_recorded() {
+    let (_t, root) = tmp();
+    let base = root.join("base");
+    let same = write(&base.join("same.pdf"), "x");
+    let (m, j, _) = mover(&root);
+
+    let out = run(&m, json!({"path": s(&same), "baseFolder": s(&base)}))
+        .await
+        .unwrap();
+    assert_eq!(out["path"], json!(s(&same)));
+    assert_eq!(fs::read_to_string(&same).unwrap(), "x");
+    assert!(j.ops().is_empty());
+}
+
+#[tokio::test]
 async fn move_creates_destination_folder() {
-    let tmp = tempfile::tempdir().unwrap();
-    let base = tmp.path().join("base");
+    let (_t, root) = tmp();
+    let base = root.join("base");
     fs::create_dir_all(&base).unwrap();
-    let src = write(&tmp.path().join("in/bill.pdf"), "x");
-    let (m, _, _) = mover();
+    let src = write(&root.join("in/bill.pdf"), "x");
+    let (m, _, _) = mover(&root);
 
     let out = run(
         &m,
@@ -172,40 +267,101 @@ async fn move_creates_destination_folder() {
 
 #[tokio::test]
 async fn rename_keeps_extension() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (j, r) = (Journal::default(), RecentWrites::default());
-    let rn = FileRenameRunner::new(j, r);
+    let (_t, root) = tmp();
+    let (rn, _) = renamer(&root);
 
-    let a = write(&tmp.path().join("a.pdf"), "a");
+    let a = write(&root.join("a.pdf"), "a");
     let out = run(&rn, json!({"path": s(&a), "newName": "청구서"}))
         .await
         .unwrap();
     assert_eq!(out["name"], json!("청구서.pdf"));
-    assert!(tmp.path().join("청구서.pdf").exists());
-
-    let b = write(&tmp.path().join("b.pdf"), "b");
-    let out = run(&rn, json!({"path": s(&b), "newName": "c.txt"}))
-        .await
-        .unwrap();
-    assert_eq!(out["name"], json!("c.txt"));
+    assert!(root.join("청구서.pdf").exists());
 
     // 같은 이름이 있으면 번호
-    let d = write(&tmp.path().join("d.pdf"), "d");
+    let d = write(&root.join("d.pdf"), "d");
     let out = run(&rn, json!({"path": s(&d), "newName": "청구서"}))
         .await
         .unwrap();
     assert_eq!(out["name"], json!("청구서 (1).pdf"));
-    assert_eq!(
-        fs::read_to_string(tmp.path().join("청구서.pdf")).unwrap(),
-        "a"
-    );
+    assert_eq!(fs::read_to_string(root.join("청구서.pdf")).unwrap(), "a");
+
+    // 원본에 확장자가 없으면 newName 그대로
+    let n = write(&root.join("noext"), "n");
+    let out = run(&rn, json!({"path": s(&n), "newName": "v1.2"}))
+        .await
+        .unwrap();
+    assert_eq!(out["name"], json!("v1.2"));
+}
+
+#[tokio::test]
+async fn rename_dotted_name_keeps_extension() {
+    let (_t, root) = tmp();
+    let (rn, _) = renamer(&root);
+    let a = write(&root.join("a.pdf"), "a");
+    let out = run(&rn, json!({"path": s(&a), "newName": "2026.11.10 회의록"}))
+        .await
+        .unwrap();
+    assert_eq!(out["name"], json!("2026.11.10 회의록.pdf"));
+}
+
+#[tokio::test]
+async fn rename_does_not_change_type() {
+    let (_t, root) = tmp();
+    let (rn, _) = renamer(&root);
+    let a = write(&root.join("a.pdf"), "a");
+    let out = run(&rn, json!({"path": s(&a), "newName": "report.docx"}))
+        .await
+        .unwrap();
+    assert_eq!(out["name"], json!("report.docx.pdf"));
+}
+
+#[tokio::test]
+async fn rename_same_ext_not_doubled() {
+    let (_t, root) = tmp();
+    let (rn, _) = renamer(&root);
+    let a = write(&root.join("a.pdf"), "a");
+    let out = run(&rn, json!({"path": s(&a), "newName": "report.pdf"}))
+        .await
+        .unwrap();
+    assert_eq!(out["name"], json!("report.pdf"));
+    let b = write(&root.join("b.pdf"), "b");
+    let out = run(&rn, json!({"path": s(&b), "newName": "Memo.PDF"}))
+        .await
+        .unwrap();
+    assert_eq!(out["name"], json!("Memo.PDF"));
+}
+
+#[tokio::test]
+async fn rename_long_name_truncated_with_extension() {
+    let (_t, root) = tmp();
+    let (rn, _) = renamer(&root);
+    let a = write(&root.join("p1.pdf"), "a");
+    let out = run(&rn, json!({"path": s(&a), "newName": "b".repeat(255)}))
+        .await
+        .unwrap();
+    let name = name_of(&out);
+    assert!(name.len() <= 255, "{}", name.len());
+    assert!(name.ends_with(".pdf"), "{name}");
+    assert!(root.join(name).exists());
+}
+
+#[tokio::test]
+async fn rename_same_name_not_recorded() {
+    let (_t, root) = tmp();
+    let (rn, j) = renamer(&root);
+    let a = write(&root.join("a.pdf"), "a");
+    let out = run(&rn, json!({"path": s(&a), "newName": "a"}))
+        .await
+        .unwrap();
+    assert_eq!(out["path"], json!(s(&a)));
+    assert!(j.ops().is_empty());
 }
 
 #[tokio::test]
 async fn rename_rejects_separators() {
-    let tmp = tempfile::tempdir().unwrap();
-    let dir = tmp.path().join("dir");
-    let rn = FileRenameRunner::new(Journal::default(), RecentWrites::default());
+    let (_t, root) = tmp();
+    let dir = root.join("dir");
+    let (rn, _) = renamer(&root);
 
     let a = write(&dir.join("a.pdf"), "a");
     let out = run(&rn, json!({"path": s(&a), "newName": "../evil"}))
@@ -214,7 +370,7 @@ async fn rename_rejects_separators() {
     let to = PathBuf::from(out["path"].as_str().unwrap());
     assert_eq!(to.parent().unwrap(), dir);
     assert_eq!(out["name"], json!("_evil.pdf"));
-    assert!(!tmp.path().join("evil.pdf").exists());
+    assert!(!root.join("evil.pdf").exists());
 
     let b = write(&dir.join("b.pdf"), "b");
     let out = run(&rn, json!({"path": s(&b), "newName": "x/y"}))
@@ -226,14 +382,18 @@ async fn rename_rejects_separators() {
 
 #[tokio::test]
 async fn trash_moves_into_trash_dir() {
-    let tmp = tempfile::tempdir().unwrap();
-    let trash = tmp.path().join("Trash");
+    let (_t, root) = tmp();
+    let trash = root.join("Trash");
     fs::create_dir_all(&trash).unwrap();
     write(&trash.join("a.pdf"), "earlier");
-    let t =
-        FileTrashRunner::with_trash_dir(Journal::default(), RecentWrites::default(), trash.clone());
+    let a = write(&root.join("in/a.pdf"), "now");
+    let t = FileTrashRunner::with_trash_dir(
+        Journal::default(),
+        RecentWrites::default(),
+        roots(&root.join("in")),
+        trash.clone(),
+    );
 
-    let a = write(&tmp.path().join("in/a.pdf"), "now");
     let out = run(&t, json!({"path": s(&a)})).await.unwrap();
     assert_eq!(out["path"], json!(s(&trash.join("a (1).pdf"))));
     assert!(!a.exists());
@@ -243,17 +403,17 @@ async fn trash_moves_into_trash_dir() {
 
 #[tokio::test]
 async fn journal_records_each_op() {
-    let tmp = tempfile::tempdir().unwrap();
-    let base = tmp.path().join("base");
-    let trash = tmp.path().join("Trash");
+    let (_t, root) = tmp();
+    let base = root.join("base");
+    let trash = root.join("Trash");
     fs::create_dir_all(&base).unwrap();
     fs::create_dir_all(&trash).unwrap();
     let (j, r) = (Journal::default(), RecentWrites::default());
-    let m = FileMoveRunner::new(j.clone(), r.clone());
-    let rn = FileRenameRunner::new(j.clone(), r.clone());
-    let t = FileTrashRunner::with_trash_dir(j.clone(), r.clone(), trash.clone());
+    let m = FileMoveRunner::new(j.clone(), r.clone(), roots(&root));
+    let rn = FileRenameRunner::new(j.clone(), r.clone(), roots(&root));
+    let t = FileTrashRunner::with_trash_dir(j.clone(), r.clone(), roots(&root), trash.clone());
 
-    let src = write(&tmp.path().join("in/a.pdf"), "a");
+    let src = write(&root.join("in/a.pdf"), "a");
     let moved = base.join("docs/a.pdf");
     let renamed = base.join("docs/b.pdf");
     let trashed = trash.join("b.pdf");
@@ -288,23 +448,28 @@ async fn journal_records_each_op() {
     let within = Duration::from_secs(60);
     assert!(r.is_recent(&base.join("docs/b.pdf"), within));
     assert!(r.is_recent(&trashed, within));
-    assert!(!r.is_recent(&tmp.path().join("in/a.pdf"), within));
+    assert!(!r.is_recent(&root.join("in/a.pdf"), within));
 }
 
 #[tokio::test]
 async fn source_must_be_regular_file() {
-    let tmp = tempfile::tempdir().unwrap();
-    let base = tmp.path().join("base");
-    let dir = tmp.path().join("folder");
+    let (_t, root) = tmp();
+    let base = root.join("base");
+    let dir = root.join("folder");
     fs::create_dir_all(&base).unwrap();
     fs::create_dir_all(&dir).unwrap();
-    let real = write(&tmp.path().join("real.pdf"), "r");
-    let link = tmp.path().join("link.pdf");
+    let real = write(&root.join("real.pdf"), "r");
+    let link = root.join("link.pdf");
     symlink(&real, &link).unwrap();
-    let missing = tmp.path().join("missing.pdf");
-    let (m, j, _) = mover();
-    let rn = FileRenameRunner::new(j.clone(), RecentWrites::default());
-    let t = FileTrashRunner::with_trash_dir(j.clone(), RecentWrites::default(), base.clone());
+    let missing = root.join("missing.pdf");
+    let (m, j, _) = mover(&root);
+    let rn = FileRenameRunner::new(j.clone(), RecentWrites::default(), roots(&root));
+    let t = FileTrashRunner::with_trash_dir(
+        j.clone(),
+        RecentWrites::default(),
+        roots(&root),
+        base.clone(),
+    );
 
     for p in [&dir, &link, &missing] {
         assert!(
@@ -328,6 +493,82 @@ async fn source_must_be_regular_file() {
     assert!(j.ops().is_empty());
 }
 
+#[tokio::test]
+async fn source_outside_allowed_roots_fails() {
+    let (_t, root) = tmp();
+    let allowed = root.join("allowed");
+    let base = allowed.join("base");
+    let trash = root.join("Trash");
+    fs::create_dir_all(&base).unwrap();
+    fs::create_dir_all(&trash).unwrap();
+    let secret = write(&root.join("private/secret.txt"), "s");
+    // 허용 폴더와 이름 앞부분만 같은 형제 폴더도 밖이다
+    let sibling = write(&root.join("allowed2/x.txt"), "x");
+
+    let j = Journal::default();
+    let w = RecentWrites::default();
+    let m = FileMoveRunner::new(j.clone(), w.clone(), roots(&allowed));
+    let rn = FileRenameRunner::new(j.clone(), w.clone(), roots(&allowed));
+    let t = FileTrashRunner::with_trash_dir(j.clone(), w.clone(), roots(&allowed), trash.clone());
+
+    for p in [&secret, &sibling] {
+        assert!(
+            run(&m, json!({"path": s(p), "baseFolder": s(&base)}))
+                .await
+                .is_err()
+        );
+        assert!(
+            run(&rn, json!({"path": s(p), "newName": "x"}))
+                .await
+                .is_err()
+        );
+        assert!(run(&t, json!({"path": s(p)})).await.is_err());
+    }
+    // 허용 폴더가 비어 있으면 전부 거부
+    let none =
+        FileTrashRunner::with_trash_dir(j.clone(), w.clone(), AllowedRoots::new([]), trash.clone());
+    let inside = write(&allowed.join("in.txt"), "i");
+    assert!(run(&none, json!({"path": s(&inside)})).await.is_err());
+
+    assert!(secret.exists() && sibling.exists() && inside.exists());
+    assert!(fs::read_dir(&trash).unwrap().next().is_none());
+    assert!(j.ops().is_empty());
+}
+
+#[tokio::test]
+async fn source_symlink_into_allowed_root_pointing_outside_fails() {
+    let (_t, root) = tmp();
+    let allowed = root.join("allowed");
+    let trash = root.join("Trash");
+    fs::create_dir_all(&allowed).unwrap();
+    fs::create_dir_all(&trash).unwrap();
+    let secret = write(&root.join("private/secret.txt"), "s");
+    // 허용 폴더 안의 폴더 링크 → 밖
+    symlink(root.join("private"), allowed.join("door")).unwrap();
+    let via = allowed.join("door/secret.txt");
+    assert!(via.exists());
+
+    let j = Journal::default();
+    let w = RecentWrites::default();
+    let m = FileMoveRunner::new(j.clone(), w.clone(), roots(&allowed));
+    let rn = FileRenameRunner::new(j.clone(), w.clone(), roots(&allowed));
+    let t = FileTrashRunner::with_trash_dir(j.clone(), w.clone(), roots(&allowed), trash.clone());
+
+    assert!(
+        run(&m, json!({"path": s(&via), "baseFolder": s(&allowed)}))
+            .await
+            .is_err()
+    );
+    assert!(
+        run(&rn, json!({"path": s(&via), "newName": "x"}))
+            .await
+            .is_err()
+    );
+    assert!(run(&t, json!({"path": s(&via)})).await.is_err());
+    assert_eq!(fs::read_to_string(&secret).unwrap(), "s");
+    assert!(j.ops().is_empty());
+}
+
 /// 테스트 환경에서 다른 볼륨을 만들 수 없어 기본은 건너뛴다.
 /// 확인하려면 다른 볼륨의 쓰기 가능한 빈 폴더를 주고 돌린다:
 /// `IEUM_OTHER_VOLUME=/Volumes/X/tmp cargo test -p ieum-local -- --ignored`
@@ -335,9 +576,9 @@ async fn source_must_be_regular_file() {
 #[ignore = "다른 볼륨 필요: IEUM_OTHER_VOLUME"]
 async fn cross_volume_fails_without_copy() {
     let other = PathBuf::from(std::env::var("IEUM_OTHER_VOLUME").expect("IEUM_OTHER_VOLUME"));
-    let tmp = tempfile::tempdir().unwrap();
-    let src = write(&tmp.path().join("a.pdf"), "a");
-    let (m, j, _) = mover();
+    let (_t, root) = tmp();
+    let src = write(&root.join("a.pdf"), "a");
+    let (m, j, _) = mover(&root);
 
     let err = run(&m, json!({"path": s(&src), "baseFolder": s(&other)}))
         .await
