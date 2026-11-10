@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use ieum_engine::{ExecEvent, Node, NodeCtx, NodeError, NodeRunner};
 use ieum_local::ai::{
-    AiError, AiProvider, AiRequest, AiRunner, ChunkFn, CliKind, CliProvider, file_text,
-    parse_stream,
+    AiError, AiProvider, AiRequest, AiRunner, ChunkFn, CliKind, CliProvider, Skip, file_text,
+    parse_stream, read_file_text,
 };
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
@@ -403,8 +403,18 @@ async fn number_field_range() {
     }
 }
 
-#[tokio::test]
+fn req(model: Option<&str>) -> AiRequest {
+    AiRequest {
+        prompt: "p".into(),
+        model: model.map(String::from),
+        schema: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn bad_model_name_fails() {
+    // CliProvider를 직접 써도(러너를 거치지 않아도) 막힌다. 막히면 CLI를 띄우지 않는다.
+    let (t, provider) = sleeper(Duration::from_secs(30));
     for m in [
         "--dangerously-skip-permissions",
         "-x",
@@ -412,20 +422,23 @@ async fn bad_model_name_fails() {
         "a\nb",
         "a\u{7}",
     ] {
-        let fake = Fake::new(vec!["ok"]);
-        let err = run(
-            &fake_runner(&fake),
-            json!({"provider": "cli:claude", "prompt": "p", "model": m}),
-        )
-        .await
-        .unwrap_err();
+        let err = provider.ask(req(Some(m)), &|_: &str| {}).await.unwrap_err();
         assert!(
-            err.message.contains("모델 이름이 올바르지 않아요"),
-            "{m:?}: {}",
-            err.message
+            err.to_string().contains("모델 이름이 올바르지 않아요"),
+            "{m:?}: {err}"
         );
-        assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+        assert!(!t.path().join("cwd/cli.pid").exists(), "CLI를 띄웠다");
     }
+    // 러너 경로도 같은 검사를 지난다.
+    let runner = AiRunner::empty().with_provider("cli:claude", Arc::new(provider));
+    let err = run(
+        &runner,
+        json!({"provider": "cli:claude", "prompt": "p", "model": "-p"}),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("모델 이름이 올바르지 않아요"));
+    // 정상 이름은 통과(가짜 공급원).
     let fake = Fake::new(vec!["ok"]);
     run(
         &fake_runner(&fake),
@@ -433,6 +446,12 @@ async fn bad_model_name_fails() {
     )
     .await
     .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stderr_flood_is_capped_and_drained() {
+    let (_t, provider) = fake_cli("fake_cli_stderr.sh", Duration::from_secs(30));
+    assert_eq!(provider.ask(req(None), &|_: &str| {}).await.unwrap(), "ok");
 }
 
 #[tokio::test]
@@ -500,32 +519,124 @@ fn slow_pdf(path: &Path, ops: usize) {
     fs::write(path, pdf).unwrap();
 }
 
+/// PDF 추출은 프로세스 전역 1개라, PDF를 추출하는 테스트끼리 줄을 세운다.
+static PDF_TESTS: Mutex<()> = Mutex::new(());
+
+fn pdf_turn() -> std::sync::MutexGuard<'static, ()> {
+    PDF_TESTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 앞 테스트가 남긴 추출 스레드가 끝날 때까지 기다려 읽는다.
+fn read_when_free(p: &Path) -> Result<String, Skip> {
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        match read_file_text(p) {
+            Err(Skip::Busy) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
+            r => return r,
+        }
+    }
+}
+
+fn tiny_pdf(dir: &Path) -> PathBuf {
+    let p = dir.join("tiny.pdf");
+    slow_pdf(&p, 3);
+    p
+}
+
 #[test]
 fn small_pdf_text_extracted() {
+    let _turn = pdf_turn();
     let t = tempfile::tempdir().unwrap();
-    let p = t.path().join("a.pdf");
-    slow_pdf(&p, 3);
-    assert!(file_text(&p).contains("w2"), "{:?}", file_text(&p));
+    let text = read_when_free(&tiny_pdf(t.path())).unwrap();
+    assert!(text.contains("w2"), "{text:?}");
+}
+
+fn oversized(dir: &Path) -> PathBuf {
+    let big = dir.join("big.pdf");
+    slow_pdf(&big, 3);
+    // 내용은 그대로, 뒤에 0을 붙여 상한 + 1바이트로.
+    let f = fs::OpenOptions::new().write(true).open(&big).unwrap();
+    f.set_len(ieum_local::ai::MAX_PDF_BYTES + 1).unwrap();
+    big
 }
 
 #[test]
 fn oversized_pdf_skipped() {
     let t = tempfile::tempdir().unwrap();
-    let p = t.path().join("big.pdf");
-    slow_pdf(&p, 3);
-    // 내용은 그대로, 뒤에 0을 붙여 상한 + 1바이트로.
-    let f = fs::OpenOptions::new().write(true).open(&p).unwrap();
-    f.set_len(ieum_local::ai::MAX_PDF_BYTES + 1).unwrap();
+    let p = oversized(t.path());
     let started = Instant::now();
+    assert_eq!(read_file_text(&p), Err(Skip::TooBig));
     assert_eq!(file_text(&p), "");
     assert!(started.elapsed() < Duration::from_secs(1));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn pdf_extraction_respects_cancel() {
+#[tokio::test]
+async fn skipped_file_is_announced() {
     let t = tempfile::tempdir().unwrap();
+    let p = oversized(t.path());
+    let bin = t.path().join("a.bin");
+    fs::write(&bin, [0u8, 1, 2]).unwrap();
+    for (file, notice) in [
+        (&p, "파일이 커서 내용 없이 이름으로만 판단해요."),
+        (&bin, "파일 내용을 읽지 못해 이름으로만 판단해요."),
+    ] {
+        let fake = Fake::new(vec!["ok"]);
+        let (r, events) = run_with(
+            &fake_runner(&fake),
+            json!({"provider": "cli:claude", "prompt": "p", "file": file.to_str().unwrap()}),
+            &CancellationToken::new(),
+        )
+        .await;
+        r.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ExecEvent::NodeChunk { text, .. } if text == notice)),
+            "{notice} 알림이 없다: {events:?}"
+        );
+    }
+    // 읽은 파일은 알리지 않는다.
+    let txt = t.path().join("a.txt");
+    fs::write(&txt, "내용").unwrap();
+    let fake = Fake::new(vec!["ok"]);
+    let (_, events) = run_with(
+        &fake_runner(&fake),
+        json!({"provider": "cli:claude", "prompt": "p", "file": txt.to_str().unwrap()}),
+        &CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(events.len(), 1, "답 조각만: {events:?}");
+}
+
+#[test]
+fn concurrent_pdf_extraction_capped_to_one() {
+    let _turn = pdf_turn();
+    let t = tempfile::tempdir().unwrap();
+    let tiny = tiny_pdf(t.path());
+    read_when_free(&tiny).unwrap(); // 남은 추출이 없을 때 시작
+    let slow = t.path().join("slow.pdf");
+    slow_pdf(&slow, 100_000);
+    let worker = std::thread::spawn(move || read_file_text(&slow));
+    // slow가 자리를 잡을 시간(자리 잡기는 µs, 추출은 수백 ms 이상). 여기서 폴링하면 tiny가 자리를 뺏는다.
+    std::thread::sleep(Duration::from_millis(100));
+    // 앞의 추출이 도는 동안 다른 PDF는 추출하지 않고 바로 Busy.
+    let started = Instant::now();
+    assert_eq!(read_file_text(&tiny), Err(Skip::Busy));
+    assert!(started.elapsed() < Duration::from_millis(100));
+    assert!(worker.join().unwrap().is_ok());
+    assert!(read_file_text(&tiny).unwrap().contains("w2"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[allow(clippy::await_holding_lock)] // 테스트 하나가 PDF 차례를 통째로 쥔다(다른 PDF 테스트는 동기)
+async fn pdf_extraction_respects_cancel() {
+    let _turn = pdf_turn();
+    let t = tempfile::tempdir().unwrap();
+    read_when_free(&tiny_pdf(t.path())).unwrap();
     let p = t.path().join("slow.pdf");
-    slow_pdf(&p, 400_000);
+    slow_pdf(&p, 100_000);
     let fake = Fake::new(vec!["ok"]);
     let runner = fake_runner(&fake);
     let cancel = CancellationToken::new();

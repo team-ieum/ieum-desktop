@@ -12,7 +12,7 @@ use ieum_engine::{ExecEvent, NodeCtx, NodeError, NodeRunner};
 use serde_json::{Map, Value, json};
 
 pub use cli::{CliKind, CliProvider, DetectedCli, detect_clis, parse_stream};
-pub use content::{MAX_CHARS, MAX_PDF_BYTES, file_text, file_text_bounded};
+pub use content::{MAX_CHARS, MAX_PDF_BYTES, Skip, file_text, file_text_bounded, read_file_text};
 
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
@@ -81,22 +81,18 @@ fn opt_str<'a>(cfg: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
         .filter(|s| !s.trim().is_empty())
 }
 
-/// 프롬프트 = 지시 + (파일이 있으면) 파일 이름·내용.
-async fn build_prompt(prompt: &str, file: Option<&str>) -> String {
+/// 프롬프트 = 지시 + (파일이 있으면) 파일 이름·내용. 내용을 못 읽으면 `notice`로 한 줄 알린다.
+async fn build_prompt(prompt: &str, file: Option<&str>, notice: &ChunkFn<'_>) -> String {
     let Some(file) = file else {
         return prompt.to_string();
     };
     let path = Path::new(file);
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    format!(
-        "{prompt}\n\n[파일 이름] {name}\n[파일 내용]\n{}",
-        file_text_bounded(path).await
-    )
-}
-
-/// 모델 이름이 CLI 플래그로 읽히거나 인자를 깨지 않게.
-fn valid_model(m: &str) -> bool {
-    !m.starts_with('-') && !m.chars().any(|c| c.is_whitespace() || c.is_control())
+    let text = file_text_bounded(path).await.unwrap_or_else(|skip| {
+        notice(skip.notice());
+        String::new()
+    });
+    format!("{prompt}\n\n[파일 이름] {name}\n[파일 내용]\n{text}")
 }
 
 #[async_trait]
@@ -111,11 +107,6 @@ impl NodeRunner for AiRunner {
             .ok_or_else(|| fail(format!("지원하지 않는 공급원이에요: {provider_id}")))?;
         let prompt = opt_str(cfg, "prompt").ok_or_else(|| fail("'prompt' 칸이 비었어요."))?;
         let model = opt_str(cfg, "model");
-        if let Some(m) = model.filter(|m| !valid_model(m)) {
-            return Err(fail(format!(
-                "모델 이름이 올바르지 않아요(‘-’로 시작하거나 공백·제어문자가 있음): {m:?}"
-            )));
-        }
         let node_id = &ctx.node.id;
         let events = ctx.events;
         let chunk = |text: &str| {
@@ -128,7 +119,7 @@ impl NodeRunner for AiRunner {
         let work = async {
             // 파일 읽기(PDF 추출)도 취소 select 안에서.
             let req = AiRequest {
-                prompt: build_prompt(prompt, opt_str(cfg, "file")).await,
+                prompt: build_prompt(prompt, opt_str(cfg, "file"), &chunk).await,
                 model: model.map(str::to_string),
                 schema: fields.as_deref().map(build_output_schema),
             };

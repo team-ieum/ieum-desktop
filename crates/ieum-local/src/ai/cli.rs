@@ -272,6 +272,13 @@ impl Drop for KillGroup {
 const MAX_STDOUT: u64 = 10 * 1024 * 1024;
 /// `detect_clis` 한 CLI당 시간 상한.
 const DETECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// 모아 두는 stderr 상한(실패 메시지에는 끝 500자만 쓴다).
+const MAX_STDERR: u64 = 1024 * 1024;
+
+/// 모델 이름이 CLI 플래그로 읽히거나 인자를 깨지 않게. CLI를 띄우는 모든 경로(`ask`)에서 검사한다.
+fn valid_model(m: &str) -> bool {
+    !m.starts_with('-') && !m.chars().any(|c| c.is_whitespace() || c.is_control())
+}
 
 static SCHEMA_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -339,6 +346,11 @@ impl CliProvider {
 impl AiProvider for CliProvider {
     async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<String, AiError> {
         let name = self.kind.program();
+        if let Some(m) = req.model.as_deref().filter(|m| !valid_model(m)) {
+            return Err(AiError(format!(
+                "모델 이름이 올바르지 않아요(‘-’로 시작하거나 공백·제어문자가 있음): {m:?}"
+            )));
+        }
         std::fs::create_dir_all(&self.cwd)
             .map_err(|e| AiError(format!("작업 폴더를 못 만들었어요: {e}")))?;
         let schema_file = match (&req.schema, self.kind) {
@@ -404,9 +416,11 @@ impl AiProvider for CliProvider {
                 st
             };
             let err = async {
-                let mut b = String::new();
-                let _ = stderr.read_to_string(&mut b).await;
-                b
+                let mut b = Vec::new();
+                let _ = (&mut stderr).take(MAX_STDERR).read_to_end(&mut b).await;
+                // 넘는 부분은 버리고 계속 비운다(안 비우면 자식이 파이프에 막힌다).
+                let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+                String::from_utf8_lossy(&b).into_owned()
             };
             let ((), st, err) = tokio::join!(write, read, err);
             let ok = child.wait().await.is_ok_and(|s| s.success());
@@ -445,7 +459,7 @@ fn shell_output(cmd: &str, limit: Duration) -> Option<String> {
         .process_group(0)
         .spawn()
         .ok()?;
-    let _group = KillGroup(child.id() as i32);
+    let group = KillGroup(child.id() as i32);
     let deadline = std::time::Instant::now() + limit;
     // ponytail: 50ms 폴링. 출력이 파이프 버퍼(64KB)를 넘는 명령엔 쓰지 않는다.
     loop {
@@ -460,6 +474,8 @@ fn shell_output(cmd: &str, limit: Duration) -> Option<String> {
             None => std::thread::sleep(Duration::from_millis(50)),
         }
     }
+    // 읽기 전에 남은 손자를 죽인다 — stdout을 물고 있으면 읽기가 시간 상한 없이 멈춘다.
+    drop(group);
     let mut out = String::new();
     std::io::Read::read_to_string(&mut child.stdout.take()?, &mut out).ok()?;
     Some(out)
