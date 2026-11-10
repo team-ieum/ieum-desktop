@@ -20,8 +20,37 @@ const STDERR_TAIL: usize = 500;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliKind {
     Claude,
+    /// 보류(2026-11-10 사용자 결정): 아래 차단 플래그를 다 붙여도 codex 0.167 exec에 도구가 남는다 —
+    /// functions.exec(code-mode 호스트를 꺼 실행은 실패)·functions.wait·functions.request_user_input_async·
+    /// collaboration.{spawn_agent,send_message,wait_agent,list_agents,interrupt_agent,followup_task}.
+    /// 도구를 완전히 끄는 옵션이 생기면 `AiRunner::new`·`detect_clis`·`local.ai.json`에 다시 켠다.
+    /// 그때까지 코드·fixture·테스트는 유지한다.
     Codex,
 }
+
+/// codex exec에서 끄는 기본 켜진 기능(`codex features list` 0.167 기준).
+const CODEX_DISABLED_FEATURES: [&str; 20] = [
+    "apps",
+    "browser_use",
+    "browser_use_external",
+    "browser_use_full_cdp_access",
+    "computer_use",
+    "shell_tool",
+    "unified_exec",
+    "multi_agent",
+    "image_generation",
+    "view_image",
+    "plugins",
+    "hooks",
+    "in_app_browser",
+    "in_app_local_automation",
+    "sleep_tool",
+    "tool_suggest",
+    "skill_search",
+    "skill_mcp_dependency_install",
+    "code_mode_host",
+    "goals",
+];
 
 impl CliKind {
     /// `local.ai` provider 값.
@@ -39,7 +68,8 @@ impl CliKind {
         }
     }
 
-    /// 도구 차단 포함 인자. claude: 내장 도구 0 + MCP 0 + 사용자 설정(훅) 안 읽음. codex: 읽기 전용 샌드박스.
+    /// 도구 차단 포함 인자. claude: 내장 도구 0 + MCP 0 + 사용자 설정 파일 안 읽음 + safe-mode(CLAUDE.md·스킬·
+    /// 플러그인·훅 끔) + 세션 저장 안 함. codex: 읽기 전용 샌드박스.
     fn args(self, req: &AiRequest, schema_file: Option<&Path>) -> Vec<String> {
         let mut a: Vec<String> = match self {
             CliKind::Claude => [
@@ -52,12 +82,33 @@ impl CliKind {
                 "--strict-mcp-config",
                 "--setting-sources",
                 "",
+                "--safe-mode",
+                "--no-session-persistence",
+                "--disable-slash-commands",
             ]
             .map(String::from)
             .to_vec(),
-            CliKind::Codex => ["exec", "--json", "--skip-git-repo-check", "-s", "read-only"]
+            CliKind::Codex => {
+                let mut a: Vec<String> = [
+                    "exec",
+                    "--json",
+                    "--skip-git-repo-check",
+                    "-s",
+                    "read-only",
+                    "--ignore-user-config",
+                    "--ignore-rules",
+                    "--ephemeral",
+                    "-c",
+                    "web_search=\"disabled\"",
+                ]
                 .map(String::from)
-                .to_vec(),
+                .to_vec();
+                for f in CODEX_DISABLED_FEATURES {
+                    a.push("--disable".into());
+                    a.push(f.into());
+                }
+                a
+            }
         };
         if let Some(m) = &req.model {
             a.push(
@@ -101,7 +152,10 @@ fn shell() -> String {
 struct StreamState {
     kind: CliKind,
     answer: Option<String>,
+    /// 답이 있어도 실패(claude `is_error`).
     error: Option<String>,
+    /// codex `error`·`turn.failed` — 재연결 경고일 수 있어 답이 없거나 rc≠0일 때만 실패 이유로 쓴다.
+    warnings: Vec<String>,
 }
 
 impl StreamState {
@@ -110,6 +164,7 @@ impl StreamState {
             kind,
             answer: None,
             error: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -145,10 +200,12 @@ impl StreamState {
                 }
             }
             (CliKind::Codex, "turn.failed") => {
-                self.error = v["error"]["message"].as_str().map(String::from);
+                self.warnings
+                    .extend(v["error"]["message"].as_str().map(String::from));
             }
             (CliKind::Codex, "error") => {
-                self.error = v["message"].as_str().map(String::from);
+                self.warnings
+                    .extend(v["message"].as_str().map(String::from));
             }
             _ => {}
         }
@@ -161,10 +218,14 @@ impl StreamState {
         }
         match self.answer {
             Some(a) if exited_ok => Ok(a),
+            _ if !self.warnings.is_empty() => {
+                Err(AiError(format!("{name}: {}", self.warnings.join(" / "))))
+            }
             _ => {
                 let tail: String = {
-                    let cs: Vec<char> = stderr.trim().chars().collect();
-                    cs[cs.len().saturating_sub(STDERR_TAIL)..].iter().collect()
+                    let s = stderr.trim();
+                    let skip = s.chars().count().saturating_sub(STDERR_TAIL);
+                    s.chars().skip(skip).collect()
                 };
                 Err(AiError(format!("{name} CLI가 답을 주지 못했어요: {tail}")))
             }
@@ -190,18 +251,27 @@ unsafe extern "C" {
 }
 const SIGKILL: i32 = 9;
 
+fn kill_group(pgid: i32) {
+    // SAFETY: 단순 시스템 호출. 그룹이 이미 없으면 ESRCH로 끝난다.
+    unsafe {
+        kill(-pgid, SIGKILL);
+    }
+}
+
 /// 버려질 때 프로세스 그룹 전체를 kill한다(CLI가 띄운 자식까지).
 // ponytail: 정상 종료 뒤에도 kill(-pgid)을 보낸다 — 남은 손자 정리용. pgid 재사용 경합은 무시할 만큼 짧다.
 struct KillGroup(i32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        // SAFETY: 단순 시스템 호출. 그룹이 이미 없으면 ESRCH로 끝난다.
-        unsafe {
-            kill(-self.0, SIGKILL);
-        }
+        kill_group(self.0);
     }
 }
+
+/// CLI stdout 전체 상한. 넘으면 kill하고 실패.
+const MAX_STDOUT: u64 = 10 * 1024 * 1024;
+/// `detect_clis` 한 CLI당 시간 상한.
+const DETECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 static SCHEMA_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -294,7 +364,8 @@ impl AiProvider for CliProvider {
             .kill_on_drop(true)
             .spawn()
             .map_err(|e| AiError(format!("{name} CLI를 실행하지 못했어요: {e}")))?;
-        let _group = child.id().map(|pid| KillGroup(pid as i32));
+        let pgid = child.id().map(|pid| pid as i32);
+        let _group = pgid.map(KillGroup);
         let (mut stdin, stdout, mut stderr) = (
             child.stdin.take().expect("piped"),
             child.stdout.take().expect("piped"),
@@ -310,9 +381,25 @@ impl AiProvider for CliProvider {
             };
             let read = async {
                 let mut st = StreamState::new(kind);
-                let mut lines = BufReader::new(stdout).lines();
-                while let Ok(Some(l)) = lines.next_line().await {
-                    st.feed(&l, chunk);
+                let mut out = BufReader::new(stdout.take(MAX_STDOUT));
+                let (mut buf, mut total) = (Vec::new(), 0u64);
+                // UTF-8이 아닌 줄도 끝까지 비운다(읽기를 멈추면 자식이 파이프에 막힌다).
+                while let Ok(n) = out.read_until(b'\n', &mut buf).await {
+                    if n == 0 {
+                        break;
+                    }
+                    total += n as u64;
+                    st.feed(String::from_utf8_lossy(&buf).trim_end(), chunk);
+                    buf.clear();
+                }
+                if total >= MAX_STDOUT {
+                    if let Some(g) = pgid {
+                        kill_group(g);
+                    }
+                    st.error = Some(format!(
+                        "출력이 {}MB를 넘어 멈췄어요.",
+                        MAX_STDOUT / 1024 / 1024
+                    ));
                 }
                 st
             };
@@ -345,21 +432,46 @@ pub struct DetectedCli {
     pub version: String,
 }
 
-/// 설치된 구독 CLI. 사용자 로그인 셸 PATH로 찾는다.
+/// 셸 명령의 stdout. 시간 상한을 넘으면 그룹째 kill하고 None.
+fn shell_output(cmd: &str, limit: Duration) -> Option<String> {
+    use std::os::unix::process::CommandExt;
+    let mut child = std::process::Command::new(shell())
+        .arg("-lc")
+        .arg(cmd)
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .ok()?;
+    let _group = KillGroup(child.id() as i32);
+    let deadline = std::time::Instant::now() + limit;
+    // ponytail: 50ms 폴링. 출력이 파이프 버퍼(64KB)를 넘는 명령엔 쓰지 않는다.
+    loop {
+        match child.try_wait().ok()? {
+            Some(s) if s.success() => break,
+            Some(_) => return None,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut out).ok()?;
+    Some(out)
+}
+
+/// 설치된 구독 CLI. 사용자 로그인 셸 PATH로 찾는다. CLI당 5초 상한. codex는 보류라 claude만.
 pub fn detect_clis() -> Vec<DetectedCli> {
-    [CliKind::Claude, CliKind::Codex]
+    [CliKind::Claude]
         .into_iter()
         .filter_map(|k| {
             let p = k.program();
-            let out = std::process::Command::new(shell())
-                .arg("-lc")
-                .arg(format!("command -v {p} && {p} --version"))
-                .current_dir(std::env::temp_dir())
-                .stdin(Stdio::null())
-                .output()
-                .ok()
-                .filter(|o| o.status.success())?;
-            let text = String::from_utf8_lossy(&out.stdout);
+            let text = shell_output(&format!("command -v {p} && {p} --version"), DETECT_TIMEOUT)?;
             let mut lines = text.lines();
             let path = PathBuf::from(lines.next()?.trim());
             let version = lines.next().unwrap_or("").trim().to_string();

@@ -54,7 +54,36 @@ fn claude_error_result_fails() {
     assert!(r.unwrap_err().to_string().contains("로그인이 필요해요"));
 }
 
-/// 정해 둔 답을 차례로 돌려주는 가짜 공급원.
+#[test]
+fn codex_error_line_then_success_is_ok() {
+    let lines = [
+        r#"{"type":"error","message":"Reconnecting... 1/5"}"#,
+        r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"ok"}}"#,
+        r#"{"type":"turn.completed"}"#,
+    ];
+    assert_eq!(
+        parse_stream(CliKind::Codex, lines, &|_: &str| {}).unwrap(),
+        "ok"
+    );
+    // 답이 없으면 경고가 실패 이유가 된다.
+    let err = parse_stream(CliKind::Codex, [lines[0]], &|_: &str| {}).unwrap_err();
+    assert!(err.to_string().contains("Reconnecting"), "{err}");
+    let failed = r#"{"type":"turn.failed","error":{"message":"사용 한도 초과"}}"#;
+    let err = parse_stream(CliKind::Codex, [failed], &|_: &str| {}).unwrap_err();
+    assert!(err.to_string().contains("사용 한도 초과"), "{err}");
+}
+
+#[test]
+fn claude_prefers_structured_output() {
+    let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"설명 글","structured_output":{"color":"파랑"}}"#;
+    let r = parse_stream(CliKind::Claude, [line], &|_: &str| {}).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&r).unwrap(),
+        json!({"color": "파랑"})
+    );
+}
+
+/// 정해 둔 답을 차례로 돌려주는 가짜 공급원. `ERR:…`은 공급원 실패(CLI rc≠0 등).
 struct Fake {
     answers: Vec<&'static str>,
     calls: AtomicUsize,
@@ -77,6 +106,9 @@ impl AiProvider for Fake {
         let i = self.calls.fetch_add(1, Ordering::SeqCst);
         *self.last.lock().unwrap() = Some(req);
         let a = self.answers[i.min(self.answers.len() - 1)];
+        if let Some(e) = a.strip_prefix("ERR:") {
+            return Err(AiError(e.to_string()));
+        }
         chunk(a);
         Ok(a.to_string())
     }
@@ -245,8 +277,28 @@ async fn invalid_output_fields_rejected() {
             "출력 칸 이름 'success'는 예약어라 쓸 수 없습니다.",
         ),
         (
+            json!([{"key": "error", "type": "text"}]),
+            "출력 칸 이름 'error'는 예약어라 쓸 수 없습니다.",
+        ),
+        (
             json!([{"key": "myToken", "type": "text"}]),
             "출력 칸 이름 'myToken'는 민감정보 이름이라",
+        ),
+        (
+            json!([{"key": "API_KEY_x", "type": "text"}]),
+            "출력 칸 이름 'API_KEY_x'는 민감정보 이름이라",
+        ),
+        (
+            json!([{"key": "Authorization", "type": "text"}]),
+            "출력 칸 이름 'Authorization'는 민감정보 이름이라",
+        ),
+        (
+            json!([{"key": "my_password", "type": "text"}]),
+            "출력 칸 이름 'my_password'는 민감정보 이름이라",
+        ),
+        (
+            json!([{"key": "a".repeat(65), "type": "text"}]),
+            "영문·숫자·밑줄만 쓰고",
         ),
         (
             json!([{"key": "a", "type": "string"}]),
@@ -281,11 +333,111 @@ async fn invalid_output_fields_rejected() {
     .await
     .unwrap();
     assert_eq!(out["output"], "답");
+    // 64자 이름은 된다.
+    let key = "a".repeat(64);
+    let fake = Fake::new(vec![Box::leak(
+        format!(r#"{{"{key}": "v"}}"#).into_boxed_str(),
+    )]);
+    let out = run(
+        &fake_runner(&fake),
+        json!({"provider": "cli:claude", "prompt": "p", "outputFields": [{"key": key, "type": "text"}]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out[&key], "v");
+}
+
+#[tokio::test]
+async fn provider_failure_is_not_retried() {
+    let fake = Fake::new(vec!["ERR:claude CLI가 답을 주지 못했어요", r#"{"a": "x"}"#]);
+    let err = run(
+        &fake_runner(&fake),
+        json!({"provider": "cli:claude", "prompt": "p", "outputFields": [{"key": "a", "type": "text"}]}),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.message.contains("답을 주지 못했어요"),
+        "{}",
+        err.message
+    );
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn number_field_range() {
+    let fields = json!([{"key": "n", "type": "number"}]);
+    // int64 밖 정수·불리언은 number가 아니다(두 번 다 틀려 실패).
+    for bad in [
+        r#"{"n": 9223372036854775808}"#,
+        r#"{"n": true}"#,
+        r#"{"n": "3"}"#,
+    ] {
+        let fake = Fake::new(vec![bad]);
+        let err = run(
+            &fake_runner(&fake),
+            json!({"provider": "cli:claude", "prompt": "p", "outputFields": fields}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.message.contains("출력 필드 'n'는 number여야 합니다"),
+            "{bad}: {}",
+            err.message
+        );
+    }
+    for (good, want) in [
+        (r#"{"n": -9223372036854775808}"#, json!(i64::MIN)),
+        (r#"{"n": 4.0}"#, json!(4)),
+        (r#"{"n": 1.5}"#, json!(1.5)),
+        (r#"{"n": 1e20}"#, json!(1e20)),
+    ] {
+        let fake = Fake::new(vec![good]);
+        let out = run(
+            &fake_runner(&fake),
+            json!({"provider": "cli:claude", "prompt": "p", "outputFields": fields}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out["n"], want, "{good}");
+    }
+}
+
+#[tokio::test]
+async fn bad_model_name_fails() {
+    for m in [
+        "--dangerously-skip-permissions",
+        "-x",
+        "a b",
+        "a\nb",
+        "a\u{7}",
+    ] {
+        let fake = Fake::new(vec!["ok"]);
+        let err = run(
+            &fake_runner(&fake),
+            json!({"provider": "cli:claude", "prompt": "p", "model": m}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.message.contains("모델 이름이 올바르지 않아요"),
+            "{m:?}: {}",
+            err.message
+        );
+        assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+    }
+    let fake = Fake::new(vec!["ok"]);
+    run(
+        &fake_runner(&fake),
+        json!({"provider": "cli:claude", "prompt": "p", "model": "claude-sonnet-5-5[1m]"}),
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
 async fn unsupported_provider_fails() {
-    for p in ["cli:gemini", "api:anthropic", "x"] {
+    for p in ["cli:codex", "cli:gemini", "api:anthropic", "x"] {
         let err = run(&AiRunner::new(), json!({"provider": p, "prompt": "p"}))
             .await
             .unwrap_err();
@@ -306,6 +458,100 @@ fn file_text_caps_at_50000() {
     let short = t.path().join("short.md");
     fs::write(&short, "안녕").unwrap();
     assert_eq!(file_text(&short), "안녕");
+    // 읽기 상한(200KB)이 글자 중간을 자르는 파일: 잘린 마지막 글자만 버린다.
+    let cut = t.path().join("cut.txt");
+    fs::write(&cut, "가".repeat(70_000)).unwrap();
+    let text = file_text(&cut);
+    assert_eq!(text.chars().count(), 50_000);
+    assert!(text.chars().all(|c| c == '가'));
+}
+
+/// 텍스트 연산이 아주 많은 비압축 PDF(추출이 오래 걸린다).
+fn slow_pdf(path: &Path, ops: usize) {
+    let mut content = String::new();
+    for i in 0..ops {
+        content.push_str(&format!("BT /F1 12 Tf {} 700 Td (w{i}) Tj ET\n", i % 500));
+    }
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+    ];
+    let mut pdf = String::from("%PDF-1.4\n");
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.push_str(&format!("{} 0 obj\n{o}\nendobj\n", i + 1));
+    }
+    let xref = pdf.len();
+    pdf.push_str(&format!(
+        "xref\n0 {}\n0000000000 65535 f \n",
+        objs.len() + 1
+    ));
+    for off in offsets {
+        pdf.push_str(&format!("{off:010} 00000 n \n"));
+    }
+    pdf.push_str(&format!(
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n",
+        objs.len() + 1
+    ));
+    fs::write(path, pdf).unwrap();
+}
+
+#[test]
+fn small_pdf_text_extracted() {
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("a.pdf");
+    slow_pdf(&p, 3);
+    assert!(file_text(&p).contains("w2"), "{:?}", file_text(&p));
+}
+
+#[test]
+fn oversized_pdf_skipped() {
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("big.pdf");
+    slow_pdf(&p, 3);
+    // 내용은 그대로, 뒤에 0을 붙여 상한 + 1바이트로.
+    let f = fs::OpenOptions::new().write(true).open(&p).unwrap();
+    f.set_len(ieum_local::ai::MAX_PDF_BYTES + 1).unwrap();
+    let started = Instant::now();
+    assert_eq!(file_text(&p), "");
+    assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pdf_extraction_respects_cancel() {
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("slow.pdf");
+    slow_pdf(&p, 400_000);
+    let fake = Fake::new(vec!["ok"]);
+    let runner = fake_runner(&fake);
+    let cancel = CancellationToken::new();
+    let c2 = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        c2.cancel();
+    });
+    let started = Instant::now();
+    let (r, _) = run_with(
+        &runner,
+        json!({"provider": "cli:claude", "prompt": "p", "file": p.to_str().unwrap()}),
+        &cancel,
+    )
+    .await;
+    assert!(r.unwrap_err().message.contains("취소"));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        fake.calls.load(Ordering::SeqCst),
+        0,
+        "추출이 끝나기 전에 취소됐다"
+    );
 }
 
 #[test]
@@ -322,9 +568,13 @@ fn binary_file_gives_empty_text() {
 
 /// 가짜 CLI를 실행 가능하게 만들고, 그 CLI를 쓰는 공급원과 cwd를 돌려준다.
 fn sleeper(timeout: Duration) -> (tempfile::TempDir, CliProvider) {
+    fake_cli("fake_cli_sleep.sh", timeout)
+}
+
+fn fake_cli(name: &str, timeout: Duration) -> (tempfile::TempDir, CliProvider) {
     let t = tempfile::tempdir().unwrap();
     let script = t.path().join("fake-cli");
-    fs::copy(fixture("fake_cli_sleep.sh"), &script).unwrap();
+    fs::copy(fixture(name), &script).unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     let cwd = t.path().join("cwd");
     fs::create_dir(&cwd).unwrap();
@@ -333,6 +583,25 @@ fn sleeper(timeout: Duration) -> (tempfile::TempDir, CliProvider) {
         .cwd(cwd)
         .timeout(timeout);
     (t, provider)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stdout_cap_kills_flooding_cli() {
+    let (_t, provider) = fake_cli("fake_cli_flood.sh", Duration::from_secs(60));
+    let started = Instant::now();
+    let err = provider
+        .ask(
+            AiRequest {
+                prompt: "p".into(),
+                model: None,
+                schema: None,
+            },
+            &|_: &str| {},
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("10MB"), "{err}");
+    assert!(started.elapsed() < Duration::from_secs(30));
 }
 
 fn read_pid(dir: &Path, name: &str) -> u32 {

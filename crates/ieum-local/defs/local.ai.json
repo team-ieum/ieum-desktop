@@ -21,10 +21,6 @@
           "name": "Claude 구독(claude CLI)"
         },
         {
-          "id": "cli:codex",
-          "name": "ChatGPT 구독(codex CLI)"
-        },
-        {
           "id": "api:anthropic",
           "name": "Anthropic API 키"
         },

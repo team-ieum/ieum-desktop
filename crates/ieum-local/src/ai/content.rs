@@ -41,8 +41,33 @@ fn utf8_text(path: &Path) -> String {
     }
 }
 
-// ponytail: PDF는 통째로 읽어 추출한다(크기 상한 없음). 큰 PDF가 문제 되면 크기 상한을 둔다.
+/// `file_text`를 별도 스레드에서 돌리고 시간 상한을 건다. 넘으면 `""`(노드는 파일 이름만으로 진행).
+/// 취소는 호출하는 쪽 `select!`가 이 future를 버리는 것으로 한다.
+// ponytail: 시간 초과·취소 뒤에도 추출 스레드는 끝까지 돈다(압축 폭탄이면 CPU·메모리를 계속 씀).
+// 업그레이드 = 별도 프로세스에서 추출하고 kill·RLIMIT_AS로 상한.
+pub async fn file_text_bounded(path: &Path) -> String {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let path = path.to_path_buf();
+    // spawn_blocking이 아니라 분리된 스레드: 런타임 종료가 끝나지 않는 추출을 기다리지 않게.
+    std::thread::spawn(move || {
+        let _ = tx.send(file_text(&path));
+    });
+    tokio::time::timeout(PDF_TIMEOUT, rx)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+}
+
+/// PDF 추출 시간 상한.
+const PDF_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+/// 이보다 큰 PDF는 추출하지 않는다.
+pub const MAX_PDF_BYTES: u64 = 20 * 1024 * 1024;
+
 fn pdf_text(path: &Path) -> String {
+    if std::fs::metadata(path).map_or(true, |m| m.len() > MAX_PDF_BYTES) {
+        return String::new();
+    }
     let Ok(bytes) = std::fs::read(path) else {
         return String::new();
     };
