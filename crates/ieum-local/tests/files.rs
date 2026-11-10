@@ -123,18 +123,27 @@ async fn move_rejects_escape_destination() {
 
 #[tokio::test]
 async fn move_rejects_relative_base_folder() {
-    // "src"는 테스트 실행 위치(크레이트 폴더)에 실제로 있는 폴더다.
-    assert!(Path::new("src").is_dir());
     let (_t, root) = tmp();
+    let base = root.join("base");
+    fs::create_dir_all(&base).unwrap();
     let src = write(&root.join("in/a.pdf"), "a");
     let (m, j, _) = mover(&root);
+    // 실행 위치와 상관없이 임시 폴더의 base를 가리키는 상대 경로(`..`가 루트에서 멈춘다).
+    // 검사가 깨져도 파일은 임시 폴더 안으로만 간다.
+    let rel = format!(
+        "{}{}",
+        "../".repeat(64),
+        base.strip_prefix("/").unwrap().display()
+    );
+    assert!(Path::new(&rel).is_relative() && Path::new(&rel).is_dir());
 
     assert!(
-        run(&m, json!({"path": s(&src), "baseFolder": "src"}))
+        run(&m, json!({"path": s(&src), "baseFolder": rel}))
             .await
             .is_err()
     );
     assert!(src.exists());
+    assert!(!base.join("a.pdf").exists());
     assert!(j.ops().is_empty());
 }
 
@@ -587,4 +596,73 @@ async fn cross_volume_fails_without_copy() {
     assert!(src.exists());
     assert!(!other.join("a.pdf").exists());
     assert!(j.ops().is_empty());
+}
+
+/// exFAT 볼륨에서 같은 이름으로 동시에 옮겨도 덮어쓰지 않는다(리뷰 B2 Critical 재현).
+/// `IEUM_EXFAT_MOUNT=/Volumes/X cargo test -p ieum-local exfat -- --ignored`
+#[test]
+#[ignore = "exFAT 볼륨 필요: IEUM_EXFAT_MOUNT"]
+fn exfat_concurrent_moves_never_overwrite() {
+    use std::sync::{Arc, Barrier};
+
+    let vol = PathBuf::from(std::env::var("IEUM_EXFAT_MOUNT").expect("IEUM_EXFAT_MOUNT"));
+    let t = tempfile::tempdir_in(&vol).unwrap();
+    let root = t.path().canonicalize().unwrap();
+    let base = root.join("base");
+    fs::create_dir_all(&base).unwrap();
+    let n = 32;
+    for round in 0..20 {
+        let dest = format!("r{round}");
+        let srcs: Vec<PathBuf> = (0..n)
+            .map(|i| {
+                write(
+                    &root.join(format!("in{round}_{i}/same.pdf")),
+                    &format!("B{i}"),
+                )
+            })
+            .collect();
+        let bar = Arc::new(Barrier::new(n));
+        let handles: Vec<_> = srcs
+            .into_iter()
+            .map(|src| {
+                let (base, bar, root, dest) =
+                    (base.clone(), bar.clone(), root.clone(), dest.clone());
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .unwrap();
+                    let (m, _, _) = mover(&root);
+                    bar.wait();
+                    rt.block_on(run(
+                        &m,
+                        json!({"path": s(&src), "baseFolder": s(&base), "destination": dest}),
+                    ))
+                    .is_err()
+                })
+            })
+            .collect();
+        let errs = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|e| *e)
+            .count();
+        let mut bodies: Vec<String> = fs::read_dir(base.join(&dest))
+            .map(|d| {
+                d.map(|e| e.unwrap().path())
+                    .filter(|p| !p.file_name().unwrap().to_string_lossy().starts_with("._"))
+                    .map(|p| fs::read_to_string(p).unwrap())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let files = bodies.len();
+        bodies.sort();
+        bodies.dedup();
+        assert_eq!(bodies.len(), files, "round {round}: 같은 내용 중복");
+        assert_eq!(
+            files + errs,
+            n,
+            "round {round}: 덮어쓰기 손실 {}",
+            n - files - errs
+        );
+    }
 }

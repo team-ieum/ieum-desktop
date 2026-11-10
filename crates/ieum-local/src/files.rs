@@ -106,29 +106,34 @@ fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
 
     let f = CString::new(from.as_os_str().as_bytes())?;
     let t = CString::new(to.as_os_str().as_bytes())?;
-    // SAFETY: 두 포인터 모두 호출 동안 살아 있는 NUL 종료 C 문자열이다.
-    if unsafe { renamex_np(f.as_ptr(), t.as_ptr(), RENAME_EXCL | RENAME_NOFOLLOW_ANY) } == 0 {
-        return Ok(());
+    let call = |flags: c_uint| {
+        // SAFETY: 두 포인터 모두 호출 동안 살아 있는 NUL 종료 C 문자열이다.
+        if unsafe { renamex_np(f.as_ptr(), t.as_ptr(), flags) } == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    };
+    let unsupported = |e: &io::Error| e.raw_os_error() == Some(ENOTSUP);
+    match call(RENAME_EXCL | RENAME_NOFOLLOW_ANY) {
+        // NOFOLLOW_ANY를 못 받는 볼륨: 원자적 "없을 때만"은 지키고 링크 차단만 뺀다.
+        Err(e) if unsupported(&e) => match call(RENAME_EXCL) {
+            Err(e) if unsupported(&e) => Err(no_excl()),
+            r => r,
+        },
+        r => r,
     }
-    let e = io::Error::last_os_error();
-    if e.raw_os_error() == Some(ENOTSUP) {
-        // ponytail: exFAT 등 RENAME_EXCL 미지원 볼륨 — 확인→rename 사이 경합 창과 링크 따라감이 남음
-        return rename_checked(from, to);
-    }
-    Err(e)
 }
 
+/// 1단계는 macOS만 지원 — 원자적 "없을 때만" rename이 없으면 옮기지 않는다.
 #[cfg(not(target_os = "macos"))]
-fn rename_excl(from: &Path, to: &Path) -> io::Result<()> {
-    rename_checked(from, to)
+fn rename_excl(_from: &Path, _to: &Path) -> io::Result<()> {
+    Err(no_excl())
 }
 
-// ponytail: 확인과 rename 사이 경합 창이 남음 — macOS 외 지원 시 renameat2(RENAME_NOREPLACE)로
-fn rename_checked(from: &Path, to: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(to).is_ok() {
-        return Err(io::ErrorKind::AlreadyExists.into());
-    }
-    fs::rename(from, to)
+/// 덮어쓰기 없는 rename을 못 하는 볼륨·플랫폼. 확인 후 `fs::rename`은 경합에서 덮어쓰므로 쓰지 않는다.
+fn no_excl() -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, "RENAME_EXCL 미지원")
 }
 
 /// `dir/name`으로 옮긴다. 같은 이름이 있으면 `name (1).ext`, `name (2).ext` …
@@ -142,6 +147,9 @@ fn move_no_clobber(from: &Path, dir: &Path, name: &str) -> Result<PathBuf, NodeE
         match rename_excl(from, &to) {
             Ok(()) => return Ok(to),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == io::ErrorKind::Unsupported => {
+                return Err(fail("이 디스크에서는 덮어쓰기 없이 옮길 수 없어요."));
+            }
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
                 return Err(fail(format!(
                     "다른 볼륨으로는 옮길 수 없어요(같은 디스크 안에서만 돼요): {}",
