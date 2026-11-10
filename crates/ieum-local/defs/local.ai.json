@@ -25,10 +25,6 @@
           "name": "ChatGPT 구독(codex CLI)"
         },
         {
-          "id": "cli:gemini",
-          "name": "Gemini 구독(gemini CLI)"
-        },
-        {
           "id": "api:anthropic",
           "name": "Anthropic API 키"
         },
@@ -94,6 +90,11 @@
               "name": "참/거짓"
             }
           ]
+        },
+        {
+          "key": "description",
+          "title": "설명",
+          "type": "text"
         }
       ]
     }
