@@ -1,0 +1,27 @@
+{
+  "node_type": "ACTION",
+  "kind": "action",
+  "title": "휴지통으로 보내기",
+  "description": "파일을 휴지통으로 옮겨요. 영구 삭제하지 않아요.",
+  "tool_key": null,
+  "fixed": {
+    "type": "ACTION",
+    "config": {}
+  },
+  "inputFields": [
+    {
+      "key": "path",
+      "title": "보낼 파일",
+      "type": "string",
+      "required": true,
+      "description": "보통 트리거의 파일 경로를 넣어요."
+    }
+  ],
+  "outputFields": [
+    {
+      "key": "path",
+      "title": "휴지통 안 경로",
+      "type": "string"
+    }
+  ]
+}

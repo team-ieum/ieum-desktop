@@ -1,0 +1,46 @@
+{
+  "node_type": "ACTION",
+  "kind": "action",
+  "title": "파일 옮기기",
+  "description": "파일을 고른 폴더 아래로 옮겨요. 같은 이름이 있으면 덮어쓰지 않고 번호를 붙여요.",
+  "tool_key": null,
+  "fixed": {
+    "type": "ACTION",
+    "config": {}
+  },
+  "inputFields": [
+    {
+      "key": "path",
+      "title": "옮길 파일",
+      "type": "string",
+      "required": true,
+      "description": "보통 트리거의 파일 경로를 넣어요."
+    },
+    {
+      "key": "baseFolder",
+      "title": "기준 폴더",
+      "type": "string",
+      "required": true,
+      "ref": false,
+      "description": "파일은 이 폴더 밖으로는 옮겨지지 않아요."
+    },
+    {
+      "key": "destination",
+      "title": "목적지 폴더",
+      "type": "string",
+      "description": "기준 폴더 아래 상대 경로예요. 비우면 기준 폴더 자체로 옮겨요."
+    }
+  ],
+  "outputFields": [
+    {
+      "key": "path",
+      "title": "새 경로",
+      "type": "string"
+    },
+    {
+      "key": "name",
+      "title": "파일 이름",
+      "type": "string"
+    }
+  ]
+}

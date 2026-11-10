@@ -1,0 +1,102 @@
+{
+  "node_type": "AI",
+  "kind": "action",
+  "title": "AI",
+  "description": "AI가 파일과 앞 단계 결과를 읽고 판단해요.",
+  "tool_key": null,
+  "fixed": {
+    "type": "AI",
+    "config": {}
+  },
+  "inputFields": [
+    {
+      "key": "provider",
+      "title": "AI 공급원",
+      "type": "string",
+      "required": true,
+      "ref": false,
+      "choices": [
+        {
+          "id": "cli:claude",
+          "name": "Claude 구독(claude CLI)"
+        },
+        {
+          "id": "cli:codex",
+          "name": "ChatGPT 구독(codex CLI)"
+        },
+        {
+          "id": "cli:gemini",
+          "name": "Gemini 구독(gemini CLI)"
+        },
+        {
+          "id": "api:anthropic",
+          "name": "Anthropic API 키"
+        },
+        {
+          "id": "api:openai",
+          "name": "OpenAI API 키"
+        },
+        {
+          "id": "api:gemini",
+          "name": "Gemini API 키"
+        }
+      ]
+    },
+    {
+      "key": "model",
+      "title": "모델",
+      "type": "string",
+      "ref": false,
+      "description": "비우면 공급원의 기본 모델을 써요."
+    },
+    {
+      "key": "prompt",
+      "title": "지시",
+      "type": "text",
+      "required": true
+    },
+    {
+      "key": "file",
+      "title": "읽을 파일",
+      "type": "string",
+      "description": "보통 트리거의 파일 경로를 넣어요. 텍스트·PDF 내용을 AI에게 함께 보내요."
+    },
+    {
+      "key": "outputFields",
+      "title": "출력 칸",
+      "type": "object",
+      "list": true,
+      "ref": false,
+      "description": "AI가 이 칸들로만 답해요. 다음 단계에서 칸 하나씩 골라 쓸 수 있어요. 비우면 결과 한 칸이에요.",
+      "children": [
+        {
+          "key": "key",
+          "title": "이름",
+          "type": "string",
+          "required": true
+        },
+        {
+          "key": "type",
+          "title": "타입",
+          "type": "string",
+          "required": true,
+          "choices": [
+            {
+              "id": "string",
+              "name": "텍스트"
+            },
+            {
+              "id": "number",
+              "name": "숫자"
+            },
+            {
+              "id": "boolean",
+              "name": "참/거짓"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "outputsFrom": "config.outputFields"
+}

@@ -1,0 +1,39 @@
+{
+  "node_type": "ACTION",
+  "kind": "action",
+  "title": "파일 이름 바꾸기",
+  "description": "파일 이름을 바꿔요. 같은 이름이 있으면 덮어쓰지 않고 번호를 붙여요.",
+  "tool_key": null,
+  "fixed": {
+    "type": "ACTION",
+    "config": {}
+  },
+  "inputFields": [
+    {
+      "key": "path",
+      "title": "바꿀 파일",
+      "type": "string",
+      "required": true,
+      "description": "보통 트리거의 파일 경로를 넣어요."
+    },
+    {
+      "key": "newName",
+      "title": "새 이름",
+      "type": "string",
+      "required": true,
+      "description": "확장자를 빼면 원래 확장자를 그대로 써요."
+    }
+  ],
+  "outputFields": [
+    {
+      "key": "path",
+      "title": "새 경로",
+      "type": "string"
+    },
+    {
+      "key": "name",
+      "title": "파일 이름",
+      "type": "string"
+    }
+  ]
+}

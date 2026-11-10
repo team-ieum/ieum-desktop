@@ -1,0 +1,44 @@
+{
+  "node_type": "TRIGGER",
+  "kind": "trigger",
+  "trigger_type": "LOCAL_FOLDER_NEW_FILE",
+  "title": "폴더에 새 파일",
+  "description": "고른 폴더에 새 파일이 생기면 시작해요.",
+  "tool_key": null,
+  "fixed": {
+    "type": "TRIGGER",
+    "config": {}
+  },
+  "inputFields": [
+    {
+      "key": "folder",
+      "title": "감시할 폴더",
+      "type": "string",
+      "required": true,
+      "ref": false,
+      "description": "이 폴더 바로 아래에 새로 생긴 파일만 봐요(하위 폴더는 보지 않아요)."
+    }
+  ],
+  "outputFields": [
+    {
+      "key": "path",
+      "title": "파일 경로",
+      "type": "string"
+    },
+    {
+      "key": "name",
+      "title": "파일 이름",
+      "type": "string"
+    },
+    {
+      "key": "extension",
+      "title": "확장자",
+      "type": "string"
+    },
+    {
+      "key": "size",
+      "title": "크기(바이트)",
+      "type": "integer"
+    }
+  ]
+}
