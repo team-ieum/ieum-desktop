@@ -8,7 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::files::rename_excl;
-use crate::journal::{FileId, FileOp, FileOpKind};
+use crate::journal::{FileId, FileOp, FileOpKind, RecentWrites};
 use crate::paths::AllowedRoots;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,12 +32,21 @@ pub struct UndoReport {
     pub skipped: Vec<(FileOp, UndoSkip)>,
 }
 
-pub fn undo(ops: &[FileOp], roots: &AllowedRoots, trash_dir: &Path) -> UndoReport {
+/// 되돌린 `from`은 `recent`에 mark한다(감시 폴더로 돌아온 파일이 트리거를 다시 일으키지 않게).
+pub fn undo(
+    ops: &[FileOp],
+    roots: &AllowedRoots,
+    trash_dir: &Path,
+    recent: &RecentWrites,
+) -> UndoReport {
     let trash = trash_dir.canonicalize().ok();
     let mut report = UndoReport::default();
     for op in ops.iter().rev() {
         match undo_one(op, roots, trash.as_deref()) {
-            Ok(()) => report.restored.push(op.clone()),
+            Ok(()) => {
+                recent.mark(&op.from);
+                report.restored.push(op.clone())
+            }
             Err(why) => report.skipped.push((op.clone(), why)),
         }
     }

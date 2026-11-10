@@ -58,6 +58,7 @@ fn u(ops: &[FileOp], root: &Path) -> UndoReport {
         ops,
         &AllowedRoots::new([root.to_path_buf()]),
         &root.join("Trash"),
+        &RecentWrites::default(),
     )
 }
 
@@ -128,6 +129,35 @@ async fn undo_restores_in_reverse() {
     assert_eq!(kinds, vec![FileOpKind::Rename, FileOpKind::Move]);
     assert_eq!(read(&src), "a.pdf");
     assert!(!at.exists() && !last.exists());
+}
+
+#[tokio::test]
+async fn undo_marks_recent_writes() {
+    let (_t, root) = tmp();
+    let (j, src, at, _) = moved_renamed(&root).await;
+    let recent = RecentWrites::default();
+    let report = undo(
+        &j.ops(),
+        &AllowedRoots::new([root.clone()]),
+        &root.join("Trash"),
+        &recent,
+    );
+    assert_eq!(report.restored.len(), 2);
+    let within = std::time::Duration::from_secs(10);
+    // 되돌려 생긴 자리(중간·원래)는 mark
+    assert!(recent.is_recent(&src, within));
+    assert!(recent.is_recent(&at, within));
+
+    // 건너뛴 작업은 mark하지 않는다
+    let recent = RecentWrites::default();
+    let report = undo(
+        &j.ops(),
+        &AllowedRoots::new([root.clone()]),
+        &root.join("Trash"),
+        &recent,
+    );
+    assert_eq!(report.skipped.len(), 2);
+    assert!(!recent.is_recent(&src, within) && !recent.is_recent(&at, within));
 }
 
 #[tokio::test]
@@ -282,7 +312,12 @@ async fn undo_restores_trashed_file() {
     // 원래 폴더가 지워져도 다시 만든다
     fs::remove_dir(root.join("in/sub")).unwrap();
 
-    let report = undo(&j.ops(), &AllowedRoots::new([root.join("in")]), &trash);
+    let report = undo(
+        &j.ops(),
+        &AllowedRoots::new([root.join("in")]),
+        &trash,
+        &RecentWrites::default(),
+    );
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     assert_eq!(read(&src), "a");
     assert!(!trash.join("a.pdf").exists());
@@ -367,6 +402,7 @@ fn trash_to_must_be_in_trash_dir() {
         &[op(FileOpKind::Trash, &from("b.pdf"), &in_other)],
         &roots,
         &trash,
+        &RecentWrites::default(),
     );
     assert_eq!(report.skipped[0].1, failed(OUT_OF_SCOPE));
     // 휴지통 안 파일인데 이동 작업이라 주장 → 거부
@@ -374,6 +410,7 @@ fn trash_to_must_be_in_trash_dir() {
         &[op(FileOpKind::Move, &from("a.pdf"), &in_trash)],
         &roots,
         &trash,
+        &RecentWrites::default(),
     );
     assert_eq!(report.skipped[0].1, failed(OUT_OF_SCOPE));
     assert_eq!(read(&in_trash), "a");
@@ -384,6 +421,7 @@ fn trash_to_must_be_in_trash_dir() {
         &[op(FileOpKind::Trash, &from("a.pdf"), &in_trash)],
         &roots,
         &trash,
+        &RecentWrites::default(),
     );
     assert!(report.skipped.is_empty(), "{:?}", report.skipped);
     assert_eq!(read(&root.join("in/a.pdf")), "a");

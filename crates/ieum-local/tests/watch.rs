@@ -2,12 +2,15 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::symlink;
+use std::os::unix::fs::{MetadataExt, symlink};
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use ieum_local::{FolderWatcher, NewFile, RecentWrites, WatchTiming};
+use ieum_local::{
+    AllowedRoots, FileId, FileOp, FileOpKind, FolderWatcher, NewFile, RecentWrites, WatchTiming,
+    undo,
+};
 use tempfile::TempDir;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
@@ -24,8 +27,16 @@ fn timing() -> WatchTiming {
 }
 
 fn start(dir: &Path, recent: RecentWrites) -> (FolderWatcher, UnboundedReceiver<NewFile>) {
+    start_t(dir, recent, timing())
+}
+
+fn start_t(
+    dir: &Path,
+    recent: RecentWrites,
+    t: WatchTiming,
+) -> (FolderWatcher, UnboundedReceiver<NewFile>) {
     let (tx, rx) = unbounded_channel();
-    let w = FolderWatcher::start_with(dir.to_path_buf(), recent, tx, timing()).unwrap();
+    let w = FolderWatcher::start_with(dir.to_path_buf(), recent, tx, t).unwrap();
     sleep(TICK); // 감시 스트림이 자리 잡을 시간
     (w, rx)
 }
@@ -139,13 +150,15 @@ fn ignores_paths_written_by_ieum() {
     let recent = RecentWrites::default();
     let (_w, mut rx) = start(dir.path(), recent.clone());
 
-    // 파일 노드처럼: 먼저 옮기고(rename) 나중에 mark 한다.
+    // 파일 노드처럼: 먼저 옮기고(rename) 조금 뒤 실제 경로(/private/var)로 mark 한다.
+    // 감시는 비정규 경로(/var)로 시작 → 정규 경로 확인과 "보내기 직전 확인"을 함께 고정.
     let src = TempDir::new().unwrap();
     let from = src.path().join("moved.pdf");
     fs::write(&from, b"data").unwrap();
     let to = dir.path().join("moved.pdf");
     fs::rename(&from, &to).unwrap();
-    recent.mark(&to);
+    sleep(TICK / 2);
+    recent.mark(&to.canonicalize().unwrap());
 
     // 같은 폴더에 사용자가 만든 파일은 보낸다.
     fs::write(dir.path().join("user.pdf"), b"u").unwrap();
@@ -208,6 +221,83 @@ fn same_path_not_sent_again_within_window() {
 
     fs::remove_file(&path).unwrap();
     fs::write(&path, b"22").unwrap();
+    let got = collect(&mut rx, WAIT);
+    assert!(got.is_empty(), "{got:?}");
+}
+
+#[test]
+fn same_path_sent_again_after_window() {
+    let dir = TempDir::new().unwrap();
+    let t = WatchTiming {
+        repeat_window: Duration::from_millis(300),
+        ..timing()
+    };
+    let (_w, mut rx) = start_t(dir.path(), RecentWrites::default(), t);
+    let path = dir.path().join("again.pdf");
+    fs::write(&path, b"1").unwrap();
+    assert!(first(&mut rx, WAIT).is_some());
+
+    sleep(Duration::from_millis(500));
+    fs::remove_file(&path).unwrap();
+    fs::write(&path, b"22").unwrap();
+    let got = collect(&mut rx, WAIT);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].size, 2);
+}
+
+#[test]
+fn firefox_placeholder_waits_for_part() {
+    let dir = TempDir::new().unwrap();
+    let (_w, mut rx) = start(dir.path(), RecentWrites::default());
+    let path = dir.path().join("foo.pdf");
+    fs::write(&path, b"").unwrap();
+    let part = dir.path().join("foo.pdf.part");
+    let mut f = fs::File::create(&part).unwrap();
+    for _ in 0..5 {
+        f.write_all(&[0u8; 1000]).unwrap();
+        f.flush().unwrap();
+        sleep(TICK * 3); // 자리 파일(0B)은 그동안 크기 안정
+        assert!(rx.try_recv().is_err(), "자리 파일을 보냈다");
+    }
+    drop(f);
+    fs::rename(&part, &path).unwrap();
+
+    let got = collect(&mut rx, WAIT);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].name, "foo.pdf");
+    assert_eq!(got[0].size, 5000);
+}
+
+#[test]
+fn undone_file_not_retriggered() {
+    let dir = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let real = dir.path().canonicalize().unwrap();
+    let out_real = outside.path().canonicalize().unwrap();
+    // 감시 폴더에서 밖으로 옮겨진 기록(파일 노드가 남긴 것과 같은 모양)
+    let to = out_real.join("a.pdf");
+    fs::write(&to, b"data").unwrap();
+    let op = FileOp {
+        kind: FileOpKind::Move,
+        from: real.join("a.pdf"),
+        to: to.clone(),
+        file_id: Some(FileId {
+            dev: fs::metadata(&to).unwrap().dev(),
+            ino: fs::metadata(&to).unwrap().ino(),
+        }),
+    };
+
+    let recent = RecentWrites::default();
+    let (_w, mut rx) = start(dir.path(), recent.clone());
+    let report = undo(
+        &[op],
+        &AllowedRoots::new([real.clone(), out_real]),
+        &real.join("Trash"),
+        &recent,
+    );
+    assert!(report.skipped.is_empty(), "{:?}", report.skipped);
+    assert!(real.join("a.pdf").exists());
+
     let got = collect(&mut rx, WAIT);
     assert!(got.is_empty(), "{got:?}");
 }

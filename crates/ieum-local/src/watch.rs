@@ -87,6 +87,7 @@ impl FolderWatcher {
                     Err(e) => return eprintln!("[ieum-local] 폴더 감시 오류: {e}"),
                 };
                 // 시작 뒤 생긴 파일만: 생성·이름 변경 이벤트만 본다(시작 시 스캔 없음).
+                // ponytail: FSEvents는 갓 생긴(~5초) 파일의 이후 이벤트에도 Created를 실어, 시작 직전 파일이 메타데이터만 바뀌어도 나간다. 필요해지면 시작 때 (이름→ino) 스냅숏.
                 if !matches!(
                     ev.kind,
                     EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
@@ -167,6 +168,13 @@ fn run(
                 *last = Some(meta.len());
                 return true;
             }
+            // Firefox는 0B 자리 파일을 두고 `<이름>.part`에 받은 뒤 덮어쓴다 — 형제가 있으면 계속 기다린다.
+            let mut part = name.clone();
+            part.push(".part");
+            if folder.join(part).symlink_metadata().is_ok() {
+                return true;
+            }
+            // ponytail: 최종 이름으로 직접 쓰다가 stable_interval보다 오래 멈추면 덜 쓴 채 한 번 나간다. 필요해지면 열린 파일 확인(lsof/proc_pidinfo).
             // 크기 안정. 파일 노드는 rename 뒤에 mark하므로 보내기 직전에 확인한다.
             let ours = recent.is_recent(&path, timing.recent_window)
                 || path
