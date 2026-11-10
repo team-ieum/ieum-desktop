@@ -14,16 +14,18 @@ pub enum FileOpKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileOp {
     pub kind: FileOpKind,
     pub from: PathBuf,
     pub to: PathBuf,
-    /// 작업 직후 `to`의 (dev, ino). 되돌릴 때 바꿔치기 감지용.
-    #[serde(default)]
+    /// 작업 직후 `to`의 (dev, ino). 되돌릴 때 바꿔치기 감지용(비교는 ino만).
+    #[serde(default, alias = "file_id")]
     pub file_id: Option<FileId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileId {
     pub dev: u64,
     pub ino: u64,
