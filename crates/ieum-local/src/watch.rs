@@ -168,10 +168,11 @@ fn run(
                 *last = Some(meta.len());
                 return true;
             }
-            // Firefox는 0B 자리 파일을 두고 `<이름>.part`에 받은 뒤 덮어쓴다 — 형제가 있으면 계속 기다린다.
+            // Firefox는 0B 자리 파일을 두고 `<이름>.part`에 받은 뒤 덮어쓴다 — 0B이고 형제가 있으면 계속 기다린다
+            // (내용 있는 파일은 오래 남은 `.part`에 막히지 않게).
             let mut part = name.clone();
             part.push(".part");
-            if folder.join(part).symlink_metadata().is_ok() {
+            if meta.len() == 0 && folder.join(part).symlink_metadata().is_ok() {
                 return true;
             }
             // ponytail: 최종 이름으로 직접 쓰다가 stable_interval보다 오래 멈추면 덜 쓴 채 한 번 나간다. 필요해지면 열린 파일 확인(lsof/proc_pidinfo).

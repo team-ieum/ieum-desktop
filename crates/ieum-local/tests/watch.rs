@@ -269,6 +269,19 @@ fn firefox_placeholder_waits_for_part() {
 }
 
 #[test]
+fn stale_part_does_not_block_real_file() {
+    let dir = TempDir::new().unwrap();
+    fs::write(dir.path().join("notes.part"), b"old").unwrap();
+    let (_w, mut rx) = start(dir.path(), RecentWrites::default());
+    fs::write(dir.path().join("notes"), [0u8; 3000]).unwrap();
+
+    let got = collect(&mut rx, WAIT);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].name, "notes");
+    assert_eq!(got[0].size, 3000);
+}
+
+#[test]
 fn undone_file_not_retriggered() {
     let dir = TempDir::new().unwrap();
     let outside = TempDir::new().unwrap();
