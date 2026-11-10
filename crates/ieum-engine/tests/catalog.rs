@@ -80,7 +80,7 @@ fn workflow_roundtrip_keeps_unknown_keys() {
             "event": "local.file_move",
             "type": "ACTION",
             "position": {"x": 1, "y": 2},
-            "config": {"path": "{{nodes.t.output.path}}"},
+            "config": {"zeta": 1, "path": "{{nodes.t.output.path}}"},
             "foo": {"bar": [1, 2]}
         }],
         "edges": [{"id": "e1", "source": "t", "target": "n1", "conditionType": null}]
@@ -91,4 +91,6 @@ fn workflow_roundtrip_keeps_unknown_keys() {
     // conditionType: null 은 None 으로 읽혀 쓰기 때 빠진다.
     expected["edges"][0].as_object_mut().unwrap().remove("conditionType");
     assert_eq!(serde_json::to_value(&wf).unwrap(), expected);
+    // Value 비교는 키 순서를 안 보므로 문자열로 순서까지 확인.
+    assert_eq!(serde_json::to_string(&wf).unwrap(), expected.to_string());
 }
