@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.92"
+chrono = "0.4.45"
+chrono-tz = "0.10.4"
 regex = "1.13.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

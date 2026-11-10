@@ -368,3 +368,76 @@ async fn config_rendered_before_runner() {
         json!("보고서 / /in/a.pdf")
     );
 }
+
+#[tokio::test]
+async fn merge_live_then_dead_still_runs() {
+    // a(live)가 먼저 m에 닿고, 그 뒤 skip된 y(dead)가 닿는다.
+    let (r, events) = run(
+        json!([
+            trigger(),
+            ai("a", json!({})),
+            cond(&["true"]),
+            ai("y", json!({})),
+            ai("m", json!({}))
+        ]),
+        json!([
+            edge("t", "a"),
+            edge("t", "c"),
+            branch("c", "y", "false"),
+            edge("a", "m"),
+            edge("y", "m")
+        ]),
+    )
+    .await;
+    assert_eq!(r.status, RunStatus::Succeeded);
+    assert_eq!(status(&r, "y"), NodeStatus::Skipped);
+    assert_eq!(status(&r, "m"), NodeStatus::Succeeded);
+    assert_eq!(started(&events), vec!["t", "a", "c", "m"]);
+}
+
+#[tokio::test]
+async fn dead_condition_downstream_skipped() {
+    let c2 = json!({"id": "c2", "type": "CONDITION", "event": "branch.if",
+                    "config": {"left": "a", "operator": "isNotEmpty", "_branchKeys": ["true"]}});
+    let (r, events) = run(
+        json!([
+            trigger(),
+            cond(&["true"]),
+            c2,
+            ai("x", json!({})),
+            ai("y", json!({}))
+        ]),
+        json!([
+            edge("t", "c"),
+            branch("c", "c2", "false"),
+            branch("c2", "x", "true"),
+            branch("c2", "y", "false")
+        ]),
+    )
+    .await;
+    assert_eq!(r.status, RunStatus::Succeeded);
+    for id in ["c2", "x", "y"] {
+        assert_eq!(status(&r, id), NodeStatus::Skipped, "{id}");
+    }
+    assert_eq!(started(&events), vec!["t", "c"]);
+}
+
+#[tokio::test]
+async fn size_limit_boundary() {
+    let nodes = |n: usize| -> Value {
+        let mut v = vec![trigger()];
+        v.extend((1..n).map(|i| ai(&format!("n{i}"), json!({}))));
+        Value::Array(v)
+    };
+    let edges = |n: usize| Value::Array((0..n).map(|_| edge("t", "t")).collect());
+
+    let (r, _) = run(nodes(500), json!([])).await;
+    assert_ne!(r.reject_reason, Some(RejectReason::TooLarge));
+    let (r, _) = run(nodes(501), json!([])).await;
+    assert_eq!(r.reject_reason, Some(RejectReason::TooLarge));
+
+    let (r, _) = run(json!([trigger()]), edges(2000)).await;
+    assert_ne!(r.reject_reason, Some(RejectReason::TooLarge));
+    let (r, _) = run(json!([trigger()]), edges(2001)).await;
+    assert_eq!(r.reject_reason, Some(RejectReason::TooLarge));
+}
