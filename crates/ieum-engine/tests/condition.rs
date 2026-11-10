@@ -207,6 +207,55 @@ fn operator_table() {
         ("isEmpty", json!([""]), n.clone(), false, false),
         ("isEmpty", json!(false), n.clone(), false, false),
         ("isNotEmpty", json!(""), n.clone(), false, false),
+        // 오프셋 경계(Java 21 OffsetDateTime.parse 실측): Z·±HH·±HH:MM·±HH:MM:ss만
+        ("before", json!("2026-11-05T09:00:00+09"), json!("2026-11-05T00:00:01Z"), false, true),
+        ("after", json!("2026-11-05T09:00:00+09"), json!("2026-11-04T23:59:59Z"), false, true),
+        ("before", json!("2026-11-05T09:00:00+09:00:00"), json!("2026-11-05T00:00:01Z"), false, true),
+        ("after", json!("2026-11-05T09:00:00+09:00:00"), json!("2026-11-04T23:59:59Z"), false, true),
+        ("after", json!("2026-11-05T00:00:00z"), json!("2026-11-04T23:59:59Z"), false, true),
+        ("after", json!("2026-11-05T09:00:00-00:30"), json!("2026-11-05T09:29:59Z"), false, true),
+        ("after", json!("2026-11-05T09:00:00+18:00"), json!("2000-01-01T00:00:00Z"), false, true),
+        ("after", json!("2026-11-05T09:00:00+9"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("2026-11-05T09:00:00+0900"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("2026-11-05T09:00:00+090000"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("2026-11-05T09:00:00+09:0"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("2026-11-05T09:00:00+09:00:0"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("2026-11-05T09:00:00+18:01"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("2026-11-05T09:00:00+19"), json!("2000-01-01T00:00:00Z"), false, false),
+        // RFC 1123 오프셋 경계(Java 21 실측): GMT·±HH·±HHMM·±HHMMss만, 콜론 없음
+        ("before", json!("Thu, 5 Nov 2026 09:00:00 +0900"), json!("2026-11-05T00:00:01Z"), false, true),
+        ("before", json!("Thu, 5 Nov 2026 09:00:00 +09"), json!("2026-11-05T00:00:01Z"), false, true),
+        ("after", json!("Thu, 5 Nov 2026 09:00:00 +09"), json!("2026-11-04T23:59:59Z"), false, true),
+        ("after", json!("Thu, 5 Nov 2026 09:00:00 +090000"), json!("2026-11-04T23:59:59Z"), false, true),
+        ("after", json!("Thu, 5 Nov 2026 00:00:00 gmt"), json!("2026-11-04T23:59:59Z"), false, true),
+        ("after", json!("Thu, 5 Nov 2026 09:00:00 -0030"), json!("2026-11-05T09:29:59Z"), false, true),
+        ("after", json!("Thu, 5 Nov 2026 09:00:00 +09:00"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("Thu, 5 Nov 2026 09:00:00 +9"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("Thu, 5 Nov 2026 09:00:00 Z"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("Thu, 5 Nov 2026 09:00:00 UT"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("Thu, 5 Nov 2026 09:00:00 +1801"), json!("2000-01-01T00:00:00Z"), false, false),
+        ("after", json!("Thu, 5 Nov 2026 09:00:00 +0960"), json!("2000-01-01T00:00:00Z"), false, false),
+        // RFC 1123 SMART 해석(Java 21 실측)
+        ("sameDay", json!("31 Nov 2026 9:0:0 GMT"), json!("2026-11-30"), false, true),
+        ("sameDay", json!("5 Nov 26 09:00 GMT"), json!("0026-11-05"), false, true),
+        ("after", json!("4 Nov 2026 24:00 GMT"), json!("2026-11-04T23:59:59Z"), false, true),
+        ("before", json!("4 Nov 2026 24:00 GMT"), json!("2026-11-05T00:00:01Z"), false, true),
+        // 같은 값 경계
+        ("greaterThan", json!("5"), json!("5.0"), false, false),
+        ("lessThan", json!("5"), json!("5.0"), false, false),
+        ("lessThanOrEqual", json!("5"), json!("5.0"), false, true),
+        ("greaterThanOrEqual", json!("5"), json!("5.0"), false, true),
+        ("greaterThanOrEqual", json!("4.99"), json!("5"), false, false),
+        ("lessThanOrEqual", json!("5.01"), json!("5"), false, false),
+        ("numberEquals", json!("5"), json!("5.01"), false, false),
+        // startsWith·endsWith 부정
+        ("startsWith", json!("[긴급] 서버 다운"), json!("서버"), false, false),
+        ("endsWith", json!("[긴급] 서버 다운"), json!("서버"), false, false),
+        // Java strip: NBSP는 지우지 않고, em space·U+001F는 지운다
+        ("equals", json!("\u{00A0}a"), json!("a"), false, false),
+        ("equals", json!("a\u{202F}"), json!("a"), false, false),
+        ("equals", json!("\u{2003}a"), json!("a"), false, true),
+        ("equals", json!("\u{1F}a"), json!("a"), false, true),
     ];
     let mut wrong = Vec::new();
     for (i, (op, l, r, cs, expected)) in rows.iter().enumerate() {
@@ -555,4 +604,30 @@ async fn builtin_runner_registered() {
         .await
         .unwrap_err();
     assert_eq!(err.message, "지원하지 않는 연산자: null");
+}
+
+#[test]
+fn far_future_rfc_date_does_not_panic() {
+    // Java는 ±999999999년까지 읽는다. chrono 범위 안이면 읽고, 밖이면 판단 불가(거짓) — panic은 안 된다.
+    assert!(check(
+        "sameDay",
+        json!("1 Dec 262142 00:00 GMT"),
+        json!("1 Dec 262142 00:00 GMT"),
+        false
+    ));
+    for far in [
+        "31 Dec 262142 23:59 GMT",
+        "31 Dec 262142 24:00 GMT",
+        "31 Dec 262143 23:59 GMT",
+        "1 Dec 262144 00:00 GMT",
+        "1 Dec 999999999 00:00 GMT",
+        "31 Dec 262142 23:59 -1800",
+    ] {
+        for op in ["before", "after", "sameDay"] {
+            assert!(
+                eval(one(vec![rule(json!(far), op, json!("오늘"))])).is_ok(),
+                "{far} {op}"
+            );
+        }
+    }
 }

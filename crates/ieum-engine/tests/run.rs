@@ -23,6 +23,9 @@ impl NodeRunner for Echo {
                 message: "취소됨".into(),
             });
         }
+        if ctx.config.get("panic") == Some(&json!(true)) {
+            panic!("러너 버그");
+        }
         if ctx.config.get("fail") == Some(&json!(true)) {
             return Err(NodeError {
                 message: "일부러 실패".into(),
@@ -440,4 +443,31 @@ async fn size_limit_boundary() {
     assert_ne!(r.reject_reason, Some(RejectReason::TooLarge));
     let (r, _) = run(json!([trigger()]), edges(2001)).await;
     assert_eq!(r.reject_reason, Some(RejectReason::TooLarge));
+}
+
+#[tokio::test]
+async fn runner_panic_marks_node_failed() {
+    let (r, events) = run(
+        json!([
+            trigger(),
+            ai("a", json!({"panic": true})),
+            ai("b", json!({}))
+        ]),
+        json!([edge("t", "a"), edge("a", "b")]),
+    )
+    .await;
+    assert_eq!(r.status, RunStatus::Failed);
+    assert_eq!(status(&r, "a"), NodeStatus::Failed);
+    assert_eq!(
+        r.nodes["a"].error.as_deref(),
+        Some("노드 실행 중 내부 오류가 났습니다.")
+    );
+    assert_eq!(status(&r, "b"), NodeStatus::NotRun);
+    assert!(matches!(
+        events.last(),
+        Some(ExecEvent::RunFinished {
+            status: RunStatus::Failed,
+            ..
+        })
+    ));
 }

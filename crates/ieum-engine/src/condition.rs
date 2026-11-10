@@ -8,7 +8,7 @@ use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use chrono::{
-    DateTime, Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Offset,
+    DateTime, Datelike, Days, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeDelta,
     TimeZone, Utc,
 };
 use chrono_tz::Asia::Seoul;
@@ -572,20 +572,23 @@ struct When {
 }
 
 impl When {
-    fn at(instant: DateTime<Utc>) -> Self {
-        When {
+    /// KST 날짜가 chrono 범위를 넘으면 None(panic 대신).
+    fn at(instant: DateTime<Utc>) -> Option<Self> {
+        let utc = instant.naive_utc();
+        let offset = Seoul.offset_from_utc_datetime(&utc).fix();
+        Some(When {
             instant,
-            day: instant.with_timezone(&Seoul).date_naive(),
+            day: utc.checked_add_offset(offset)?.date(),
             date_only: false,
-        }
+        })
     }
 
-    fn on(day: NaiveDate) -> Self {
-        When {
-            instant: kst(day.and_time(NaiveTime::MIN)),
+    fn on(day: NaiveDate) -> Option<Self> {
+        Some(When {
+            instant: kst(day.and_time(NaiveTime::MIN))?,
             day,
             date_only: true,
-        }
+        })
     }
 
     fn compare(&self, other: &When) -> Ordering {
@@ -598,14 +601,13 @@ impl When {
 }
 
 /// Java `LocalDateTime.atZone(KST)` — 겹치면 이른 쪽, 틈이면 틈 전 오프셋.
-fn kst(local: NaiveDateTime) -> DateTime<Utc> {
+fn kst(local: NaiveDateTime) -> Option<DateTime<Utc>> {
     match Seoul.from_local_datetime(&local).earliest() {
-        Some(t) => t.to_utc(),
+        Some(t) => Some(t.to_utc()),
         None => {
-            let before = Seoul
-                .offset_from_utc_datetime(&(local - Duration::hours(12)))
-                .fix();
-            (local - before).and_utc()
+            let probe = local.checked_sub_signed(TimeDelta::hours(12))?;
+            let before = Seoul.offset_from_utc_datetime(&probe).fix();
+            Some(local.checked_sub_offset(before)?.and_utc())
         }
     }
 }
@@ -618,8 +620,8 @@ fn date(value: &Value, now: DateTime<Utc>) -> Option<When> {
     let s = strip(&raw);
     match s {
         "" => return None,
-        "오늘" => return Some(When::on(now.with_timezone(&Seoul).date_naive())),
-        "지금" => return Some(When::at(now)),
+        "오늘" => return When::on(When::at(now)?.day),
+        "지금" => return When::at(now),
         _ => {}
     }
     let t = if s.len() > 10 && s.as_bytes()[10] == b' ' && s[..10].is_ascii() {
@@ -630,12 +632,12 @@ fn date(value: &Value, now: DateTime<Utc>) -> Option<When> {
     let mut p = Cursor::new(&t);
     if let Some(local) = p.local_date_time() {
         if p.done() {
-            return Some(When::at(kst(local)));
+            return When::at(kst(local)?);
         }
         if let Some(off) = p.offset_id()
             && p.done()
         {
-            return Some(When::at((local - off).and_utc()));
+            return When::at(local.checked_sub_offset(off)?.and_utc());
         }
     }
     let dashed = s.replace(['.', '/'], "-");
@@ -643,7 +645,7 @@ fn date(value: &Value, now: DateTime<Utc>) -> Option<When> {
     if let Some(d) = p.local_date()
         && p.done()
     {
-        return Some(When::on(d));
+        return When::on(d);
     }
     if UNIX.is_match(s) {
         let n: i64 = s.parse().ok()?;
@@ -652,13 +654,13 @@ fn date(value: &Value, now: DateTime<Utc>) -> Option<When> {
         } else {
             DateTime::from_timestamp_millis(n)
         };
-        return at.map(When::at);
+        return at.and_then(When::at);
     }
     if let Some(k) = KOREAN_DATE.captures(s) {
-        let n = |i: usize| k[i].parse::<u32>().unwrap();
-        return NaiveDate::from_ymd_opt(n(1) as i32, n(2), n(3)).map(When::on);
+        let n = |i: usize| k[i].parse::<u32>().ok();
+        return NaiveDate::from_ymd_opt(n(1)? as i32, n(2)?, n(3)?).and_then(When::on);
     }
-    rfc_1123(s).map(When::at)
+    rfc_1123(s).and_then(When::at)
 }
 
 /// Java `DateTimeFormatter`의 고정 형식 일부를 읽는 커서(ISO는 엄격, 대소문자 무시).
@@ -740,26 +742,29 @@ impl<'a> Cursor<'a> {
         Some(date.and_time(time))
     }
 
-    /// 너그러운 오프셋: Z, ±H, ±HH, ±HH[:]MM, ±HH[:]MM[:]ss.
+    /// ISO 오프셋(Java 21 실측): Z, ±HH, ±HH:MM, ±HH:MM:ss.
     fn offset_id(&mut self) -> Option<FixedOffset> {
         if self.lit(b'Z') {
             return FixedOffset::east_opt(0);
         }
-        self.offset()
+        self.offset(true)
     }
 
-    fn offset(&mut self) -> Option<FixedOffset> {
+    /// `colon`이면 ±HH[:MM[:ss]], 아니면 ±HH[MM[ss]](RFC 1123, Java 21 실측).
+    fn offset(&mut self, colon: bool) -> Option<FixedOffset> {
         let sign = match self.s.get(self.i)? {
             b'+' => 1,
             b'-' => -1,
             _ => return None,
         };
         self.i += 1;
-        let h = self.digits(1, 2)?;
+        let h = self.digits(2, 2)?;
         let mut rest = [0u64; 2];
         for part in &mut rest {
             let back = self.i;
-            self.lit(b':');
+            if colon && !self.lit(b':') {
+                break;
+            }
             match self.digits(2, 2) {
                 Some(v) => *part = v,
                 None => {
@@ -818,24 +823,28 @@ fn rfc_1123(s: &str) -> Option<DateTime<Utc>> {
     let off = if p.word(&["GMT"]).is_some() {
         FixedOffset::east_opt(0)
     } else {
-        p.offset()
+        p.offset(false)
     }?;
     if !p.done() || !(1..=31).contains(&d) || y > 999_999_999 || h > 24 || min > 59 || sec > 59 {
         return None;
     }
-    // SMART: 달 길이를 넘는 날은 그 달 마지막 날, 24:00:00은 다음 날 0시
-    let first = NaiveDate::from_ymd_opt(i32::try_from(y).ok()?, m, 1)?;
-    let last = (first + chrono::Months::new(1)).pred_opt()?.day() as u64;
-    let date = first.with_day(d.min(last) as u32)?;
+    // SMART: 달 길이를 넘는 날은 그 달 마지막 날, 24:00:00은 다음 날 0시.
+    // chrono 범위(±262143년) 밖은 Java와 달리 못 읽는다 — 연산은 전부 checked(panic 금지).
+    let y = i32::try_from(y).ok()?;
+    let date = (1..=d as u32)
+        .rev()
+        .find_map(|day| NaiveDate::from_ymd_opt(y, m, day))?;
     if dow.is_some_and(|w| w != date.weekday().num_days_from_monday() as usize) {
         return None;
     }
     let local = if h == 24 {
-        (min == 0 && sec == 0).then(|| (date + Duration::days(1)).and_time(NaiveTime::MIN))?
+        (min == 0 && sec == 0).then_some(())?;
+        date.checked_add_days(Days::new(1))?
+            .and_time(NaiveTime::MIN)
     } else {
         date.and_hms_opt(h as u32, min as u32, sec as u32)?
     };
-    Some((local - off).and_utc())
+    Some(local.checked_sub_offset(off)?.and_utc())
 }
 
 fn bool_of(value: &Value) -> Option<bool> {

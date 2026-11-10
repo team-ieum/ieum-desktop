@@ -2,7 +2,10 @@
 //! 다른 점: 병렬 없이 준비된 노드를 노드 배열 순서로 하나씩 돌린다.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::panic::AssertUnwindSafe;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Poll;
 
 use async_trait::async_trait;
 use serde::Serialize;
@@ -105,6 +108,17 @@ fn live_keys(node: &Node, output: &Map<String, Value>) -> Option<HashSet<String>
             HashSet::from([r.to_string()])
         }
     })
+}
+
+/// 러너 future를 poll하다 panic하면 None — 러너 하나의 버그가 앱을 죽이지 않게 한다.
+async fn catch_panic<F: Future + Unpin>(mut fut: F) -> Option<F::Output> {
+    std::future::poll_fn(|cx| {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| Pin::new(&mut fut).poll(cx))) {
+            Ok(poll) => poll.map(Some),
+            Err(_) => Poll::Ready(None),
+        }
+    })
+    .await
 }
 
 /// BE `assertNoCycle`과 같은 Kahn 위상정렬 — 다 처리하지 못하면 사이클.
@@ -240,7 +254,13 @@ pub async fn run_workflow(
                 events: &events,
                 cancel: &cancel,
             };
-            runners[&node.event].run(ctx).await
+            catch_panic(runners[&node.event].run(ctx))
+                .await
+                .unwrap_or_else(|| {
+                    Err(NodeError {
+                        message: "노드 실행 중 내부 오류가 났습니다.".into(),
+                    })
+                })
         };
         let rec = records.get_mut(&node.id).unwrap();
         let output = match result {
