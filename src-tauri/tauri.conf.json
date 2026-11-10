@@ -12,6 +12,8 @@
   "app": {
     "windows": [
       {
+        "label": "main",
+        "visible": false,
         "title": "IEUM",
         "width": 800,
         "height": 600

@@ -1,10 +1,25 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "화면(main 창)이 쓰는 앱 명령·이벤트·폴더 고르기·자동 시작 상태만",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "opener:default"
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-list-workflows",
+    "allow-save-workflow",
+    "allow-delete-workflow",
+    "allow-validate-workflow",
+    "allow-run-now",
+    "allow-list-runs",
+    "allow-get-run",
+    "allow-undo-run",
+    "allow-detect-providers",
+    "allow-set-api-key",
+    "allow-delete-api-key",
+    "allow-get-settings",
+    "allow-set-settings",
+    "dialog:allow-open",
+    "autostart:allow-is-enabled"
   ]
 }

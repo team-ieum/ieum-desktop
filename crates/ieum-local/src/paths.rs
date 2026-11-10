@@ -35,6 +35,11 @@ impl AllowedRoots {
         )
     }
 
+    /// 실제 경로 목록 — 실행 기록에 남겨 되돌릴 때 그대로 쓴다.
+    pub fn paths(&self) -> &[PathBuf] {
+        &self.0
+    }
+
     /// `path`는 실제 경로여야 한다.
     pub(crate) fn contains(&self, path: &Path) -> bool {
         self.0.iter().any(|r| path.starts_with(r))

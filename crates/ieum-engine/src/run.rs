@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -44,7 +44,7 @@ pub trait NodeRunner: Send + Sync {
 /// event → 러너.
 pub type Runners = HashMap<String, Arc<dyn NodeRunner>>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NodeStatus {
     Succeeded,
@@ -53,7 +53,7 @@ pub enum NodeStatus {
     NotRun,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeRecord {
     pub status: NodeStatus,
@@ -61,7 +61,7 @@ pub struct NodeRecord {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunResult {
     pub run_id: String,
@@ -72,7 +72,7 @@ pub struct RunResult {
     pub nodes: BTreeMap<String, NodeRecord>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RejectReason {
     TooLarge,
