@@ -1,0 +1,134 @@
+/* ieum-frontend/src/styles/typography.css 복사(앱에서 안 쓰는 display·heading1~2·logo는 뺌).
+   Pretendard 글꼴 파일은 넣지 않았다 — 없으면 시스템 글꼴(-apple-system)로 그린다. */
+@theme {
+	--font-pretendard:
+		'Pretendard', 'Pretendard Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+		sans-serif;
+	--font-family-pretendard: var(--font-pretendard);
+
+	--typography-heading3_bold: 700 1.5rem / 1.2 var(--font-family-pretendard); /* 24/120 */
+	--typography-heading3_semibold: 600 1.5rem / 1.2 var(--font-family-pretendard); /* 24/120 */
+
+	--typography-title1_bold: 700 1.375rem / 1.4 var(--font-family-pretendard); /* 22/140 */
+	--typography-title2_bold: 700 1.25rem / 1.4 var(--font-family-pretendard); /* 20/140 */
+	--typography-title2_semibold: 600 1.25rem / 1.4 var(--font-family-pretendard); /* 20/140 */
+	--typography-title3_bold: 700 1.125rem / 1.4 var(--font-family-pretendard); /* 18/140 */
+	--typography-title3_semibold: 600 1.125rem / 1.4 var(--font-family-pretendard); /* 18/140 */
+
+	--typography-body1_bold: 700 1rem / 1.5 var(--font-family-pretendard); /* 16/150 */
+	--typography-body1_semibold: 600 1rem / 1.5 var(--font-family-pretendard); /* 16/150 */
+	--typography-body1_medium: 500 1rem / 1.5 var(--font-family-pretendard); /* 16/150 */
+	--typography-body1_regular: 400 1rem / 1.5 var(--font-family-pretendard); /* 16/150 */
+	--typography-body2_bold: 700 0.875rem / 1.5 var(--font-family-pretendard); /* 14/150 */
+	--typography-body2_semibold: 600 0.875rem / 1.5 var(--font-family-pretendard); /* 14/150 */
+	--typography-body2_regular: 400 0.875rem / 1.5 var(--font-family-pretendard); /* 14/150 */
+	--typography-body3_semibold: 600 0.8125rem / 1.5 var(--font-family-pretendard); /* 13/150 */
+	--typography-body3_medium: 500 0.8125rem / 1.5 var(--font-family-pretendard); /* 13/150 */
+	--typography-body3_regular: 400 0.8125rem / 1.5 var(--font-family-pretendard); /* 13/150 */
+
+	--typography-label_semibold: 600 0.8125rem / 1.5 var(--font-family-pretendard); /* 13/150 */
+	--typography-caption1_bold: 700 0.75rem / 1.5 var(--font-family-pretendard); /* 12/150 */
+	--typography-caption1_semibold: 600 0.75rem / 1.5 var(--font-family-pretendard); /* 12/150 */
+	--typography-caption1_medium: 500 0.75rem / 1.5 var(--font-family-pretendard); /* 12/150 */
+	--typography-caption1_regular: 400 0.75rem / 1.5 var(--font-family-pretendard); /* 12/150 */
+	--typography-caption2_bold: 700 0.6875rem / 1.6 var(--font-family-pretendard); /* 11/160 */
+	--typography-caption2_semibold: 600 0.6875rem / 1.6 var(--font-family-pretendard); /* 11/160 */
+	--typography-caption2_medium: 500 0.6875rem / 1.6 var(--font-family-pretendard); /* 11/160 */
+	--typography-caption2_regular: 400 0.6875rem / 1.6 var(--font-family-pretendard); /* 11/160 */
+	--typography-button1_bold: 700 0.875rem / 1.4 var(--font-family-pretendard); /* 14/140 */
+	--typography-button1_semibold: 600 0.875rem / 1.4 var(--font-family-pretendard); /* 14/140 */
+	--typography-button1_medium: 500 0.875rem / 1.4 var(--font-family-pretendard); /* 14/140 */
+}
+
+/* Typography utilities — use as `typo-title3_bold`, etc. */
+@utility typo-heading3_bold {
+	font: var(--typography-heading3_bold);
+}
+@utility typo-heading3_semibold {
+	font: var(--typography-heading3_semibold);
+}
+
+@utility typo-title1_bold {
+	font: var(--typography-title1_bold);
+}
+@utility typo-title2_bold {
+	font: var(--typography-title2_bold);
+}
+@utility typo-title2_semibold {
+	font: var(--typography-title2_semibold);
+}
+@utility typo-title3_bold {
+	font: var(--typography-title3_bold);
+}
+@utility typo-title3_semibold {
+	font: var(--typography-title3_semibold);
+}
+
+@utility typo-body1_bold {
+	font: var(--typography-body1_bold);
+}
+@utility typo-body1_semibold {
+	font: var(--typography-body1_semibold);
+}
+@utility typo-body1_medium {
+	font: var(--typography-body1_medium);
+}
+@utility typo-body1_regular {
+	font: var(--typography-body1_regular);
+}
+@utility typo-body2_bold {
+	font: var(--typography-body2_bold);
+}
+@utility typo-body2_semibold {
+	font: var(--typography-body2_semibold);
+}
+@utility typo-body2_regular {
+	font: var(--typography-body2_regular);
+}
+@utility typo-body3_semibold {
+	font: var(--typography-body3_semibold);
+}
+@utility typo-body3_medium {
+	font: var(--typography-body3_medium);
+}
+@utility typo-body3_regular {
+	font: var(--typography-body3_regular);
+}
+
+@utility typo-label_semibold {
+	font: var(--typography-label_semibold);
+}
+@utility typo-caption1_bold {
+	font: var(--typography-caption1_bold);
+}
+@utility typo-caption1_semibold {
+	font: var(--typography-caption1_semibold);
+}
+@utility typo-caption1_medium {
+	font: var(--typography-caption1_medium);
+}
+@utility typo-caption1_regular {
+	font: var(--typography-caption1_regular);
+}
+@utility typo-caption2_bold {
+	font: var(--typography-caption2_bold);
+}
+@utility typo-caption2_semibold {
+	font: var(--typography-caption2_semibold);
+}
+@utility typo-caption2_medium {
+	font: var(--typography-caption2_medium);
+}
+@utility typo-caption2_regular {
+	font: var(--typography-caption2_regular);
+}
+
+@utility typo-button1_bold {
+	font: var(--typography-button1_bold);
+}
+@utility typo-button1_semibold {
+	font: var(--typography-button1_semibold);
+}
+@utility typo-button1_medium {
+	font: var(--typography-button1_medium);
+}
