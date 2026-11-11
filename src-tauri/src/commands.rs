@@ -126,17 +126,29 @@ fn api_account(provider: &str) -> Result<&'static str, String> {
         .ok_or_else(|| format!("알 수 없는 공급원이에요: {provider}"))
 }
 
+// 키체인을 만지는 명령은 async + spawn_blocking — 동기 명령은 메인 스레드에서 돌아
+// 키체인 허용 창을 기다리는 동안 화면이 굳는다(tests/commands_off_main.rs).
 #[tauri::command]
-pub fn set_api_key(keys: State<'_, Keys>, provider: String, key: String) -> Result<(), String> {
-    keys.0
-        .set(api_account(&provider)?, &key)
+pub async fn set_api_key(
+    keys: State<'_, Keys>,
+    provider: String,
+    key: String,
+) -> Result<(), String> {
+    let account = api_account(&provider)?;
+    let keys = keys.0.clone();
+    tauri::async_runtime::spawn_blocking(move || keys.set(account, &key))
+        .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn delete_api_key(keys: State<'_, Keys>, provider: String) -> Result<(), String> {
-    keys.0
-        .delete(api_account(&provider)?)
+pub async fn delete_api_key(keys: State<'_, Keys>, provider: String) -> Result<(), String> {
+    let account = api_account(&provider)?;
+    let keys = keys.0.clone();
+    tauri::async_runtime::spawn_blocking(move || keys.delete(account))
+        .await
+        .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
 }
 
@@ -208,7 +220,7 @@ pub fn get_settings(sup: State<'_, Supervisor>) -> Result<Settings, String> {
 
 /// 자동 시작이 바뀌면 로그인 항목도 켜고 끈다. 서버 주소가 바뀌면 세션을 지우고 구독도 해제한다.
 #[tauri::command]
-pub fn set_settings(
+pub async fn set_settings(
     app: AppHandle,
     sup: State<'_, Supervisor>,
     keys: State<'_, Keys>,
@@ -260,11 +272,14 @@ pub async fn web_logout(
 }
 
 #[tauri::command]
-pub fn web_account(
+pub async fn web_account(
     sup: State<'_, Supervisor>,
     keys: State<'_, Keys>,
 ) -> Result<Option<WebAccount>, WebError> {
-    Ok(be_client(&sup, &keys)?.account())
+    let client = be_client(&sup, &keys)?;
+    tauri::async_runtime::spawn_blocking(move || client.account())
+        .await
+        .map_err(|e| WebError::Server(e.to_string()))
 }
 
 #[tauri::command]
