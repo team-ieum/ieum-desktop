@@ -90,6 +90,9 @@ fn check_folder(p: &Path, home: &Path, app_data: &Path) -> Result<(), String> {
     if rel[0].eq_ignore_ascii_case("Library") {
         return Err(format!("~/Library 아래 폴더는 쓸 수 없어요: {shown}"));
     }
+    if rel.iter().any(|c| c == "..") {
+        return Err("경로에 '..'를 쓸 수 없어요.".into());
+    }
     if rel.iter().any(|c| c.starts_with('.')) {
         return Err(format!(
             "숨김 폴더(.으로 시작하는 이름)는 쓸 수 없어요: {shown}"

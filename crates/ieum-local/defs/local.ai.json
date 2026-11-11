@@ -45,7 +45,15 @@
       "key": "prompt",
       "title": "지시",
       "type": "text",
-      "required": true
+      "required": true,
+      "ref": false
+    },
+    {
+      "key": "data",
+      "title": "추가 데이터",
+      "type": "text",
+      "ref": true,
+      "description": "앞 노드 결과 등 AI에 넘길 값. 지시가 아니라 데이터로 전달돼요."
     },
     {
       "key": "file",

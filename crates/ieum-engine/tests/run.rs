@@ -359,7 +359,7 @@ async fn config_rendered_before_runner() {
             ai("a", json!({"output": "보고서"})),
             ai(
                 "b",
-                json!({"prompt": "{{nodes.a.output.output}} / {{nodes.t.output.path}}"})
+                json!({"data": "{{nodes.a.output.output}} / {{nodes.t.output.path}}"})
             )
         ]),
         json!([edge("t", "a"), edge("a", "b")]),
@@ -367,7 +367,7 @@ async fn config_rendered_before_runner() {
     .await;
     assert_eq!(r.status, RunStatus::Succeeded);
     assert_eq!(
-        r.nodes["b"].output.as_ref().unwrap()["prompt"],
+        r.nodes["b"].output.as_ref().unwrap()["data"],
         json!("보고서 / /in/a.pdf")
     );
 }

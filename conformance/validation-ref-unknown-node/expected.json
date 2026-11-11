@@ -1,7 +1,7 @@
 {
   "source": "ieum-agent/core/validators/static_validator.py:450 (워크플로우에 없는 노드 id 참조)",
   "validationErrors": [
-    {"nodeId": "a", "field": "config.prompt", "code": "REF_UNKNOWN_NODE"}
+    {"nodeId": "a", "field": "config.data", "code": "REF_UNKNOWN_NODE"}
   ],
   "nodes": {}
 }

@@ -50,7 +50,14 @@ fn user_folder_policy() {
         (home.join("library/x"), "~/Library"),
         (home.join(".ssh"), "숨김"),
         (home.join("Downloads/.hidden"), "숨김"),
-        (home.join("Downloads/../Library"), "숨김"),
+        (
+            home.join("Downloads/../Library"),
+            "경로에 '..'를 쓸 수 없어요.",
+        ),
+        (
+            home.join("Documents/../Downloads"),
+            "경로에 '..'를 쓸 수 없어요.",
+        ),
         (home.join("AppData/workflows"), "앱 데이터"),
         (home.join("Agents"), "~/Library"),   // 링크 → ~/Library
         (home.join("Out/x"), "홈 폴더 아래"), // 링크 → 홈 밖

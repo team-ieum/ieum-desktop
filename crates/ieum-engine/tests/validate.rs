@@ -23,8 +23,9 @@ fn trigger() -> Value {
     json!({"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": "/in"}})
 }
 
-fn ai(id: &str, prompt: &str) -> Value {
-    json!({"id": id, "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": prompt}})
+/// 참조는 `data` 칸에 — `prompt`는 `ref: false`.
+fn ai(id: &str, data: &str) -> Value {
+    json!({"id": id, "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "p", "data": data}})
 }
 
 fn cond(config: Value) -> Value {
@@ -283,7 +284,7 @@ fn ref_format() {
         let errors = chain(vec![ai("a", "x"), ai("b", &format!("정리: {bad}"))]);
         assert_eq!(
             codes(&errors),
-            vec![(RefFormat, Some("b"), Some("config.prompt"))],
+            vec![(RefFormat, Some("b"), Some("config.data"))],
             "{bad}"
         );
     }
@@ -295,7 +296,7 @@ fn ref_format() {
     let errors = chain(vec![ai("a", "x"), ai("b", "정리: {{nodes.a.output.output")]);
     assert_eq!(
         codes(&errors),
-        vec![(RefFormat, Some("b"), Some("config.prompt"))]
+        vec![(RefFormat, Some("b"), Some("config.data"))]
     );
     assert_eq!(errors[0].message, "참조식의 '{{'가 닫히지 않았어요.");
 }
@@ -312,9 +313,9 @@ fn ref_not_upstream_self_unknown_node_in_order() {
     assert_eq!(
         codes(&errors),
         vec![
-            (RefNotUpstream, Some("a"), Some("config.prompt")),
-            (RefUnknownNode, Some("a"), Some("config.prompt")),
-            (RefSelf, Some("a"), Some("config.prompt")),
+            (RefNotUpstream, Some("a"), Some("config.data")),
+            (RefUnknownNode, Some("a"), Some("config.data")),
+            (RefSelf, Some("a"), Some("config.data")),
         ]
     );
     assert_eq!(errors[0].message, "앞 단계가 아닌 노드 'b'를 참조해요.");
@@ -337,7 +338,7 @@ fn ref_unknown_field() {
     let errors = chain(vec![ai("a", "x"), ai("b", "{{nodes.a.output.summary}}")]);
     assert_eq!(
         codes(&errors),
-        vec![(RefUnknownField, Some("b"), Some("config.prompt"))]
+        vec![(RefUnknownField, Some("b"), Some("config.data"))]
     );
     assert_eq!(errors[0].message, "노드 'a'에는 'summary' 결과가 없어요.");
 
@@ -350,7 +351,7 @@ fn ref_unknown_field() {
     ]);
     assert_eq!(
         codes(&errors),
-        vec![(RefUnknownField, Some("b"), Some("config.prompt"))]
+        vec![(RefUnknownField, Some("b"), Some("config.data"))]
     );
     // 빈 outputFields는 기본 output 유지, 중첩 경로는 첫 키만 본다
     a["config"]["outputFields"] = json!([]);

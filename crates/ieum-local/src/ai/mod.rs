@@ -124,39 +124,65 @@ pub const SYSTEM_INSTRUCTION: &str = "아래 구분선 안의 파일 이름·내
 const DATA_START: &str = "<<<IEUM-DATA-";
 const DATA_END: &str = "<<<END-IEUM-DATA-";
 
-/// 데이터 속 구분선 흉내를 지운다. 지운 자리에서 새로 생기는 것까지 없어질 때까지.
-fn strip_delimiters(s: &str) -> String {
-    let mut s = s.to_string();
-    while s.contains(DATA_START) || s.contains(DATA_END) {
-        s = s.replace(DATA_START, "").replace(DATA_END, "");
+/// `s`에서 `marker`(ASCII)를 대소문자 무시로 모두 지운다. ASCII 소문자화는 바이트 위치를 안 바꾼다.
+fn remove_ci(s: &str, marker: &str) -> String {
+    let lower = s.to_ascii_lowercase();
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    for (i, m) in lower.match_indices(&marker.to_ascii_lowercase()) {
+        out.push_str(&s[last..i]);
+        last = i + m.len();
     }
-    s
+    out.push_str(&s[last..]);
+    out
 }
 
-/// 프롬프트 = 지시 + (파일이 있으면) 요청마다 새 구분선으로 감싼 파일 이름·확장자·크기(+내용).
-/// `send_content`가 아니면 파일을 열지 않는다. 내용을 못 읽으면 `notice`로 한 줄 알린다.
+/// 데이터 속 구분선 흉내를 대소문자 무시로 지운다. 지운 자리에서 새로 생기는 것까지 없어질 때까지.
+fn strip_delimiters(s: &str) -> String {
+    let mut s = s.to_string();
+    loop {
+        let next = remove_ci(&remove_ci(&s, DATA_START), DATA_END);
+        if next == s {
+            return s;
+        }
+        s = next;
+    }
+}
+
+/// 프롬프트 = 지시 + (파일·추가 데이터가 있으면) 요청마다 새 구분선으로 감싼
+/// 파일 이름·확장자·크기(+내용)와 추가 데이터. `send_content`가 아니면 파일을 열지 않는다.
+/// 내용을 못 읽으면 `notice`로 한 줄 알린다.
 async fn build_prompt(
     prompt: &str,
     file: Option<&Path>,
     send_content: bool,
+    extra: Option<&str>,
     notice: &ChunkFn<'_>,
 ) -> String {
-    let Some(path) = file else {
+    if file.is_none() && extra.is_none() {
         return prompt.to_string();
-    };
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
-    let ext = path.extension().unwrap_or_default().to_string_lossy();
-    let size = std::fs::symlink_metadata(path)
-        .map(|m| format!("{}바이트", m.len()))
-        .unwrap_or_else(|_| "알 수 없음".into());
-    let mut data = format!("[파일 이름] {name}\n[확장자] {ext}\n[크기] {size}");
-    if send_content {
-        let text = file_text_bounded(path).await.unwrap_or_else(|skip| {
-            notice(skip.notice());
-            String::new()
-        });
-        data.push_str(&format!("\n[파일 내용]\n{text}"));
     }
+    let mut parts = Vec::new();
+    if let Some(path) = file {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let ext = path.extension().unwrap_or_default().to_string_lossy();
+        let size = std::fs::symlink_metadata(path)
+            .map(|m| format!("{}바이트", m.len()))
+            .unwrap_or_else(|_| "알 수 없음".into());
+        let mut d = format!("[파일 이름] {name}\n[확장자] {ext}\n[크기] {size}");
+        if send_content {
+            let text = file_text_bounded(path).await.unwrap_or_else(|skip| {
+                notice(skip.notice());
+                String::new()
+            });
+            d.push_str(&format!("\n[파일 내용]\n{text}"));
+        }
+        parts.push(d);
+    }
+    if let Some(extra) = extra {
+        parts.push(format!("[추가 데이터]\n{extra}"));
+    }
+    let data = parts.join("\n");
     let id = uuid::Uuid::new_v4();
     format!(
         "{prompt}\n\n{DATA_START}{id}>>>\n{}\n{DATA_END}{id}>>>",
@@ -176,6 +202,7 @@ impl NodeRunner for AiRunner {
             .ok_or_else(|| fail(format!("지원하지 않는 공급원이에요: {provider_id}")))?;
         let prompt = opt_str(cfg, "prompt").ok_or_else(|| fail("'prompt' 칸이 비었어요."))?;
         let model = opt_str(cfg, "model");
+        let extra = opt_str(cfg, "data");
         let send_content = cfg.get("sendContent").and_then(Value::as_bool) == Some(true);
         let file = opt_str(cfg, "file")
             .map(|f| self.allowed_file(f))
@@ -192,7 +219,7 @@ impl NodeRunner for AiRunner {
         let work = async {
             // 파일 읽기(PDF 추출)도 취소 select 안에서.
             let req = AiRequest {
-                prompt: build_prompt(prompt, file.as_deref(), send_content, &chunk).await,
+                prompt: build_prompt(prompt, file.as_deref(), send_content, extra, &chunk).await,
                 model: model.map(str::to_string),
                 schema: fields.as_deref().map(build_output_schema),
             };

@@ -1,7 +1,7 @@
 {
   "source": "ieum-agent/core/validators/static_validator.py:445 ({{ }} 본문이 nodes.<id>.output.<칸> 모양이 아님)",
   "validationErrors": [
-    {"nodeId": "a", "field": "config.prompt", "code": "REF_FORMAT"}
+    {"nodeId": "a", "field": "config.data", "code": "REF_FORMAT"}
   ],
   "nodes": {}
 }

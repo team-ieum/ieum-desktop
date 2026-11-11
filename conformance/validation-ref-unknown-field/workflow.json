@@ -1,7 +1,7 @@
 {
   "nodes": [
     {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": "/Users/me/Downloads"}},
-    {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "{{nodes.t.output.color}} 파일을 분류해 줘", "outputFields": [{"key": "category", "type": "text"}]}}
+    {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "파일을 분류해 줘", "data": "{{nodes.t.output.color}}", "outputFields": [{"key": "category", "type": "text"}]}}
   ],
   "edges": [
     {"id": "e1", "source": "t", "target": "a"}
