@@ -2,7 +2,7 @@ import { ArrowLeft, ArrowRight, Undo2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type RunStatus, type StoredRun, type UndoReport } from "../api";
 import { nodeTitle } from "../editor/Canvas";
-import { t } from "../i18n";
+import { locale, t } from "../i18n";
 import { useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
 import { BUTTON, PRIMARY } from "./Editor";
@@ -22,7 +22,7 @@ function RunPill({ status }: { status: RunStatus }) {
   );
 }
 
-const when = (iso: string) => (iso ? new Date(iso).toLocaleString() : "");
+const when = (iso: string) => (iso ? new Date(iso).toLocaleString(locale()) : "");
 
 function UndoResult({ report }: { report: UndoReport }) {
   return (

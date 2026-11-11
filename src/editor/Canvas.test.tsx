@@ -4,6 +4,19 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Workflow } from "../api";
 import { Canvas } from "./Canvas";
 
+// ReactFlow는 진짜로 그리되, Canvas가 넘긴 핸들러를 꺼내 직접 부를 수 있게 한다.
+const probe = vi.hoisted(() => ({ props: null as unknown as Record<string, any> }));
+vi.mock("@xyflow/react", async (orig) => {
+  const m = await orig<typeof import("@xyflow/react")>();
+  return {
+    ...m,
+    ReactFlow: (p: Record<string, any>) => {
+      probe.props = p;
+      return <m.ReactFlow {...p} />;
+    },
+  };
+});
+
 beforeAll(() => {
   globalThis.ResizeObserver = class {
     observe() {}
@@ -62,4 +75,44 @@ test("canvas_read_only_blocks_edits", async () => {
   });
   expect(ro.onChange).not.toHaveBeenCalled();
   expect(ro.onSelect).not.toHaveBeenCalled();
+});
+
+test("canvas_read_only_callbacks_guarded", async () => {
+  const ro = setup(true);
+  expect(probe.props.deleteKeyCode).toBeNull();
+  await act(async () => {
+    probe.props.onNodesChange([
+      { type: "select", id: "t", selected: true },
+      { type: "position", id: "t", position: { x: 9, y: 9 } },
+      { type: "remove", id: "t" },
+    ]);
+    probe.props.onEdgesChange([{ type: "remove", id: "e" }]);
+    probe.props.onConnect({ source: "m", target: "t", sourceHandle: null, targetHandle: null });
+  });
+  expect(ro.onChange).not.toHaveBeenCalled();
+  expect(ro.onSelect).not.toHaveBeenCalled();
+});
+
+test("delete_node_and_unrelated_edge_together", async () => {
+  // xyflow deleteElements는 한 틱에 onEdgesChange → onNodesChange 순으로 부른다.
+  const three: Workflow = {
+    nodes: [...wf.nodes, { id: "x", event: "local.file_trash", type: "ACTION", position: { x: 600, y: 0 }, config: {} }],
+    edges: [
+      { id: "tm", source: "t", target: "m" },
+      { id: "mx", source: "m", target: "x" },
+    ],
+  };
+  const onChange = vi.fn();
+  render(
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas workflow={three} onChange={onChange} />
+    </div>,
+  );
+  await act(async () => {
+    probe.props.onEdgesChange([{ type: "remove", id: "mx" }]);
+    probe.props.onNodesChange([{ type: "remove", id: "t" }]);
+  });
+  const last: Workflow = onChange.mock.lastCall![0];
+  expect(last.nodes.map((n) => n.id)).toEqual(["m", "x"]);
+  expect(last.edges).toEqual([]);
 });

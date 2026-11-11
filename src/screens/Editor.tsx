@@ -15,12 +15,29 @@ export const PRIMARY =
 
 const strip = ({ watch: _w, watchMessage: _m, ...wf }: WorkflowEntry): StoredWorkflow => wf;
 
-export function Editor({ id, onBack, onOpenRuns }: { id: string | null; onBack: () => void; onOpenRuns: (id: string) => void }) {
+export function Editor({
+  id,
+  onBack,
+  onOpenRuns,
+  onDirty,
+}: {
+  id: string | null;
+  onBack: () => void;
+  onOpenRuns: (id: string) => void;
+  /** 저장본과 다른지 — 화면을 떠날 때 확인 줄을 띄우는 데 쓴다. */
+  onDirty?: (dirty: boolean) => void;
+}) {
   const entry = useWorkflows((s) => s.list.find((w) => w.id === id));
   const save = useWorkflows((s) => s.save);
   const [draft, setDraft] = useState<StoredWorkflow>(() =>
     entry ? strip(entry) : { id: "", name: t("editor.untitled"), enabled: true, workflow: { nodes: [], edges: [] }, updatedAt: "" },
   );
+  const [base, setBase] = useState(draft);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(base);
+  useEffect(() => {
+    onDirty?.(dirty);
+    return () => onDirty?.(false);
+  }, [dirty, onDirty]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [status, setStatus] = useState<{ saving?: boolean; message?: string; error?: boolean }>({});
@@ -63,7 +80,9 @@ export function Editor({ id, onBack, onOpenRuns }: { id: string | null; onBack: 
   const onSave = async () => {
     setStatus({ saving: true });
     try {
-      setDraft(await save(draft));
+      const saved = await save(draft);
+      setDraft(saved);
+      setBase(saved);
       setStatus({ message: t("common.saved") });
     } catch (e) {
       setStatus({ message: String(e), error: true });

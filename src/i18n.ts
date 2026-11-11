@@ -13,6 +13,8 @@ const ko = {
   "common.delete": "삭제",
   "common.confirmDelete": "정말 삭제",
   "common.cancel": "취소",
+  "common.discard": "버리기",
+  "common.unsavedLeave": "저장하지 않은 변경이 있어요. 버리고 나갈까요?",
   "common.loading": "불러오는 중…",
   "common.error": "문제가 생겼어요",
 
@@ -193,6 +195,8 @@ const en: Record<Key, string> = {
   "common.delete": "Delete",
   "common.confirmDelete": "Really delete",
   "common.cancel": "Cancel",
+  "common.discard": "Discard",
+  "common.unsavedLeave": "You have unsaved changes. Discard them and leave?",
   "common.loading": "Loading…",
   "common.error": "Something went wrong",
 
@@ -368,6 +372,8 @@ export const setLang = (l: Lang) => {
   lang = l;
 };
 export const getLang = () => lang;
+/** 날짜·숫자 표시용 로케일. */
+export const locale = () => (lang === "ko" ? "ko-KR" : "en-US");
 
 /** 설정값 → 화면 언어. `system`이면 시스템 언어가 ko로 시작할 때만 ko. */
 export const resolveLang = (setting: Settings["language"], system: string): Lang =>

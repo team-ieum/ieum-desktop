@@ -28,7 +28,7 @@ import {
   PenLine,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ValidationError, Workflow, WfNode } from "../api";
 import { t, tDyn } from "../i18n";
 import { branchHandles, DEFS, isLocal } from "../nodes/defs";
@@ -182,6 +182,13 @@ const edgeId = (e: Workflow["edges"][number]) => e.id ?? `${e.source}-${e.target
 export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect }: CanvasProps) {
   const [nodes, setNodes] = useState<IeumNode[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
+  // 한 틱에 여러 변경(엣지 삭제 → 노드 삭제)이 오면 앞 변경 결과 위에 쌓는다 — 렌더의 workflow는 낡았다.
+  const latest = useRef(workflow);
+  latest.current = workflow;
+  const emit = (f: (w: Workflow) => Workflow) => {
+    latest.current = f(latest.current);
+    onChange?.(latest.current);
+  };
 
   useEffect(() => {
     setNodes((prev) => {
@@ -229,26 +236,26 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
     if (picked) onSelect?.(picked.id);
     else if (changes.some((c) => c.type === "select")) onSelect?.(null);
     if (moved.size || removed.size)
-      onChange?.({
-        ...workflow,
-        nodes: workflow.nodes
+      emit((w) => ({
+        ...w,
+        nodes: w.nodes
           .filter((n) => !removed.has(n.id))
           .map((n) => (moved.has(n.id) ? { ...n, position: moved.get(n.id) } : n)),
-        edges: workflow.edges.filter((e) => !removed.has(e.source) && !removed.has(e.target)),
-      });
+        edges: w.edges.filter((e) => !removed.has(e.source) && !removed.has(e.target)),
+      }));
   };
 
   const onEdgesChange = (changes: EdgeChange[]) => {
     if (readOnly) return;
     setEdges((es) => applyEdgeChanges(changes, es));
     const removed = new Set(changes.flatMap((c) => (c.type === "remove" ? [c.id] : [])));
-    if (removed.size) onChange?.({ ...workflow, edges: workflow.edges.filter((e) => !removed.has(edgeId(e))) });
+    if (removed.size) emit((w) => ({ ...w, edges: w.edges.filter((e) => !removed.has(edgeId(e))) }));
   };
 
   const onConnect = (c: Connection) => {
     if (readOnly) return;
     const edge = { id: crypto.randomUUID(), source: c.source, target: c.target, ...(c.sourceHandle ? { conditionType: c.sourceHandle } : {}) };
-    onChange?.({ ...workflow, edges: [...workflow.edges, edge] });
+    emit((w) => ({ ...w, edges: [...w.edges, edge] }));
   };
 
   return (

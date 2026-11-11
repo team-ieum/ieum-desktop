@@ -1,7 +1,7 @@
 import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { WorkflowEntry } from "../api";
-import { t } from "../i18n";
+import { locale, t } from "../i18n";
 import { useWorkflows } from "../stores/workflows";
 import { BUTTON, PRIMARY } from "./Editor";
 
@@ -48,7 +48,7 @@ export function WorkflowList({ onOpen, onOpenRuns }: { onOpen: (id: string | nul
                   </span>
                   {w.updatedAt && (
                     <span>
-                      {t("list.updated")} {new Date(w.updatedAt).toLocaleString()}
+                      {t("list.updated")} {new Date(w.updatedAt).toLocaleString(locale())}
                     </span>
                   )}
                 </span>

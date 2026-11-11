@@ -1,6 +1,13 @@
-import { expect, test } from "vitest";
-import type { ExecEvent } from "../api";
-import { applyExecEvent, emptyLive, type Live } from "./runs";
+import { expect, test, vi } from "vitest";
+import { api, type ExecEvent } from "../api";
+import { applyExecEvent, emptyLive, subscribeExecEvents, type Live } from "./runs";
+
+test("exec_events_subscribed_once", () => {
+  const on = vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
+  subscribeExecEvents();
+  subscribeExecEvents();
+  expect(on).toHaveBeenCalledTimes(1);
+});
 
 const play = (live: Live, events: [string, ExecEvent][]) =>
   events.reduce((s, [workflowId, event]) => applyExecEvent(s, { workflowId, event }), live);
