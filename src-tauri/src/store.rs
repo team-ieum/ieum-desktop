@@ -59,12 +59,27 @@ pub enum Language {
     En,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub language: Language,
     pub autostart: bool,
     pub first_run_done: bool,
+    /// 이음 BE 주소. 바꾸면 세션을 지운다(`web::save_settings`).
+    pub server_url: String,
+}
+
+pub const DEFAULT_SERVER_URL: &str = "https://green.kiacms.co.kr";
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            language: Language::default(),
+            autostart: false,
+            first_run_done: false,
+            server_url: DEFAULT_SERVER_URL.into(),
+        }
+    }
 }
 
 pub fn now() -> String {

@@ -12,6 +12,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::store::{RunSummary, Settings, StoredRun, StoredWorkflow};
 use crate::supervisor::{Supervisor, WorkflowEntry};
+use crate::web::{self, BeClient, WebAccount, WebError};
 
 /// API 키 저장소(운영 = 키체인).
 pub struct Keys(pub Arc<dyn KeyStore>);
@@ -113,14 +114,27 @@ pub async fn detect_providers(keys: State<'_, Keys>) -> Result<Providers, String
     .map_err(|e| e.to_string())
 }
 
+/// API 키 계정만(같은 키체인 서비스의 `ieum-session`은 화면이 건드리지 못하게).
+fn api_account(provider: &str) -> Result<&'static str, String> {
+    [ApiKind::Anthropic, ApiKind::OpenAi, ApiKind::Gemini]
+        .into_iter()
+        .map(ApiKind::account)
+        .find(|a| *a == provider)
+        .ok_or_else(|| format!("알 수 없는 공급원이에요: {provider}"))
+}
+
 #[tauri::command]
 pub fn set_api_key(keys: State<'_, Keys>, provider: String, key: String) -> Result<(), String> {
-    keys.0.set(&provider, &key).map_err(|e| e.to_string())
+    keys.0
+        .set(api_account(&provider)?, &key)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn delete_api_key(keys: State<'_, Keys>, provider: String) -> Result<(), String> {
-    keys.0.delete(&provider).map_err(|e| e.to_string())
+    keys.0
+        .delete(api_account(&provider)?)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -128,9 +142,15 @@ pub fn get_settings(sup: State<'_, Supervisor>) -> Result<Settings, String> {
     sup.store().get_settings()
 }
 
-/// 자동 시작이 바뀌면 로그인 항목도 켜고 끈다.
+/// 자동 시작이 바뀌면 로그인 항목도 켜고 끈다. 서버 주소가 바뀌면 세션을 지운다.
 #[tauri::command]
-pub fn set_settings(app: AppHandle, sup: State<'_, Supervisor>, s: Settings) -> Result<(), String> {
+pub fn set_settings(
+    app: AppHandle,
+    sup: State<'_, Supervisor>,
+    keys: State<'_, Keys>,
+    s: Settings,
+) -> Result<(), String> {
+    web::validate_server_url(&s.server_url)?;
     if s.autostart != sup.store().get_settings()?.autostart {
         let launch = app.autolaunch();
         let r = if s.autostart {
@@ -140,5 +160,34 @@ pub fn set_settings(app: AppHandle, sup: State<'_, Supervisor>, s: Settings) -> 
         };
         r.map_err(|e| format!("자동 시작을 바꾸지 못했어요: {e}"))?;
     }
-    sup.store().set_settings(&s)
+    web::save_settings(sup.store(), keys.0.as_ref(), s).map(|_| ())
+}
+
+fn be_client(sup: &Supervisor, keys: &Keys) -> Result<BeClient, WebError> {
+    let s = sup.store().get_settings().map_err(WebError::Server)?;
+    BeClient::new(&s.server_url, keys.0.clone())
+}
+
+/// 비밀번호는 BE로만 보내고 저장하지 않는다.
+#[tauri::command]
+pub async fn web_login(
+    sup: State<'_, Supervisor>,
+    keys: State<'_, Keys>,
+    email: String,
+    password: String,
+) -> Result<WebAccount, WebError> {
+    be_client(&sup, &keys)?.login(&email, &password).await
+}
+
+#[tauri::command]
+pub async fn web_logout(sup: State<'_, Supervisor>, keys: State<'_, Keys>) -> Result<(), WebError> {
+    be_client(&sup, &keys)?.logout().await
+}
+
+#[tauri::command]
+pub fn web_account(
+    sup: State<'_, Supervisor>,
+    keys: State<'_, Keys>,
+) -> Result<Option<WebAccount>, WebError> {
+    Ok(be_client(&sup, &keys)?.account())
 }

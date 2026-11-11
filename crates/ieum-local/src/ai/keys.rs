@@ -5,6 +5,8 @@ use std::fmt;
 
 const SERVICE: &str = "com.ieum.desktop";
 const ACCOUNTS: [&str; 3] = ["anthropic", "openai", "gemini"];
+/// 이음 계정 세션(접근·갱신 토큰 JSON). API 키 명령으로는 다루지 않는다.
+pub const SESSION_ACCOUNT: &str = "ieum-session";
 
 /// API 키. `Debug`·에러 어디에도 원문이 나가지 않게 감싼다.
 pub struct ApiKey(String);
@@ -63,7 +65,7 @@ impl KeyStore for Keychain {
 pub struct KeyError(pub String);
 
 fn entry(provider: &str) -> Result<keyring::Entry, KeyError> {
-    if !ACCOUNTS.contains(&provider) {
+    if !ACCOUNTS.contains(&provider) && provider != SESSION_ACCOUNT {
         return Err(KeyError(format!("알 수 없는 공급원이에요: {provider}")));
     }
     keyring::Entry::new(SERVICE, provider).map_err(|e| KeyError(format!("키체인 오류: {e}")))

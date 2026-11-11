@@ -2,6 +2,7 @@ pub mod commands;
 pub mod store;
 pub mod supervisor;
 mod tray;
+pub mod web;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,7 +10,8 @@ use std::time::Duration;
 use ieum_local::WatchTiming;
 use ieum_local::ai::{AiRunner, Keychain};
 use serde_json::json;
-use tauri::{App, Emitter, Manager, WindowEvent};
+use tauri::webview::NewWindowResponse;
+use tauri::{App, Emitter, Manager, Url, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
 use crate::commands::Keys;
@@ -40,7 +42,47 @@ fn first_run(app: &App, store: &Store) {
     }
 }
 
+/// 앱 화면 주소인가 — 운영 `tauri://localhost`, 개발이면 `devUrl`과 같은 출처.
+pub fn is_app_url(url: &Url, dev_url: Option<&Url>) -> bool {
+    (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+        || dev_url.is_some_and(|d| d.origin() == url.origin())
+}
+
+/// 메인 창을 직접 만든다(`tauri.conf.json`은 `create: false`) — 앱 밖 주소로 이동·새 창 열기를 막는다.
+/// 외부 링크는 러스트 명령이 기본 브라우저로 연다(Task 16).
+fn create_main_window(app: &App) -> tauri::Result<()> {
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned()
+        .ok_or_else(|| tauri::Error::WindowNotFound)?;
+    let dev_url = app
+        .config()
+        .build
+        .dev_url
+        .clone()
+        .filter(|_| tauri::is_dev());
+    WebviewWindowBuilder::from_config(app.handle(), &config)?
+        .on_navigation(move |url| {
+            let ok = is_app_url(url, dev_url.as_ref());
+            if !ok {
+                eprintln!(
+                    "[ieum] 앱 밖 주소로 이동을 막았어요: {}",
+                    url.origin().ascii_serialization()
+                );
+            }
+            ok
+        })
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+        .build()?;
+    Ok(())
+}
+
 fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    create_main_window(app)?;
     let store = Store::new(app.path().app_data_dir()?);
     let handle = app.handle().clone();
     let emit: Emit = Arc::new(move |e| {
@@ -120,6 +162,9 @@ pub fn run() {
             commands::delete_api_key,
             commands::get_settings,
             commands::set_settings,
+            commands::web_login,
+            commands::web_logout,
+            commands::web_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

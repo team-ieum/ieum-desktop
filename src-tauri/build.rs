@@ -13,6 +13,9 @@ const COMMANDS: &[&str] = &[
     "delete_api_key",
     "get_settings",
     "set_settings",
+    "web_login",
+    "web_logout",
+    "web_account",
 ];
 
 fn main() {

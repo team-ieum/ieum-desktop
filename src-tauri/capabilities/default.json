@@ -19,6 +19,9 @@
     "allow-delete-api-key",
     "allow-get-settings",
     "allow-set-settings",
+    "allow-web-login",
+    "allow-web-logout",
+    "allow-web-account",
     "dialog:allow-open",
     "autostart:allow-is-enabled"
   ]

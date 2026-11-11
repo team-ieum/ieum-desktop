@@ -58,6 +58,7 @@ fn store_roundtrip_and_atomic_write() {
         language: Language::En,
         autostart: true,
         first_run_done: true,
+        ..Settings::default()
     };
     store.set_settings(&s).unwrap();
     assert_eq!(store.get_settings().unwrap(), s);
