@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { WebExecPayload } from "../api";
-import { applyWebEvent, emptyWebLive } from "./web";
+import { applyWebEvent, emptyWebLive, webStatuses } from "./web";
 
 const EX = "ex-1";
 const ev = (type: string, extra: Record<string, unknown> = {}): WebExecPayload => ({
@@ -49,4 +49,29 @@ test("web_exec_events_idempotent_and_filtered", () => {
   expect(live.nodes.d).toBe("succeeded");
   run({ executionId: EX, error: { code: "NETWORK", message: "끊김" } });
   expect(live.error).toEqual({ code: "NETWORK", message: "끊김" });
+});
+
+test("web_ended_execution_stops_running_nodes", () => {
+  let live = emptyWebLive(EX);
+  const run = (p: WebExecPayload) => (live = applyWebEvent(live, p));
+  run(ev("NODE_STARTED", { nodeId: "a" }));
+  run(ev("APPROVAL_REQUESTED", { nodeId: "gate" }));
+  run(ev("NODE_STARTED", { nodeId: "lost" }));
+  const logs = [
+    { id: "1", nodeId: "a", status: "FAILED" },
+    { id: "2", nodeId: "gate", status: "PENDING" },
+  ];
+  // 실행 중엔 생중계가 앞선다.
+  expect(webStatuses(logs, live)).toEqual({ a: "running", gate: "running", lost: "running" });
+
+  // 끝 이벤트 뒤: running은 로그의 끝난 값, 없으면(승인 대기·로그 없음) 표시 없음.
+  run(ev("EXECUTION_COMPLETED", { executionStatus: "FAILED" }));
+  expect(webStatuses(logs, live)).toEqual({ a: "failed" });
+
+  // 폴백 logs도 끝으로 본다.
+  live = emptyWebLive(EX);
+  run(ev("NODE_STARTED", { nodeId: "a" }));
+  run(ev("NODE_STARTED", { nodeId: "b" }));
+  run({ executionId: EX, logs: [{ id: "1", nodeId: "a", status: "SUCCESS" }] });
+  expect(webStatuses([], live)).toEqual({ a: "succeeded" });
 });

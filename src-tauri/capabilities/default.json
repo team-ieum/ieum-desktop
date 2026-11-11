@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "화면(main 창)이 쓰는 앱 명령·이벤트·폴더 고르기·자동 시작 상태만",
+  "description": "화면(main 창)이 쓰는 앱 명령·이벤트·폴더 고르기만",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
@@ -30,7 +30,6 @@
     "allow-web-execution-logs",
     "allow-web-watch-execution",
     "allow-web-unwatch-execution",
-    "dialog:allow-open",
-    "autostart:allow-is-enabled"
+    "dialog:allow-open"
   ]
 }

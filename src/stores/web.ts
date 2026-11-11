@@ -72,7 +72,23 @@ export function applyWebEvent(live: WebLive, p: WebExecPayload): WebLive {
   }
 }
 
-const isWebError = (e: unknown): e is WebError => typeof e === "object" && e !== null && "code" in e;
+/**
+ * 캔버스·로그 목록에 보일 노드 상태. 실행 중엔 생중계가 로그보다 앞선다. 끝나면(끝 이벤트·폴백 `logs`) 아직 running인
+ * 노드는 로그의 끝난 값으로, 없으면(승인 대기·끝 이벤트 못 받은 노드) 표시하지 않는다 — 스피너가 돌지 않게.
+ */
+export function webStatuses(logs: WebNodeLog[], live: WebLive): Record<string, NodeRunStatus> {
+  const fromLogs = statusesFromLogs(live.logs ?? logs);
+  const merged = { ...fromLogs, ...live.nodes };
+  if (live.status === null && !live.logs) return merged;
+  for (const [id, s] of Object.entries(merged)) {
+    if (s !== "running") continue;
+    if (fromLogs[id] && fromLogs[id] !== "running") merged[id] = fromLogs[id];
+    else delete merged[id];
+  }
+  return merged;
+}
+
+const isWebError =(e: unknown): e is WebError => typeof e === "object" && e !== null && "code" in e;
 
 /** `web_*` 오류(`{code, message?}`)는 사전 문구로, 그 밖(서버 주소 검증 등)은 Rust 문구 그대로. */
 export function webErrorText(e: unknown): string {

@@ -55,6 +55,11 @@ export function Settings() {
   const [keyError, setKeyError] = useState<string | null>(null);
   const [generalError, setGeneralError] = useState<string | null>(null);
   const [serverUrl, setServerUrl] = useState(settings?.serverUrl ?? "");
+  // 설정을 늦게 읽어도 입력란을 채운다.
+  const savedServerUrl = settings?.serverUrl;
+  useEffect(() => {
+    if (savedServerUrl !== undefined) setServerUrl(savedServerUrl);
+  }, [savedServerUrl]);
   const [serverError, setServerError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -106,6 +111,7 @@ export function Settings() {
     setServerError(null);
     try {
       await save({ ...settings, serverUrl: serverUrl.trim() });
+      useWeb.setState({ expired: false });
       await loadAccount();
     } catch (err) {
       setServerError(String(err));
@@ -232,7 +238,7 @@ export function Settings() {
             {t("settings.server")}
             <input className={INPUT} value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
           </label>
-          <button type="submit" className={BUTTON} disabled={!settings || serverUrl.trim() === settings.serverUrl}>
+          <button type="submit" className={BUTTON} disabled={!settings || !serverUrl.trim() || serverUrl.trim() === settings.serverUrl}>
             {t("common.save")}
           </button>
         </form>

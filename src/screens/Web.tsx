@@ -3,7 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { api, type WebExecution, type WebNodeLog, type WebWorkflow, type WebWorkflowSummary } from "../api";
 import { Canvas, nodeTitle, StatusIcon } from "../editor/Canvas";
 import { locale, t, tDyn } from "../i18n";
-import { applyWebEvent, emptyWebLive, statusesFromLogs, useWeb, webErrorText, webNodeStatus } from "../stores/web";
+import { applyWebEvent, emptyWebLive, useWeb, webErrorText, webStatuses } from "../stores/web";
 import { BUTTON } from "./Editor";
 
 /** 아직 끝나지 않은 실행 — 열면 생중계를 건다. */
@@ -30,7 +30,17 @@ const ExecPill = ({ status }: { status: string }) => (
 const ErrorLine = ({ msg }: { msg: string | null }) =>
   msg ? <p className="border-b border-danger-300 bg-danger-100 px-4 py-2 typo-caption1_semibold text-danger-700">{msg}</p> : null;
 
-function Header({ title, onBack, children }: { title: string; onBack?: () => void; children?: ReactNode }) {
+function Header({
+  title,
+  onBack,
+  onError,
+  children,
+}: {
+  title: string;
+  onBack?: () => void;
+  onError: (m: string) => void;
+  children?: ReactNode;
+}) {
   return (
     <header className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-3">
       {onBack && (
@@ -40,7 +50,7 @@ function Header({ title, onBack, children }: { title: string; onBack?: () => voi
       )}
       <h1 className="min-w-0 flex-1 truncate typo-title3_bold text-neutral-800">{title}</h1>
       {children}
-      <button type="button" className={BUTTON} onClick={() => void api.openWebEditor().catch((e) => console.error("[ieum]", e))}>
+      <button type="button" className={BUTTON} onClick={() => void api.openWebEditor().catch((e) => onError(webErrorText(e)))}>
         <ExternalLink size={16} aria-hidden="true" />
         {t("web.editOnWeb")}
       </button>
@@ -83,7 +93,7 @@ function WebList({ onOpen }: { onOpen: (id: string) => void }) {
 
   return (
     <div className="flex h-full flex-col">
-      <Header title={t("web.title")} />
+      <Header title={t("web.title")} onError={setError} />
       <ErrorLine msg={error} />
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-2 p-6">
         {!list ? (
@@ -146,6 +156,8 @@ function WebWorkflowView({ id, onBack, onOpenExecution }: { id: string; onBack: 
   const [execs, setExecs] = useState<WebExecution[] | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  // 실행 기록 오류는 따로 — 재시도가 성공하면 지운다(워크플로우 읽기 오류는 남긴다).
+  const [pageError, setPageError] = useState<string | null>(null);
 
   const loadPage = async (from: string | null) => {
     setLoadingMore(true);
@@ -153,8 +165,9 @@ function WebWorkflowView({ id, onBack, onOpenExecution }: { id: string; onBack: 
       const p = await guard(api.webListExecutions(id, from));
       setExecs((cur) => [...(from ? (cur ?? []) : []), ...p.content]);
       setCursor(p.hasNext ? p.nextCursor : null);
+      setPageError(null);
     } catch (e) {
-      setError(webErrorText(e));
+      setPageError(webErrorText(e));
     } finally {
       setLoadingMore(false);
     }
@@ -166,10 +179,11 @@ function WebWorkflowView({ id, onBack, onOpenExecution }: { id: string; onBack: 
 
   return (
     <div className="flex h-full flex-col">
-      <Header title={wf?.name ?? ""} onBack={onBack}>
+      <Header title={wf?.name ?? ""} onBack={onBack} onError={setError}>
         <ReadOnlyPill />
       </Header>
       <ErrorLine msg={error} />
+      <ErrorLine msg={pageError} />
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1">{wf && <Canvas workflow={wf} readOnly />}</div>
         <aside className="flex w-96 shrink-0 flex-col gap-3 overflow-y-auto border-l border-neutral-200 bg-white p-4">
@@ -239,8 +253,25 @@ function WebExecutionView({ workflowId, execution, onBack }: { workflowId: strin
     };
   }, [workflowId, exId, execution.status, guard, expireIf]);
 
-  const shownLogs = live.logs ?? logs ?? [];
-  const statuses = { ...statusesFromLogs(logs ?? []), ...live.nodes };
+  // 폴백 logs엔 실행 상태가 없다 — 실행 목록을 다시 읽어 헤더를 맞춘다(첫 쪽에 없으면 그대로).
+  const [listedStatus, setListedStatus] = useState<string | null>(null);
+  useEffect(() => {
+    if (!live.logs) return;
+    guard(api.webListExecutions(workflowId, null)).then(
+      (p) => setListedStatus(p.content.find((x) => x.id === exId)?.status ?? null),
+      (e) => setError(webErrorText(e)),
+    );
+  }, [workflowId, exId, live.logs, guard]);
+
+  const baseLogs = live.logs ?? logs ?? [];
+  // 처음 로그에 없던 노드의 생중계 실패도 문구가 보이게 덧붙인다.
+  const shownLogs: WebNodeLog[] = [
+    ...baseLogs,
+    ...Object.keys(live.errors)
+      .filter((id) => !baseLogs.some((l) => l.nodeId === id))
+      .map((id) => ({ id: `live-${id}`, nodeId: id, status: "FAILED" })),
+  ];
+  const statuses = webStatuses(logs ?? [], live);
   const nodeName = (id: string) => {
     const n = wf?.nodes.find((x) => x.id === id);
     return n ? n.label || nodeTitle(n.event) : id;
@@ -248,9 +279,9 @@ function WebExecutionView({ workflowId, execution, onBack }: { workflowId: strin
 
   return (
     <div className="flex h-full flex-col">
-      <Header title={`${wf?.name ?? ""} · ${when(execution.startedAt)}`} onBack={onBack}>
+      <Header title={`${wf?.name ?? ""} · ${when(execution.startedAt)}`} onBack={onBack} onError={setError}>
         <ReadOnlyPill />
-        <ExecPill status={live.status ?? execution.status} />
+        <ExecPill status={live.status ?? listedStatus ?? execution.status} />
       </Header>
       <ErrorLine msg={error} />
       {live.stopped && <p className="border-b border-neutral-200 bg-neutral-100 px-4 py-2 typo-caption1_semibold text-neutral-700">{t("web.stopped")}</p>}
@@ -267,7 +298,7 @@ function WebExecutionView({ workflowId, execution, onBack }: { workflowId: strin
               return (
                 <li key={l.id} className="flex flex-col gap-1.5 rounded-brand-sm border border-neutral-200 p-3">
                   <div className="flex items-center gap-2">
-                    <StatusIcon status={statuses[l.nodeId] ?? webNodeStatus(l.status)} />
+                    <StatusIcon status={statuses[l.nodeId]} />
                     <span className="min-w-0 flex-1 truncate typo-body3_semibold text-neutral-800">{nodeName(l.nodeId)}</span>
                   </div>
                   {msg && <p className="typo-caption1_regular text-danger-700">{msg}</p>}
