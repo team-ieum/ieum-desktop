@@ -2,9 +2,13 @@
 
 pub mod auth;
 pub mod client;
+pub mod executions;
+pub mod sse;
+pub mod workflows;
 
 pub use auth::{
     SESSION_ACCOUNT, Session, WebAccount, clear_session, load_session, save_settings,
     validate_server_url,
 };
 pub use client::{BeClient, WebError};
+pub use executions::{WatchConfig, Watches};

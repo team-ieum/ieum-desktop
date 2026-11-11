@@ -18,17 +18,25 @@ use super::auth::{
 
 pub const TIMEOUT: Duration = Duration::from_secs(15);
 pub const MAX_BODY: usize = 1024 * 1024;
+/// SSE 연결 상한. 유휴·이벤트 크기·전체 시간은 `sse::SseLimits`.
+pub const STREAM_CONNECT: Duration = Duration::from_secs(10);
+
+/// 401이어도 이음 세션 만료가 아니라 외부 연동(OAuth) 만료인 BE `ErrorCode` — 세션을 지우지 않는다.
+const EXTERNAL_401: &[&str] = &["CREDENTIAL_EXPIRED", "AUTHENTICATION_REQUIRED"];
 
 /// 동시에 여러 요청이 401을 받아도 갱신은 한 번만(갱신 토큰이 회전돼도 서로 지우지 않게).
 static REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// 화면용 에러 코드 `AUTH_FAILED`·`AUTH_LOCKED`·`AUTH_EXPIRED`·`NETWORK`·`SERVER`. 직렬화 = `{code, message?}`.
+/// 화면용 에러 코드 `AUTH_FAILED`·`AUTH_LOCKED`·`AUTH_EXPIRED`·`EXTERNAL_EXPIRED`·`NETWORK`·`SERVER`.
+/// 직렬화 = `{code, message?}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "code", content = "message", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum WebError {
     AuthFailed,
     AuthLocked,
     AuthExpired,
+    /// 외부 서비스 연동(OAuth) 만료 — 이음 로그인은 그대로.
+    ExternalExpired,
     Network(String),
     Server(String),
 }
@@ -39,6 +47,7 @@ impl WebError {
             WebError::AuthFailed => "AUTH_FAILED",
             WebError::AuthLocked => "AUTH_LOCKED",
             WebError::AuthExpired => "AUTH_EXPIRED",
+            WebError::ExternalExpired => "EXTERNAL_EXPIRED",
             WebError::Network(_) => "NETWORK",
             WebError::Server(_) => "SERVER",
         }
@@ -53,6 +62,9 @@ impl fmt::Display for WebError {
                 f.write_str("로그인 시도가 많아 잠시 잠겼어요. 나중에 다시 시도해 주세요.")
             }
             WebError::AuthExpired => f.write_str("로그인이 만료됐어요. 다시 로그인해 주세요."),
+            WebError::ExternalExpired => {
+                f.write_str("연결된 외부 서비스 인증이 만료됐어요. 웹 이음에서 다시 연동해 주세요.")
+            }
             WebError::Network(m) => write!(f, "서버에 연결하지 못했어요: {m}"),
             WebError::Server(m) => write!(f, "서버 오류: {m}"),
         }
@@ -82,7 +94,7 @@ struct ApiResponse<T> {
     data: Option<T>,
 }
 
-fn net(e: reqwest::Error) -> WebError {
+pub(crate) fn net(e: reqwest::Error) -> WebError {
     if e.is_timeout() {
         WebError::Network("시간 초과".into())
     } else {
@@ -123,9 +135,26 @@ async fn data<T: DeserializeOwned>(r: Response) -> Result<T, WebError> {
         .ok_or_else(|| WebError::Server("응답에 data가 없어요.".into()))
 }
 
+/// 401 응답이 외부 연동 만료(`EXTERNAL_401`)인가. BE 래퍼의 `code`만 본다.
+async fn external_401(r: Response) -> bool {
+    #[derive(Deserialize)]
+    struct Code {
+        code: Option<String>,
+    }
+    let Ok(body) = read_body(r).await else {
+        return false;
+    };
+    serde_json::from_slice::<Code>(&body)
+        .ok()
+        .and_then(|c| c.code)
+        .is_some_and(|c| EXTERNAL_401.contains(&c.as_str()))
+}
+
 pub struct BeClient {
     base: String,
     http: Client,
+    /// SSE용 — 전체 시간 상한 없음(연결 10초만).
+    stream_http: Client,
     keys: Arc<dyn KeyStore>,
 }
 
@@ -138,7 +167,17 @@ impl BeClient {
             .timeout(TIMEOUT)
             .build()
             .map_err(net)?;
-        Ok(Self { base, http, keys })
+        let stream_http = Client::builder()
+            .redirect(redirect::Policy::none())
+            .connect_timeout(STREAM_CONNECT)
+            .build()
+            .map_err(net)?;
+        Ok(Self {
+            base,
+            http,
+            stream_http,
+            keys,
+        })
     }
 
     pub fn account(&self) -> Option<WebAccount> {
@@ -158,7 +197,13 @@ impl BeClient {
         let generation = session_generation(&self.base);
         let body = json!({"email": email, "password": password});
         let r = self
-            .send(Method::POST, "/api/v1/auth/login", None, Some(body))
+            .send(
+                &self.http,
+                Method::POST,
+                "/api/v1/auth/login",
+                None,
+                Some(body),
+            )
             .await?;
         if r.status() == StatusCode::TOO_MANY_REQUESTS {
             return Err(WebError::AuthLocked);
@@ -188,30 +233,57 @@ impl BeClient {
         if let Ok(Some(s)) = load_session(self.keys.as_ref(), &self.base) {
             let body = json!({"refreshToken": s.refresh_token});
             let _ = self
-                .send(Method::POST, "/api/v1/auth/logout", None, Some(body))
+                .send(
+                    &self.http,
+                    Method::POST,
+                    "/api/v1/auth/logout",
+                    None,
+                    Some(body),
+                )
                 .await;
         }
         end_session(self.keys.as_ref(), &self.base).map_err(WebError::Server)
     }
 
-    /// `path`는 `/`로 시작(`/api/v1/...`). 401이면 갱신 1회 후 재시도, 또 401이면 세션 삭제 + `AuthExpired`.
+    /// `path`는 `/`로 시작(`/api/v1/...`). 401 규칙은 `authed`.
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, WebError> {
+        data(self.authed(&self.http, path).await?).await
+    }
+
+    /// SSE용 GET — 전역 15초·1MB 상한 대신 연결 10초만. 본문 상한은 `sse::read_events`가 건다.
+    pub async fn stream(&self, path: &str) -> Result<Response, WebError> {
+        let r = self.authed(&self.stream_http, path).await?;
+        if !r.status().is_success() {
+            return Err(WebError::Server(format!("HTTP {}", r.status().as_u16())));
+        }
+        Ok(r)
+    }
+
+    /// GET. 401이면 갱신 1회 후 재시도, 또 401이면 세션 삭제 + `AuthExpired`.
+    /// 외부 연동 만료 401(`EXTERNAL_401`)은 갱신·삭제 없이 `ExternalExpired`.
+    async fn authed(&self, http: &Client, path: &str) -> Result<Response, WebError> {
         let s = self.session()?;
         let r = self
-            .send(Method::GET, path, Some(&s.access_token), None)
+            .send(http, Method::GET, path, Some(&s.access_token), None)
             .await?;
         if r.status() != StatusCode::UNAUTHORIZED {
-            return data(r).await;
+            return Ok(r);
+        }
+        if external_401(r).await {
+            return Err(WebError::ExternalExpired);
         }
         let s = self.refresh(&s.access_token).await?;
         let r = self
-            .send(Method::GET, path, Some(&s.access_token), None)
+            .send(http, Method::GET, path, Some(&s.access_token), None)
             .await?;
         if r.status() == StatusCode::UNAUTHORIZED {
+            if external_401(r).await {
+                return Err(WebError::ExternalExpired);
+            }
             self.expire();
             return Err(WebError::AuthExpired);
         }
-        data(r).await
+        Ok(r)
     }
 
     fn session(&self) -> Result<Session, WebError> {
@@ -236,7 +308,13 @@ impl BeClient {
         }
         let body = json!({"refreshToken": s.refresh_token});
         let r = self
-            .send(Method::POST, "/api/v1/auth/refresh", None, Some(body))
+            .send(
+                &self.http,
+                Method::POST,
+                "/api/v1/auth/refresh",
+                None,
+                Some(body),
+            )
             .await?;
         if r.status().is_client_error() {
             self.expire();
@@ -253,6 +331,7 @@ impl BeClient {
 
     async fn send(
         &self,
+        http: &Client,
         method: Method,
         path: &str,
         bearer: Option<&str>,
@@ -262,7 +341,7 @@ impl BeClient {
         if !path.starts_with('/') {
             return Err(WebError::Server("잘못된 요청 경로예요.".into()));
         }
-        let mut req = self.http.request(method, format!("{}{path}", self.base));
+        let mut req = http.request(method, format!("{}{path}", self.base));
         if let Some(t) = bearer {
             req = req.bearer_auth(t);
         }

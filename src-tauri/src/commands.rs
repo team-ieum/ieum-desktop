@@ -7,12 +7,14 @@ use ieum_engine::{ValidationError, Workflow};
 use ieum_local::UndoReport;
 use ieum_local::ai::{ApiKind, KeyStore, detect_clis};
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::store::{RunSummary, Settings, StoredRun, StoredWorkflow};
 use crate::supervisor::{Supervisor, WorkflowEntry};
-use crate::web::{self, BeClient, WebAccount, WebError};
+use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
+use crate::web::workflows::{WebWorkflow, WebWorkflowSummary};
+use crate::web::{self, BeClient, Watches, WebAccount, WebError};
 
 /// API 키 저장소(운영 = 키체인).
 pub struct Keys(pub Arc<dyn KeyStore>);
@@ -190,4 +192,65 @@ pub fn web_account(
     keys: State<'_, Keys>,
 ) -> Result<Option<WebAccount>, WebError> {
     Ok(be_client(&sup, &keys)?.account())
+}
+
+#[tauri::command]
+pub async fn web_list_workflows(
+    sup: State<'_, Supervisor>,
+    keys: State<'_, Keys>,
+) -> Result<Vec<WebWorkflowSummary>, WebError> {
+    web::workflows::list(&be_client(&sup, &keys)?).await
+}
+
+#[tauri::command]
+pub async fn web_get_workflow(
+    sup: State<'_, Supervisor>,
+    keys: State<'_, Keys>,
+    id: String,
+) -> Result<WebWorkflow, WebError> {
+    web::workflows::get(&be_client(&sup, &keys)?, &id).await
+}
+
+#[tauri::command]
+pub async fn web_list_executions(
+    sup: State<'_, Supervisor>,
+    keys: State<'_, Keys>,
+    workflow_id: String,
+    cursor: Option<String>,
+) -> Result<Page<WebExecution>, WebError> {
+    web::executions::list(&be_client(&sup, &keys)?, &workflow_id, cursor).await
+}
+
+#[tauri::command]
+pub async fn web_execution_logs(
+    sup: State<'_, Supervisor>,
+    keys: State<'_, Keys>,
+    workflow_id: String,
+    execution_id: String,
+) -> Result<Vec<WebNodeLog>, WebError> {
+    web::executions::logs(&be_client(&sup, &keys)?, &workflow_id, &execution_id).await
+}
+
+/// 받은 이벤트를 `web-exec-event`로 넘긴다(async — 구독 작업을 tokio 런타임에 띄운다).
+#[tauri::command]
+pub async fn web_watch_execution(
+    app: AppHandle,
+    sup: State<'_, Supervisor>,
+    keys: State<'_, Keys>,
+    watches: State<'_, Watches>,
+    workflow_id: String,
+    execution_id: String,
+) -> Result<(), WebError> {
+    let client = Arc::new(be_client(&sup, &keys)?);
+    let emit: Emit = Arc::new(move |payload| {
+        if let Err(e) = app.emit("web-exec-event", payload) {
+            eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");
+        }
+    });
+    watches.watch(client, &workflow_id, &execution_id, emit)
+}
+
+#[tauri::command]
+pub fn web_unwatch_execution(watches: State<'_, Watches>, execution_id: String) {
+    watches.unwatch(&execution_id);
 }

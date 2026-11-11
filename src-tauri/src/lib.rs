@@ -124,6 +124,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let sup = tauri::async_runtime::block_on(async { Supervisor::start(deps) })?;
     app.manage(sup);
     app.manage(Keys(Arc::new(Keychain)));
+    app.manage(crate::web::Watches::default());
     tray::create(app)?;
     first_run(app, &store);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
@@ -165,6 +166,12 @@ pub fn run() {
             commands::web_login,
             commands::web_logout,
             commands::web_account,
+            commands::web_list_workflows,
+            commands::web_get_workflow,
+            commands::web_list_executions,
+            commands::web_execution_logs,
+            commands::web_watch_execution,
+            commands::web_unwatch_execution,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
