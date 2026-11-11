@@ -1,8 +1,8 @@
 [package]
 name = "ieum-desktop"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "IEUM 데스크톱 — 내 PC에서 도는 폴더·파일 자동화"
+authors = ["IEUM"]
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -30,6 +30,7 @@ tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 uuid = { version = "1.29.2", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+tauri-plugin-updater = "2"
 
 [dev-dependencies]
 async-trait = "0.1.92"

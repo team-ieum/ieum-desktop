@@ -1,0 +1,48 @@
+name: release
+
+# 태그 v* push → macOS arm64 빌드 → Release 초안에 .dmg·latest.json 업로드.
+# Apple 공증 없음(1단계). 업데이트 서명 키는 Secrets에서만 읽는다.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: IEUM ${{ github.ref_name }}
+          releaseDraft: true
+          prerelease: false
+          # 업데이트 산출물(.app.tar.gz·.sig)은 CI에서만(tauri.updater.conf.json) — 로컬 빌드는 키 없이 돈다.
+          args: >-
+            --target aarch64-apple-darwin
+            --bundles app,dmg
+            --config ${{ github.workspace }}/src-tauri/tauri.updater.conf.json

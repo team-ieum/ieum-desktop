@@ -42,6 +42,32 @@ fn first_run(app: &App, store: &Store) {
     }
 }
 
+/// 새 버전이 있으면 받아 설치해 둔다(다음 실행부터 적용). 실패는 로그만 — 팝업 없음.
+/// 공개키가 자리표시자면 서명 확인에서 실패해 설치되지 않는다.
+fn check_update(app: &App) {
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_updater::UpdaterExt;
+        let result = async {
+            if let Some(update) = handle.updater()?.check().await? {
+                update.download_and_install(|_, _| {}, || {}).await?;
+                eprintln!(
+                    "[ieum] 새 버전 {}을 설치했어요(다음 실행부터 적용)",
+                    update.version
+                );
+            }
+            Ok::<_, tauri_plugin_updater::Error>(())
+        }
+        .await;
+        if let Err(e) = result {
+            eprintln!("[ieum] 업데이트 확인 실패: {e}");
+        }
+    });
+}
+
 /// 앱 화면 주소인가 — 운영 `tauri://localhost`, 개발이면 `devUrl`과 같은 출처.
 pub fn is_app_url(url: &Url, dev_url: Option<&Url>) -> bool {
     (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
@@ -127,6 +153,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(crate::web::Watches::default());
     tray::create(app)?;
     first_run(app, &store);
+    check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
         tray::show_main(app.handle());
     }
@@ -141,6 +168,7 @@ pub fn run() {
             Some(vec![HIDDEN_ARG]),
         ))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(setup)
         // 창 닫기 = 숨기기(감시는 계속).
         .on_window_event(|w, e| {
