@@ -247,12 +247,13 @@ impl BeClient {
 
     /// `path`는 `/`로 시작(`/api/v1/...`). 401 규칙은 `authed`.
     pub async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, WebError> {
-        data(self.authed(&self.http, path).await?).await
+        data(self.authed(&self.http, path, None).await?).await
     }
 
-    /// SSE용 GET — 전역 15초·1MB 상한 대신 연결 10초만. 본문 상한은 `sse::read_events`가 건다.
-    pub async fn stream(&self, path: &str) -> Result<Response, WebError> {
-        let r = self.authed(&self.stream_http, path).await?;
+    /// SSE용 GET — 전역 15초·1MB 상한 대신 헤더 수신(401 처리 포함)까지 `wait`만
+    /// (`STREAM_CONNECT`가 기본). 본문 상한은 `sse::read_events`가 건다.
+    pub async fn stream(&self, path: &str, wait: Duration) -> Result<Response, WebError> {
+        let r = self.authed(&self.stream_http, path, Some(wait)).await?;
         if !r.status().is_success() {
             return Err(WebError::Server(format!("HTTP {}", r.status().as_u16())));
         }
@@ -261,29 +262,53 @@ impl BeClient {
 
     /// GET. 401이면 갱신 1회 후 재시도, 또 401이면 세션 삭제 + `AuthExpired`.
     /// 외부 연동 만료 401(`EXTERNAL_401`)은 갱신·삭제 없이 `ExternalExpired`.
-    async fn authed(&self, http: &Client, path: &str) -> Result<Response, WebError> {
+    /// `wait`는 GET 한 번(헤더·401 본문)마다의 상한. 갱신은 끊으면 회전된 토큰을 잃으니 걸지 않는다(15초 상한이 있다).
+    async fn authed(
+        &self,
+        http: &Client,
+        path: &str,
+        wait: Option<Duration>,
+    ) -> Result<Response, WebError> {
         let s = self.session()?;
-        let r = self
-            .send(http, Method::GET, path, Some(&s.access_token), None)
-            .await?;
-        if r.status() != StatusCode::UNAUTHORIZED {
-            return Ok(r);
-        }
-        if external_401(r).await {
-            return Err(WebError::ExternalExpired);
+        match self.try_get(http, path, &s.access_token, wait).await? {
+            Ok(r) => return Ok(r),
+            Err(true) => return Err(WebError::ExternalExpired),
+            Err(false) => {}
         }
         let s = self.refresh(&s.access_token).await?;
-        let r = self
-            .send(http, Method::GET, path, Some(&s.access_token), None)
-            .await?;
-        if r.status() == StatusCode::UNAUTHORIZED {
-            if external_401(r).await {
-                return Err(WebError::ExternalExpired);
+        match self.try_get(http, path, &s.access_token, wait).await? {
+            Ok(r) => Ok(r),
+            Err(true) => Err(WebError::ExternalExpired),
+            Err(false) => {
+                self.expire();
+                Err(WebError::AuthExpired)
             }
-            self.expire();
-            return Err(WebError::AuthExpired);
         }
-        Ok(r)
+    }
+
+    /// 401이 아니면 `Ok(응답)`, 401이면 `Err(외부 연동 만료인가)`.
+    async fn try_get(
+        &self,
+        http: &Client,
+        path: &str,
+        token: &str,
+        wait: Option<Duration>,
+    ) -> Result<Result<Response, bool>, WebError> {
+        let get = async {
+            let r = self
+                .send(http, Method::GET, path, Some(token), None)
+                .await?;
+            if r.status() != StatusCode::UNAUTHORIZED {
+                return Ok(Ok(r));
+            }
+            Ok(Err(external_401(r).await))
+        };
+        match wait {
+            Some(d) => tokio::time::timeout(d, get)
+                .await
+                .unwrap_or_else(|_| Err(WebError::Network("시간 초과".into()))),
+            None => get.await,
+        }
     }
 
     fn session(&self) -> Result<Session, WebError> {

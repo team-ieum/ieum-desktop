@@ -1,9 +1,12 @@
 //! 웹 워크플로우·실행 조회와 실행 생중계 구독. 가짜 HTTP 서버와 가짜 키 저장소만 쓴다.
 
 use std::collections::HashMap;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::SeqCst;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ieum_desktop_lib::web::client::STREAM_CONNECT;
 use ieum_desktop_lib::web::sse::{self, SseLimits};
 use ieum_desktop_lib::web::{
     BeClient, SESSION_ACCOUNT, Session, WatchConfig, Watches, WebError, executions, workflows,
@@ -309,10 +312,46 @@ async fn sse_events_forwarded_in_order() {
 }
 
 #[tokio::test]
-async fn sse_reconnects_once_then_falls_back_to_logs() {
-    let (base, log) = serve(|line| {
+async fn quiet_node_keeps_reconnecting_until_completed() {
+    let n = AtomicUsize::new(0);
+    let (base, log) = serve(move |line| {
+        if !line.ends_with("/events") {
+            return ok(json!([]));
+        }
+        // 처음 세 번은 유휴 상한(300ms)을 넘게 조용하다.
+        if n.fetch_add(1, SeqCst) < 3 {
+            Resp::Sse(vec![(0, ev("NODE_STARTED")), (5_000, String::new())])
+        } else {
+            Resp::Sse(vec![
+                (0, ev("NODE_COMPLETED")),
+                (0, ev("EXECUTION_COMPLETED")),
+            ])
+        }
+    })
+    .await;
+    let (c, _) = client(&base);
+    let (got, emit) = sink();
+    let w = Watches::new(fast());
+    w.watch(c, WF, EX, emit).unwrap();
+    wait_until(|| w.active().is_empty()).await;
+    let l = lines(&log);
+    assert_eq!(l.len(), 4, "{l:?}");
+    assert!(l.iter().all(|l| l.ends_with("/events")), "{l:?}");
+    let got = got.lock().unwrap().clone();
+    assert_eq!(got.last().unwrap()["event"]["type"], "EXECUTION_COMPLETED");
+}
+
+#[tokio::test]
+async fn two_connect_failures_fall_back_to_logs() {
+    // 실패 → 성공(끝 없이 닫힘) → 실패 → 실패: 성공이 실패 횟수를 0으로 되돌리므로 네 번 붙는다.
+    let n = AtomicUsize::new(0);
+    let (base, log) = serve(move |line| {
         if line.ends_with("/events") {
-            Resp::Sse(vec![(0, ev("NODE_STARTED"))])
+            if n.fetch_add(1, SeqCst) == 1 {
+                Resp::Sse(vec![(0, ev("NODE_STARTED"))])
+            } else {
+                Resp::Json(403, json!({"success": false, "code": "FORBIDDEN"}))
+            }
         } else if line.ends_with("/logs") {
             ok(
                 json!([{"id": "l1", "nodeId": "n1", "nodeType": "ACTION", "status": "SUCCESS",
@@ -331,7 +370,10 @@ async fn sse_reconnects_once_then_falls_back_to_logs() {
     let l = lines(&log);
     let events = format!("GET /api/v1/workflows/{WF}/executions/{EX}/events");
     let logs = format!("GET /api/v1/workflows/{WF}/executions/{EX}/logs");
-    assert_eq!(l, [events.clone(), events, logs]);
+    assert_eq!(
+        l,
+        [events.clone(), events.clone(), events.clone(), events, logs]
+    );
     let got = got.lock().unwrap().clone();
     let last = got.last().unwrap();
     assert_eq!(last["executionId"], EX);
@@ -349,7 +391,10 @@ async fn sse_idle_timeout() {
     };
     let started = std::time::Instant::now();
     let resp = c
-        .stream(&format!("/api/v1/workflows/{WF}/executions/{EX}/events"))
+        .stream(
+            &format!("/api/v1/workflows/{WF}/executions/{EX}/events"),
+            STREAM_CONNECT,
+        )
         .await
         .unwrap();
     let mut seen = Vec::new();
@@ -383,7 +428,7 @@ async fn sse_event_too_large_dropped() {
         max_event: 1000,
         ..SseLimits::default()
     };
-    let resp = c.stream("/x/events").await.unwrap();
+    let resp = c.stream("/x/events", STREAM_CONNECT).await.unwrap();
     let mut seen = Vec::new();
     let ended = sse::read_events(resp, &limits, |v| {
         let end = v["type"] == "EXECUTION_COMPLETED";
@@ -395,6 +440,131 @@ async fn sse_event_too_large_dropped() {
     assert!(ended);
     let types: Vec<_> = seen.iter().map(|v| v["type"].clone()).collect();
     assert_eq!(types, [json!("NODE_STARTED"), json!("EXECUTION_COMPLETED")]);
+}
+
+#[tokio::test]
+async fn sse_multi_line_data_over_limit_dropped() {
+    // 한 줄씩은 상한(1000) 안이지만 합치면 넘는다 — 합친 값은 올바른 JSON이라 크기로만 걸러진다.
+    let big = format!(
+        "data:{{\"type\":\"NODE_COMPLETED\",\"a\":\"{}\"\ndata:,\"b\":\"{}\"}}\n\n",
+        "x".repeat(600),
+        "y".repeat(600)
+    );
+    let (base, _) = serve(move |_| {
+        Resp::Sse(vec![
+            (
+                0,
+                "data:{\"type\":\"NODE_STARTED\",\ndata:\"k\":1}\n\n".into(),
+            ),
+            (0, big.clone()),
+            (0, ev("EXECUTION_COMPLETED")),
+        ])
+    })
+    .await;
+    let (c, _) = client(&base);
+    let limits = SseLimits {
+        max_event: 1000,
+        ..SseLimits::default()
+    };
+    let resp = c.stream("/x/events", STREAM_CONNECT).await.unwrap();
+    let mut seen = Vec::new();
+    sse::read_events(resp, &limits, |v| {
+        let end = v["type"] == "EXECUTION_COMPLETED";
+        seen.push(v);
+        end
+    })
+    .await
+    .unwrap();
+    let types: Vec<_> = seen.iter().map(|v| v["type"].clone()).collect();
+    assert_eq!(types, [json!("NODE_STARTED"), json!("EXECUTION_COMPLETED")]);
+}
+
+#[tokio::test]
+async fn stream_times_out_when_server_never_answers() {
+    // 연결만 받고 아무것도 보내지 않는 서버.
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        loop {
+            held.push(l.accept().await.unwrap().0);
+        }
+    });
+    let (c, _) = client(&base);
+    let started = std::time::Instant::now();
+    let r = tokio::time::timeout(
+        Duration::from_secs(5),
+        c.stream("/x/events", Duration::from_millis(300)),
+    )
+    .await
+    .expect("헤더 대기 상한이 없음");
+    assert!(matches!(r, Err(WebError::Network(_))), "{r:?}");
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+/// 이벤트를 계속 흘리는 SSE — 구독 작업이 멈췄는지는 받은 이벤트 수가 더 늘지 않는지로 본다.
+fn endless() -> Resp {
+    Resp::Sse((0..600).map(|_| (50, ev("NODE_STARTED"))).collect())
+}
+
+fn event_count(got: &Arc<Mutex<Vec<Value>>>) -> usize {
+    got.lock()
+        .unwrap()
+        .iter()
+        .filter(|v| v.get("event").is_some())
+        .count()
+}
+
+async fn assert_stopped(got: &[&Arc<Mutex<Vec<Value>>>]) {
+    // abort는 다음 await에서 걸리므로 이미 받은 조각만큼은 더 올 수 있다.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let before: Vec<_> = got.iter().map(|g| event_count(g)).collect();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let after: Vec<_> = got.iter().map(|g| event_count(g)).collect();
+    assert_eq!(before, after);
+}
+
+#[tokio::test]
+async fn dropped_watches_stop() {
+    let (base, _) = serve(|_| endless()).await;
+    let (c, _) = client(&base);
+    let w = Watches::new(fast());
+    let id = |n: u32| format!("22222222-2222-4222-8222-{n:012}");
+    let (a, ea) = sink();
+    let (b, eb) = sink();
+    w.watch(c.clone(), WF, &id(1), ea).unwrap();
+    w.watch(c.clone(), WF, &id(2), eb).unwrap();
+    wait_until(|| event_count(&a) > 0 && event_count(&b) > 0).await;
+    w.unwatch(&id(2));
+    // 3~7번을 더하면 가장 오래된 1번이 밀려난다.
+    for n in 3..=7 {
+        w.watch(c.clone(), WF, &id(n), sink().1).unwrap();
+    }
+    assert!(!w.active().contains(&id(1)));
+    assert_stopped(&[&a, &b]).await;
+    // 밀려난 구독은 화면에 알리고, 직접 해제한 구독은 알리지 않는다.
+    assert!(
+        a.lock()
+            .unwrap()
+            .contains(&json!({"executionId": id(1), "stopped": true}))
+    );
+    assert!(b.lock().unwrap().iter().all(|v| v.get("stopped").is_none()));
+}
+
+#[tokio::test]
+async fn clear_stops_all_watches() {
+    let (base, _) = serve(|_| endless()).await;
+    let (c, _) = client(&base);
+    let w = Watches::new(fast());
+    let id = |n: u32| format!("22222222-2222-4222-8222-{n:012}");
+    let (a, ea) = sink();
+    let (b, eb) = sink();
+    w.watch(c.clone(), WF, &id(1), ea).unwrap();
+    w.watch(c, WF, &id(2), eb).unwrap();
+    wait_until(|| event_count(&a) > 0 && event_count(&b) > 0).await;
+    w.clear();
+    assert!(w.active().is_empty());
+    assert_stopped(&[&a, &b]).await;
 }
 
 #[tokio::test]

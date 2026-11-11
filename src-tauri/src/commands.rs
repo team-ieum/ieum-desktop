@@ -144,16 +144,18 @@ pub fn get_settings(sup: State<'_, Supervisor>) -> Result<Settings, String> {
     sup.store().get_settings()
 }
 
-/// 자동 시작이 바뀌면 로그인 항목도 켜고 끈다. 서버 주소가 바뀌면 세션을 지운다.
+/// 자동 시작이 바뀌면 로그인 항목도 켜고 끈다. 서버 주소가 바뀌면 세션을 지우고 구독도 해제한다.
 #[tauri::command]
 pub fn set_settings(
     app: AppHandle,
     sup: State<'_, Supervisor>,
     keys: State<'_, Keys>,
+    watches: State<'_, Watches>,
     s: Settings,
 ) -> Result<(), String> {
     web::validate_server_url(&s.server_url)?;
-    if s.autostart != sup.store().get_settings()?.autostart {
+    let old = sup.store().get_settings()?;
+    if s.autostart != old.autostart {
         let launch = app.autolaunch();
         let r = if s.autostart {
             launch.enable()
@@ -162,7 +164,11 @@ pub fn set_settings(
         };
         r.map_err(|e| format!("자동 시작을 바꾸지 못했어요: {e}"))?;
     }
-    web::save_settings(sup.store(), keys.0.as_ref(), s).map(|_| ())
+    let saved = web::save_settings(sup.store(), keys.0.as_ref(), s)?;
+    if saved.server_url != old.server_url {
+        watches.clear();
+    }
+    Ok(())
 }
 
 fn be_client(sup: &Supervisor, keys: &Keys) -> Result<BeClient, WebError> {
@@ -182,7 +188,12 @@ pub async fn web_login(
 }
 
 #[tauri::command]
-pub async fn web_logout(sup: State<'_, Supervisor>, keys: State<'_, Keys>) -> Result<(), WebError> {
+pub async fn web_logout(
+    sup: State<'_, Supervisor>,
+    keys: State<'_, Keys>,
+    watches: State<'_, Watches>,
+) -> Result<(), WebError> {
+    watches.clear();
     be_client(&sup, &keys)?.logout().await
 }
 

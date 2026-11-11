@@ -219,6 +219,28 @@ async fn expired_access_refreshes_once() {
     );
 }
 
+/// 실제 BE 모양 401(JWT 진입점·만료)은 외부 연동 만료가 아니라 이음 세션 경로(갱신)다.
+#[tokio::test]
+async fn be_session_401_codes_refresh() {
+    for code in ["UNAUTHORIZED", "TOKEN_EXPIRED"] {
+        let (base, log) = serve(move |r| match (r.line.as_str(), r.auth.as_deref()) {
+            ("GET /api/v1/workflows", Some("Bearer old")) => {
+                (401, json!({"success": false, "code": code}))
+            }
+            ("GET /api/v1/workflows", Some("Bearer acc-2")) => ok(json!([1])),
+            ("POST /api/v1/auth/refresh", _) => ok(tokens("acc-2", "ref-2")),
+            _ => (400, json!({})),
+        })
+        .await;
+        let keys = Arc::new(FakeKeys::default());
+        put_session(&keys, &base, "old", "ref-1");
+        let client = BeClient::new(&base, keys.clone()).unwrap();
+        let got: Vec<i32> = client.get("/api/v1/workflows").await.unwrap();
+        assert_eq!(got, vec![1], "{code}");
+        assert!(lines(&log).contains(&"POST /api/v1/auth/refresh".to_string()));
+    }
+}
+
 #[tokio::test]
 async fn refresh_failure_clears_session() {
     // 갱신이 거절되면 세션을 지운다.

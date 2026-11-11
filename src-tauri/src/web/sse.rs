@@ -7,7 +7,7 @@ use reqwest::Response;
 use serde_json::Value;
 use tokio::time::{Instant, timeout, timeout_at};
 
-use super::client::{WebError, net};
+use super::client::{STREAM_CONNECT, WebError, net};
 
 #[derive(Debug, Clone)]
 pub struct SseLimits {
@@ -15,8 +15,10 @@ pub struct SseLimits {
     pub idle: Duration,
     /// 이벤트 1건 `data` 최대 바이트 — 넘으면 버린다.
     pub max_event: usize,
-    /// 연결 하나의 전체 시간.
+    /// 연결 하나의 전체 시간(구독은 재연결을 합쳐 이 시간까지).
     pub total: Duration,
+    /// 연결부터 응답 헤더까지(`BeClient::stream`).
+    pub connect: Duration,
 }
 
 impl Default for SseLimits {
@@ -25,6 +27,7 @@ impl Default for SseLimits {
             idle: Duration::from_secs(90),
             max_event: 256 * 1024,
             total: Duration::from_secs(30 * 60),
+            connect: STREAM_CONNECT,
         }
     }
 }

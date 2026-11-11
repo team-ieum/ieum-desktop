@@ -9,6 +9,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use tokio::task::AbortHandle;
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use super::client::{BeClient, WebError};
@@ -17,6 +18,8 @@ use super::sse::{self, SseLimits};
 pub const PAGE_SIZE: u32 = 20;
 /// 동시 구독 상한 — 넘으면 가장 오래된 구독을 끊는다.
 pub const MAX_WATCHES: usize = 5;
+/// 구독 하나의 재연결 상한 — BE 배포 전환 중 스냅샷 직후 닫히기를 반복할 때 헛돌지 않게.
+const MAX_RECONNECTS: usize = 30;
 
 /// BE `PageResponse`.
 #[derive(Debug, Clone, Serialize)]
@@ -131,13 +134,13 @@ pub async fn logs(
 }
 
 /// 화면으로 보내는 `web-exec-event` payload: `{executionId, event}`, 생중계를 못 이으면 `{executionId, logs}`
-/// 또는 `{executionId, error}`.
+/// 또는 `{executionId, error}`, 구독 상한으로 밀려나면 `{executionId, stopped: true}`.
 pub type Emit = Arc<dyn Fn(Value) + Send + Sync>;
 
 #[derive(Debug, Clone)]
 pub struct WatchConfig {
     pub limits: SseLimits,
-    /// 끊긴 뒤 1회 재연결까지 기다림.
+    /// 끊긴 뒤 재연결까지 기다림.
     pub reconnect_delay: Duration,
 }
 
@@ -154,6 +157,7 @@ struct Watch {
     execution_id: String,
     id: u64,
     task: AbortHandle,
+    emit: Emit,
 }
 
 #[derive(Default)]
@@ -198,12 +202,18 @@ impl Watches {
             && let Some(old) = g.watches.pop_front()
         {
             old.task.abort();
+            (old.emit)(json!({"executionId": old.execution_id, "stopped": true}));
         }
         g.next += 1;
         let id = g.next;
-        let (inner, cfg, ex2) = (self.inner.clone(), self.cfg.clone(), ex.clone());
+        let (inner, cfg, ex2, emit2) = (
+            self.inner.clone(),
+            self.cfg.clone(),
+            ex.clone(),
+            emit.clone(),
+        );
         let task = tokio::spawn(async move {
-            follow(&c, &wf, &ex2, &cfg, &emit).await;
+            follow(&c, &wf, &ex2, &cfg, &emit2).await;
             lock(&inner).watches.retain(|w| w.id != id);
         })
         .abort_handle();
@@ -211,6 +221,7 @@ impl Watches {
             execution_id: ex,
             id,
             task,
+            emit,
         });
         Ok(())
     }
@@ -227,6 +238,13 @@ impl Watches {
         }
     }
 
+    /// 전부 해제(로그아웃·서버 변경 — 옛 세션의 연결을 남기지 않는다).
+    pub fn clear(&self) {
+        for w in lock(&self.inner).watches.drain(..) {
+            w.task.abort();
+        }
+    }
+
     /// 구독 중인 실행 id(오래된 순).
     pub fn active(&self) -> Vec<String> {
         lock(&self.inner)
@@ -237,28 +255,47 @@ impl Watches {
     }
 }
 
-/// SSE를 받아 넘긴다. 끝 이벤트면 끝. 끊기면 한 번만 다시 붙고, 그래도 끝나지 않으면 `logs`로 최종 상태만.
+/// SSE를 받아 넘긴다. 끝 이벤트면 끝. 끊기면 다시 붙는다 — BE가 연결마다 스냅샷(끝난 실행이면 끝 이벤트까지)을
+/// 다시 보내므로 재연결이 곧 상태 조회다. 연결 실패 2연속·전체 `limits.total`·재연결 `MAX_RECONNECTS`회에 닿으면
+/// `logs`로 최종 상태만.
 async fn follow(c: &BeClient, wf: &str, ex: &str, cfg: &WatchConfig, emit: &Emit) {
     let path = format!("/api/v1/workflows/{wf}/executions/{ex}/events");
-    for attempt in 0..2 {
+    let deadline = Instant::now() + cfg.limits.total;
+    let mut fails = 0;
+    for attempt in 0..=MAX_RECONNECTS {
         if attempt > 0 {
             tokio::time::sleep(cfg.reconnect_delay).await;
         }
-        let r = match c.stream(&path).await {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let r = match c.stream(&path, cfg.limits.connect).await {
             Ok(resp) => {
-                sse::read_events(resp, &cfg.limits, |event| {
+                fails = 0;
+                let limits = SseLimits {
+                    total: left,
+                    ..cfg.limits.clone()
+                };
+                sse::read_events(resp, &limits, |event| {
                     let end = event["type"] == "EXECUTION_COMPLETED";
                     emit(json!({"executionId": ex, "event": event}));
                     end
                 })
                 .await
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                fails += 1;
+                Err(e)
+            }
         };
         match r {
             Ok(true) => return,
             Ok(false) => eprintln!("[ieum] 실행 생중계가 끝 이벤트 없이 닫혔어요."),
             Err(e) => eprintln!("[ieum] 실행 생중계가 끊겼어요: {e}"),
+        }
+        if fails >= 2 {
+            break;
         }
     }
     match logs(c, wf, ex).await {
