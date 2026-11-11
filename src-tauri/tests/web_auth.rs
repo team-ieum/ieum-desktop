@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ieum_desktop_lib::store::{Settings, Store};
 use ieum_desktop_lib::web::{
@@ -104,18 +105,35 @@ fn tokens(access: &str, refresh: &str) -> Value {
 
 /// 요청마다 `route`가 고른 응답을 보내는 가짜 서버.
 async fn serve(route: impl Fn(&Req) -> (u16, Value) + Send + Sync + 'static) -> (String, Log) {
+    serve_slow("", Duration::ZERO, route).await
+}
+
+/// `slow_line` 요청만 `delay` 뒤에 응답한다. 연결마다 따로 처리(동시 요청 가능).
+async fn serve_slow(
+    slow_line: &'static str,
+    delay: Duration,
+    route: impl Fn(&Req) -> (u16, Value) + Send + Sync + 'static,
+) -> (String, Log) {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", l.local_addr().unwrap());
     let log: Log = Arc::default();
     let seen = log.clone();
+    let route = Arc::new(route);
     tokio::spawn(async move {
         loop {
             let (mut sock, _) = l.accept().await.unwrap();
-            let req = read_request(&mut sock).await;
-            let (status, body) = route(&req);
-            seen.lock().unwrap().push(req);
-            let _ = sock.write_all(http(status, &body).as_bytes()).await;
-            let _ = sock.shutdown().await;
+            let (seen, route) = (seen.clone(), route.clone());
+            tokio::spawn(async move {
+                let req = read_request(&mut sock).await;
+                let (status, body) = route(&req);
+                let slow = req.line == slow_line;
+                seen.lock().unwrap().push(req);
+                if slow {
+                    tokio::time::sleep(delay).await;
+                }
+                let _ = sock.write_all(http(status, &body).as_bytes()).await;
+                let _ = sock.shutdown().await;
+            });
         }
     });
     (base, log)
@@ -365,15 +383,202 @@ fn changing_server_clears_session() {
     );
 
     let other = Settings {
-        server_url: "https://other.example".into(),
+        server_url: "http://localhost:8080".into(),
         ..s
     };
     save_settings(&store, &keys, other).unwrap();
     assert!(keys.session().is_none());
     assert_eq!(
         store.get_settings().unwrap().server_url,
-        "https://other.example"
+        "http://localhost:8080"
     );
+}
+
+#[test]
+fn server_url_allowlist_only() {
+    // 같은 서버의 다른 표기는 정규형으로 허용.
+    for ok in [
+        "HTTPS://GREEN.KIACMS.CO.KR",
+        "https://Green.Kiacms.Co.Kr/",
+        "https://green.kiacms.co.kr:443",
+    ] {
+        assert_eq!(
+            validate_server_url(ok).unwrap(),
+            "https://green.kiacms.co.kr",
+            "{ok}"
+        );
+    }
+    assert_eq!(
+        validate_server_url("HTTP://LOCALHOST:3000").unwrap(),
+        "http://localhost:3000"
+    );
+    assert!(validate_server_url("http://127.0.0.1:9").is_ok());
+    for bad in [
+        "https://green.kiacms.co.kr.evil.com",
+        "https://evil.com#@green.kiacms.co.kr",
+        "https://evil.com\\@green.kiacms.co.kr",
+        "https://green.kiacms.co.kr.",
+        "https://green.kiacms.co.kr:8443",
+        "https://evilgreen.kiacms.co.kr",
+        "https://attacker.example",
+        "https://localhost:8080",
+        "https://127.0.0.1:8080",
+    ] {
+        assert!(validate_server_url(bad).is_err(), "{bad}");
+    }
+
+    // 설정 저장도, 클라이언트(로그인 포함)도 거부.
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let keys = Arc::new(FakeKeys::default());
+    let bad = Settings {
+        server_url: "https://attacker.example".into(),
+        ..Settings::default()
+    };
+    assert!(save_settings(&store, keys.as_ref(), bad).is_err());
+    assert_eq!(
+        store.get_settings().unwrap().server_url,
+        "https://green.kiacms.co.kr"
+    );
+    assert!(BeClient::new("https://attacker.example", keys).is_err());
+}
+
+#[tokio::test]
+async fn logout_during_refresh_does_not_resurrect() {
+    let (base, _) = serve_slow(
+        "POST /api/v1/auth/refresh",
+        Duration::from_millis(500),
+        |r| match (r.line.as_str(), r.auth.as_deref()) {
+            ("GET /api/v1/workflows", Some("Bearer old")) => (401, json!({"success": false})),
+            ("GET /api/v1/workflows", _) => ok(json!([1])),
+            ("POST /api/v1/auth/refresh", _) => ok(tokens("acc-2", "ref-2")),
+            _ => ok(Value::Null),
+        },
+    )
+    .await;
+    let keys = Arc::new(FakeKeys::default());
+    put_session(&keys, &base, "old", "ref-1");
+    let client = BeClient::new(&base, keys.clone()).unwrap();
+    let pending = tokio::spawn(async move { client.get::<Value>("/api/v1/workflows").await });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let other = BeClient::new(&base, keys.clone()).unwrap();
+    other.logout().await.unwrap();
+    assert!(keys.session().is_none());
+
+    let err = pending.await.unwrap().unwrap_err();
+    assert!(matches!(err, WebError::AuthExpired), "{err:?}");
+    assert!(keys.session().is_none(), "로그아웃 뒤 세션이 되살아남");
+}
+
+#[tokio::test]
+async fn logout_during_login_does_not_resurrect() {
+    let (base, _) = serve_slow(
+        "POST /api/v1/auth/login",
+        Duration::from_millis(500),
+        |_| ok(tokens("acc-1", "ref-1")),
+    )
+    .await;
+    let keys = Arc::new(FakeKeys::default());
+    let client = BeClient::new(&base, keys.clone()).unwrap();
+    let pending = tokio::spawn(async move { client.login("a@b.c", PASSWORD).await });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    BeClient::new(&base, keys.clone())
+        .unwrap()
+        .logout()
+        .await
+        .unwrap();
+
+    assert!(pending.await.unwrap().is_err());
+    assert!(keys.session().is_none(), "로그아웃 뒤 세션이 되살아남");
+}
+
+#[tokio::test]
+async fn login_400_is_auth_failed() {
+    // 실제 BE는 비밀번호 오류에 400을 준다.
+    let (base, _) = serve(|_| (400, json!({"success": false, "code": "INVALID_PASSWORD"}))).await;
+    let keys = Arc::new(FakeKeys::default());
+    let err = BeClient::new(&base, keys.clone())
+        .unwrap()
+        .login("a@b.c", PASSWORD)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "AUTH_FAILED");
+    assert!(keys.session().is_none());
+}
+
+#[tokio::test]
+async fn login_429_is_auth_locked() {
+    let (base, _) = serve(|_| (429, json!({"success": false, "code": "LOGIN_LOCKED"}))).await;
+    let keys = Arc::new(FakeKeys::default());
+    let err = BeClient::new(&base, keys.clone())
+        .unwrap()
+        .login("a@b.c", PASSWORD)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "AUTH_LOCKED");
+    assert_eq!(
+        serde_json::to_value(&err).unwrap(),
+        json!({"code": "AUTH_LOCKED"})
+    );
+    assert_eq!(
+        err.to_string(),
+        "로그인 시도가 많아 잠시 잠겼어요. 나중에 다시 시도해 주세요."
+    );
+    assert!(keys.session().is_none());
+}
+
+#[tokio::test]
+async fn concurrent_401_refreshes_once() {
+    let (base, log) = serve_slow(
+        "POST /api/v1/auth/refresh",
+        Duration::from_millis(300),
+        |r| match (r.line.as_str(), r.auth.as_deref()) {
+            ("GET /api/v1/workflows", Some("Bearer old")) => (401, json!({"success": false})),
+            ("GET /api/v1/workflows", Some("Bearer acc-2")) => ok(json!([1])),
+            ("POST /api/v1/auth/refresh", _) if r.body == json!({"refreshToken": "ref-1"}) => {
+                ok(tokens("acc-2", "ref-2"))
+            }
+            _ => (401, json!({"success": false})),
+        },
+    )
+    .await;
+    let keys = Arc::new(FakeKeys::default());
+    put_session(&keys, &base, "old", "ref-1");
+    let client = BeClient::new(&base, keys.clone()).unwrap();
+
+    let (a, b) = tokio::join!(
+        client.get::<Vec<i32>>("/api/v1/workflows"),
+        client.get::<Vec<i32>>("/api/v1/workflows")
+    );
+    assert_eq!((a.unwrap(), b.unwrap()), (vec![1], vec![1]));
+    let refreshes = lines(&log)
+        .iter()
+        .filter(|l| *l == "POST /api/v1/auth/refresh")
+        .count();
+    assert_eq!(refreshes, 1, "{:?}", lines(&log));
+    assert_eq!(keys.session().unwrap()["refreshToken"], "ref-2");
+}
+
+#[tokio::test]
+async fn session_for_other_server_ignored() {
+    let (base, log) = serve(|_| ok(json!([1]))).await;
+    let keys = Arc::new(FakeKeys::default());
+    put_session(
+        &keys,
+        "https://green.kiacms.co.kr",
+        "acc-other",
+        "ref-other",
+    );
+    let client = BeClient::new(&base, keys.clone()).unwrap();
+
+    assert!(client.account().is_none());
+    let err = client.get::<Value>("/api/v1/workflows").await.unwrap_err();
+    assert!(matches!(err, WebError::AuthExpired), "{err:?}");
+    // 다른 서버의 토큰은 보내지 않고 지운다.
+    assert!(lines(&log).is_empty());
+    assert!(keys.session().is_none());
 }
 
 #[test]

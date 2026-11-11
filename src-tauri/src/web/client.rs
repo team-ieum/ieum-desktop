@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::auth::{
-    Session, WebAccount, clear_session, load_session, store_session, validate_server_url,
+    Session, WebAccount, clear_session, end_session, load_session, session_generation,
+    store_session_if, validate_server_url,
 };
 
 pub const TIMEOUT: Duration = Duration::from_secs(15);
@@ -21,11 +22,12 @@ pub const MAX_BODY: usize = 1024 * 1024;
 /// 동시에 여러 요청이 401을 받아도 갱신은 한 번만(갱신 토큰이 회전돼도 서로 지우지 않게).
 static REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// 화면용 에러 코드 `AUTH_FAILED`·`AUTH_EXPIRED`·`NETWORK`·`SERVER`. 직렬화 = `{code, message?}`.
+/// 화면용 에러 코드 `AUTH_FAILED`·`AUTH_LOCKED`·`AUTH_EXPIRED`·`NETWORK`·`SERVER`. 직렬화 = `{code, message?}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "code", content = "message", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum WebError {
     AuthFailed,
+    AuthLocked,
     AuthExpired,
     Network(String),
     Server(String),
@@ -35,6 +37,7 @@ impl WebError {
     pub fn code(&self) -> &'static str {
         match self {
             WebError::AuthFailed => "AUTH_FAILED",
+            WebError::AuthLocked => "AUTH_LOCKED",
             WebError::AuthExpired => "AUTH_EXPIRED",
             WebError::Network(_) => "NETWORK",
             WebError::Server(_) => "SERVER",
@@ -46,6 +49,9 @@ impl fmt::Display for WebError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             WebError::AuthFailed => f.write_str("이메일 또는 비밀번호가 맞지 않아요."),
+            WebError::AuthLocked => {
+                f.write_str("로그인 시도가 많아 잠시 잠겼어요. 나중에 다시 시도해 주세요.")
+            }
             WebError::AuthExpired => f.write_str("로그인이 만료됐어요. 다시 로그인해 주세요."),
             WebError::Network(m) => write!(f, "서버에 연결하지 못했어요: {m}"),
             WebError::Server(m) => write!(f, "서버 오류: {m}"),
@@ -149,10 +155,14 @@ impl BeClient {
     }
 
     pub async fn login(&self, email: &str, password: &str) -> Result<WebAccount, WebError> {
+        let generation = session_generation(&self.base);
         let body = json!({"email": email, "password": password});
         let r = self
             .send(Method::POST, "/api/v1/auth/login", None, Some(body))
             .await?;
+        if r.status() == StatusCode::TOO_MANY_REQUESTS {
+            return Err(WebError::AuthLocked);
+        }
         if r.status().is_client_error() {
             return Err(WebError::AuthFailed);
         }
@@ -163,7 +173,10 @@ impl BeClient {
             access_token: t.access_token,
             refresh_token: t.refresh_token,
         };
-        store_session(self.keys.as_ref(), &s).map_err(WebError::Server)?;
+        // 그사이 로그아웃·서버 변경이 있었으면 저장하지 않는다.
+        if !store_session_if(self.keys.as_ref(), &s, generation).map_err(WebError::Server)? {
+            return Err(WebError::AuthExpired);
+        }
         Ok(WebAccount {
             email: s.email,
             server_url: s.server_url,
@@ -178,7 +191,7 @@ impl BeClient {
                 .send(Method::POST, "/api/v1/auth/logout", None, Some(body))
                 .await;
         }
-        clear_session(self.keys.as_ref()).map_err(WebError::Server)
+        end_session(self.keys.as_ref(), &self.base).map_err(WebError::Server)
     }
 
     /// `path`는 `/`로 시작(`/api/v1/...`). 401이면 갱신 1회 후 재시도, 또 401이면 세션 삭제 + `AuthExpired`.
@@ -216,6 +229,7 @@ impl BeClient {
     /// `failed`(거절된 접근 토큰)를 이미 다른 요청이 갱신했으면 그 세션을 쓴다.
     async fn refresh(&self, failed: &str) -> Result<Session, WebError> {
         let _one = REFRESH.lock().await;
+        let generation = session_generation(&self.base);
         let mut s = self.session()?;
         if s.access_token != failed {
             return Ok(s);
@@ -231,7 +245,9 @@ impl BeClient {
         let t: Tokens = data(r).await?;
         s.access_token = t.access_token;
         s.refresh_token = t.refresh_token;
-        store_session(self.keys.as_ref(), &s).map_err(WebError::Server)?;
+        if !store_session_if(self.keys.as_ref(), &s, generation).map_err(WebError::Server)? {
+            return Err(WebError::AuthExpired);
+        }
         Ok(s)
     }
 
