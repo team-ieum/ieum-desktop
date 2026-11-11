@@ -153,17 +153,10 @@ fn strip_delimiters(s: &str) -> String {
     }
 }
 
-/// claude CLI(2.1.322 실측)는 줄 처음·공백(JS `\s`) 뒤 `@경로`를 파일 첨부로 푼다(`--tools ""` 우회).
-/// 그 자리 `@`만 전각 `＠`로 바꾼다 — 단어 중간(메일 주소)·따옴표 뒤는 풀리지 않아 그대로 둔다.
+/// claude CLI(2.1.322 실측)는 줄 처음·공백·`。、？！` 뒤 `@경로`를 파일 첨부로 푼다(`--tools ""` 우회).
+/// 경계 규칙은 CLI 업데이트로 늘 수 있어 따라가지 않고 `@`를 전부 전각 `＠`로 바꾼다(메일 주소 포함).
 fn defuse_mentions(s: &str) -> String {
-    let mut prev = None;
-    s.chars()
-        .map(|c| {
-            let at_start = prev.is_none_or(|p: char| p.is_whitespace() || p == '\u{feff}');
-            prev = Some(c);
-            if c == '@' && at_start { '＠' } else { c }
-        })
-        .collect()
+    s.replace('@', "＠")
 }
 
 /// 프롬프트 = 지시 + (파일·추가 데이터가 있으면) 요청마다 새 구분선으로 감싼

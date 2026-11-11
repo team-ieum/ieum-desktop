@@ -7,17 +7,20 @@ import { useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
 import { BUTTON, PRIMARY } from "./Editor";
 
-const RUN_PILL: Record<RunStatus, string> = {
+const RUN_PILL: Record<RunStatus | "running", string> = {
   succeeded: "bg-main-light-blue text-main-deep-blue border-main-light-blue",
   failed: "bg-danger-100 text-danger-700 border-danger-300",
   rejected: "bg-danger-100 text-danger-700 border-danger-300",
   cancelled: "bg-neutral-white text-neutral-600 border-neutral-300",
+  running: "bg-neutral-white text-main-deep-blue border-main-light-blue",
 };
 
-function RunPill({ status }: { status: RunStatus }) {
+/** 끝 시각 없는 기록은 실행 도중 저장된 것 — 저장된 status(cancelled)가 아니라 "실행 중"으로 보인다. */
+export function RunPill({ status, finishedAt }: { status: RunStatus; finishedAt: string }) {
+  const s = finishedAt ? status : "running";
   return (
-    <span className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 typo-caption1_semibold ${RUN_PILL[status]}`}>
-      {t(`status.${status}`)}
+    <span className={`inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 typo-caption1_semibold ${RUN_PILL[s]}`}>
+      {t(`status.${s}`)}
     </span>
   );
 }
@@ -88,7 +91,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
           <ArrowLeft size={16} aria-hidden="true" />
         </button>
         <h1 className="min-w-0 flex-1 truncate typo-title3_bold text-neutral-800">{wf?.name ?? t("history.deletedWorkflow")}</h1>
-        {run && <RunPill status={run.run.status} />}
+        {run && <RunPill status={run.run.status} finishedAt={run.finishedAt} />}
       </header>
       {error && <p className="typo-body3_regular text-danger-700">{error}</p>}
       {!run ? (
@@ -191,7 +194,7 @@ export function History() {
                 className="flex w-full items-center gap-3 rounded-brand-md border border-neutral-200 bg-white px-4 py-3 text-left hover:border-main-blue"
                 onClick={() => setOpenId(r.runId)}
               >
-                <RunPill status={r.status} />
+                <RunPill status={r.status} finishedAt={r.finishedAt} />
                 <span className="min-w-0 flex-1 truncate typo-body2_semibold text-neutral-800">
                   {names.find((w) => w.id === r.workflowId)?.name ?? t("history.deletedWorkflow")}
                 </span>

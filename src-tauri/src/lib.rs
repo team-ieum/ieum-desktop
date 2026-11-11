@@ -163,6 +163,13 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 맨 먼저 등록(공식 문서): 두 번째 실행은 바로 끝나고 떠 있는 앱의 창을 보인다.
+        // 로그인 자동 시작(`--hidden`)으로 온 두 번째 실행은 창을 띄우지 않는다.
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !args.iter().any(|a| a == HIDDEN_ARG) {
+                tray::show_main(app);
+            }
+        }))
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec![HIDDEN_ARG]),

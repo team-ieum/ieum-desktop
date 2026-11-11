@@ -30,5 +30,6 @@
 | 전각·아랍 숫자 | `BigDecimal`이 숫자로 읽음 | 숫자 아님(판단 불가 → 거짓) | `crates/ieum-engine/tests/condition.rs` `gap_non_ascii_digits_are_not_numbers` |
 | chrono 범위 밖 날짜(연도 262143+) | ±999999999년까지 읽음 | 판단 불가(거짓), panic 없음 | `condition.rs` `far_future_rfc_date_does_not_panic` |
 | 분기 경고 문구 | 실행 detail에 실음 | 러너가 버림(`evaluate`에서만 보임) | `condition.rs` `gap_runner_drops_warnings` |
+| AI `outputFields`(`ref: false` 목록) 속 참조 | 검증(agent)이 `outputFields`를 건너뜀 | 부모 `ref: false`를 자식에 전파해 `REF_NOT_ALLOWED`(보안 강화, 데스크톱 로컬 워크플로우 전용) | `crates/ieum-engine/tests/validate.rs` `ai_output_fields_refuse_refs` |
 
 실수 표기·이스케이프 차이는 참조식 치환 결과 문자열에만 나타난다(조건 비교는 `java_num`으로 Java 표기를 따른다). u64를 넘는 정수는 읽는 순간 f64가 되므로 조건 비교에도 나타난다.

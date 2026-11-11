@@ -496,7 +496,7 @@ impl Supervisor {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let emit = self.0.deps.emit.clone();
         let forward = async {
-            let (mut run_id, mut saved_ops) = (String::new(), 0);
+            let (mut run_id, mut saved_ops, mut finished) = (String::new(), 0, None);
             while let Some(event) = rx.recv().await {
                 if let ExecEvent::RunStarted { run_id: r } = &event {
                     run_id = r.clone();
@@ -518,13 +518,19 @@ impl Supervisor {
                         eprintln!("[ieum] 실행 도중 기록을 쓰지 못했어요: {e}");
                     }
                 }
+                // 끝 이벤트는 최종 저장 뒤에 내보낸다 — 화면이 받자마자 기록을 다시 읽는다.
+                if matches!(event, ExecEvent::RunFinished { .. }) {
+                    finished = Some(event);
+                    continue;
+                }
                 emit(AppEvent::Exec {
                     workflow_id: workflow_id.to_string(),
                     event,
                 });
             }
+            finished
         };
-        let (run, ()) = tokio::join!(
+        let (run, finished) = tokio::join!(
             run_workflow(
                 &wf.workflow,
                 &self.0.catalog,
@@ -536,7 +542,14 @@ impl Supervisor {
             forward
         );
         let stored = stored(run, now());
-        self.store().save_run(&stored)?;
+        let saved = self.store().save_run(&stored);
+        if let Some(event) = finished {
+            emit(AppEvent::Exec {
+                workflow_id: workflow_id.to_string(),
+                event,
+            });
+        }
+        saved?;
         Ok(stored.run.run_id)
     }
 

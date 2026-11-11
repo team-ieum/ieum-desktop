@@ -28,6 +28,7 @@ tokio = { version = "1.54.1", default-features = false, features = ["sync", "rt"
 tokio-util = "0.7.20"
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
 uuid = { version = "1.29.2", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 tauri-plugin-updater = "2"

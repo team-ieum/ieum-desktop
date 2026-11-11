@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{AppEvent, Deps, QUEUE_CAP, Supervisor, WatchState};
-use ieum_engine::{NodeStatus, RunStatus, Workflow};
+use ieum_engine::{ExecEvent, NodeStatus, RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::{AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
 use serde_json::json;
@@ -597,6 +597,41 @@ async fn file_op_recorded_while_run_in_flight() {
     assert!(!run.finished_at.is_empty());
     assert_eq!(sup2.undo_run(&run_id).unwrap().restored.len(), 1);
     assert!(inbox.join("a.pdf").exists());
+}
+
+/// 재리뷰 N-2: 화면이 `runFinished`를 받고 곧장 기록을 읽어도 도중 기록(중단됨·끝 시각 없음)이 아니라 최종 기록이다.
+#[tokio::test(flavor = "multi_thread")]
+async fn run_finished_emitted_after_final_save() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let id = save(&env, move_wf(&inbox, &out), false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (store, s) = (env.store.clone(), seen.clone());
+    let sup = Supervisor::start(Deps {
+        store: env.store.clone(),
+        home: env.root.clone(),
+        trash_dir: env.root.join("trash"),
+        ai: Arc::new(AiRunner::empty().with_provider("fake", env.ai.clone())),
+        emit: Arc::new(move |e| {
+            if let AppEvent::Exec {
+                event: ExecEvent::RunFinished { .. },
+                workflow_id,
+            } = e
+            {
+                let list = store.list_runs(Some(&workflow_id)).unwrap();
+                s.lock().unwrap().extend(
+                    list.into_iter()
+                        .map(|r| (r.status, r.finished_at.is_empty())),
+                );
+            }
+        }),
+        timing: WatchTiming::default(),
+        recheck: Duration::from_secs(30),
+    })
+    .unwrap();
+    sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    assert_eq!(*seen.lock().unwrap(), [(RunStatus::Succeeded, false)]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
