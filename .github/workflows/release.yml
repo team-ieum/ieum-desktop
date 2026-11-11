@@ -14,11 +14,15 @@ jobs:
   build-macos:
     runs-on: macos-14
     steps:
+      # 카탈로그(공개 레포)는 서브모듈 — 엔진·화면이 컴파일 때 읽는다. 토큰은 .git/config에 남기지 않는다.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          submodules: true
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: lts/*
+          node-version: "22"
           cache: npm
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -29,8 +33,10 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      - run: npm ci
+      # 의존성 설치 스크립트는 돌리지 않는다(fsevents는 미리 빌드된 바이너리를 쓴다).
+      - run: npm ci --ignore-scripts
 
+      # 서명 비밀은 이 단계에만 — job·workflow env에 두지 않는다.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use ieum_engine::{
-    BuiltinRunners, Catalog, ExecEvent, NodeRunner, Runners, ValidationError, Workflow,
-    run_workflow, validate,
+    BuiltinRunners, Catalog, ExecEvent, NodeRunner, RunResult, RunStatus, Runners, ValidationError,
+    Workflow, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
 use ieum_local::{
@@ -91,6 +91,8 @@ type Reply = oneshot::Sender<Result<String, String>>;
 
 struct Job {
     trigger: Map<String, Value>,
+    /// 감시가 보낸 일이면 그 감시 폴더. 시험 실행(`run_now`)은 None.
+    folder: Option<PathBuf>,
     reply: Option<Reply>,
 }
 
@@ -145,6 +147,9 @@ impl Supervisor {
         let catalog = Catalog::embedded().map_err(|e| format!("노드 정의를 읽지 못했어요: {e}"))?;
         let rt = Handle::try_current().map_err(|e| e.to_string())?;
         let every = deps.recheck;
+        if let Err(e) = deps.store.close_unfinished_runs() {
+            eprintln!("[ieum] 끝나지 않은 실행 기록을 닫지 못했어요: {e}");
+        }
         let sup = Supervisor(Arc::new(Inner {
             deps,
             catalog,
@@ -319,11 +324,15 @@ impl Supervisor {
         )
         .map_err(|e| e.to_string())?;
         // 감시를 drop하면 송신자가 사라져 이 작업도 끝난다.
-        let (weak, id) = (Arc::downgrade(&self.0), id.to_string());
+        let (weak, id, dir) = (
+            Arc::downgrade(&self.0),
+            id.to_string(),
+            folder.to_path_buf(),
+        );
         self.0.rt.spawn(async move {
             while let Some(f) = rx.recv().await {
                 let Some(inner) = weak.upgrade() else { break };
-                Supervisor(inner).enqueue(&id, trigger_output(&f));
+                Supervisor(inner).enqueue(&id, &dir, trigger_output(&f));
             }
         });
         Ok((watcher, ino))
@@ -363,12 +372,13 @@ impl Supervisor {
         }
     }
 
-    /// 실행 줄에 넣는다. 같은 워크플로우는 한 번에 하나씩 돈다.
-    pub fn enqueue(&self, workflow_id: &str, trigger: Map<String, Value>) {
+    /// 감시 폴더 `folder`에서 온 트리거를 실행 줄에 넣는다. 같은 워크플로우는 한 번에 하나씩 돈다.
+    pub fn enqueue(&self, workflow_id: &str, folder: &Path, trigger: Map<String, Value>) {
         self.push(
             workflow_id,
             Job {
                 trigger,
+                folder: Some(folder.to_path_buf()),
                 reply: None,
             },
         );
@@ -411,7 +421,7 @@ impl Supervisor {
                     }
                 }
             };
-            let result = self.run_one(workflow_id, job.trigger).await;
+            let result = self.run_one(workflow_id, job.folder, job.trigger).await;
             if let Err(e) = &result {
                 eprintln!("[ieum] 실행하지 못했어요: 워크플로우 {workflow_id}: {e}");
             }
@@ -421,13 +431,20 @@ impl Supervisor {
         }
     }
 
-    /// 실행 하나 → 기록 저장. run_id를 돌려준다.
+    /// 실행 하나 → 기록 저장. run_id를 돌려준다. 파일 작업이 생길 때마다 기록을 먼저 쓴다.
     async fn run_one(
         &self,
         workflow_id: &str,
+        folder: Option<PathBuf>,
         trigger: Map<String, Value>,
     ) -> Result<String, String> {
         let wf = self.store().get_workflow(workflow_id)?;
+        // 감시가 보낸 뒤 꺼졌거나 폴더가 바뀐 워크플로우의 늦은 트리거는 버린다.
+        if let Some(f) = folder
+            && trigger_folder(&wf) != Some(f)
+        {
+            return Err("꺼졌거나 감시 폴더가 바뀌어 늦게 온 트리거를 버렸어요.".into());
+        }
         // 저장 때 검사했지만 저장소에 직접 심은 정의도 막는다.
         self.check_folders(&wf.workflow)?;
         let roots = roots_for_workflow(&wf.workflow);
@@ -467,12 +484,42 @@ impl Supervisor {
         runners.extend(local.into_iter().map(|(k, v)| (k.to_string(), v)));
 
         let started_at = now();
+        let stored = |run: RunResult, finished_at: String| StoredRun {
+            run,
+            workflow_id: workflow_id.to_string(),
+            started_at: started_at.clone(),
+            finished_at,
+            file_ops: journal.ops(),
+            allowed_roots: roots.paths().to_vec(),
+            undo: None,
+        };
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let (emit, id) = (self.0.deps.emit.clone(), workflow_id.to_string());
-        let forward = async move {
+        let emit = self.0.deps.emit.clone();
+        let forward = async {
+            let (mut run_id, mut saved_ops) = (String::new(), 0);
             while let Some(event) = rx.recv().await {
+                if let ExecEvent::RunStarted { run_id: r } = &event {
+                    run_id = r.clone();
+                }
+                // 파일 작업이 생기면 끝나지 않은 기록(끝 시각 없음)으로 바로 쓴다 — 도중에 앱이 꺼져도 되돌릴 수 있게.
+                if journal.ops().len() > saved_ops {
+                    let partial = stored(
+                        RunResult {
+                            run_id: run_id.clone(),
+                            status: RunStatus::Cancelled,
+                            validation_errors: Vec::new(),
+                            reject_reason: None,
+                            nodes: Default::default(),
+                        },
+                        String::new(),
+                    );
+                    saved_ops = partial.file_ops.len();
+                    if let Err(e) = self.store().save_run(&partial) {
+                        eprintln!("[ieum] 실행 도중 기록을 쓰지 못했어요: {e}");
+                    }
+                }
                 emit(AppEvent::Exec {
-                    workflow_id: id.clone(),
+                    workflow_id: workflow_id.to_string(),
                     event,
                 });
             }
@@ -488,15 +535,7 @@ impl Supervisor {
             ),
             forward
         );
-        let stored = StoredRun {
-            run,
-            workflow_id: workflow_id.to_string(),
-            started_at,
-            finished_at: now(),
-            file_ops: journal.ops(),
-            allowed_roots: roots.paths().to_vec(),
-            undo: None,
-        };
+        let stored = stored(run, now());
         self.store().save_run(&stored)?;
         Ok(stored.run.run_id)
     }
@@ -537,6 +576,7 @@ impl Supervisor {
             workflow_id,
             Job {
                 trigger,
+                folder: None,
                 reply: Some(tx),
             },
         );
@@ -549,6 +589,10 @@ impl Supervisor {
         let mut run = self.store().get_run(run_id)?;
         if run.undo.is_some() {
             return Err("이미 되돌린 실행이에요.".into());
+        }
+        // 도는 중인 실행은 끝날 때 기록을 다시 쓴다(앱이 꺼졌던 기록은 시작 때 닫힌다).
+        if run.finished_at.is_empty() {
+            return Err("아직 끝나지 않은 실행이에요.".into());
         }
         // 기록이 심어졌어도 정책 밖 폴더에서는 움직이지 않는다.
         let roots = AllowedRoots::new(

@@ -1,0 +1,7 @@
+{
+  "source": "ieum-agent/core/validators/static_validator.py:190 (otherwise=stop이면 condition_branches에 else가 없어 'else' 연결은 EDGE_INVALID — nodeId는 출발 분기 노드)",
+  "validationErrors": [
+    {"nodeId": "c", "field": null, "code": "EDGE_INVALID"}
+  ],
+  "nodes": {}
+}

@@ -202,6 +202,17 @@ impl Store {
         read_json(&self.run_path(run_id)?)
     }
 
+    /// 끝 시각 없는 기록(실행 도중 앱이 꺼짐)을 중단됨으로 닫는다. 앱 시작 때 실행 전에 한 번.
+    pub fn close_unfinished_runs(&self) -> Result<(), String> {
+        let runs: Vec<StoredRun> = read_all(&self.root.join("runs"))?;
+        for mut r in runs.into_iter().filter(|r| r.finished_at.is_empty()) {
+            r.run.status = RunStatus::Cancelled;
+            r.finished_at = now();
+            self.save_run(&r)?;
+        }
+        Ok(())
+    }
+
     /// 최근 실행부터.
     // ponytail: 매번 기록 파일을 전부 읽는다 — 기록이 수천 개가 되면 요약 색인 파일
     pub fn list_runs(&self, workflow_id: Option<&str>) -> Result<Vec<RunSummary>, String> {

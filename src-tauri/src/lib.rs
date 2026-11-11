@@ -203,6 +203,13 @@ pub fn run() {
             commands::web_watch_execution,
             commands::web_unwatch_execution,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, e| {
+            // 닫기 = 숨기기라 Dock 아이콘·Finder로 다시 열면 숨긴 창을 보인다.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = e {
+                tray::show_main(app);
+            }
+        });
 }

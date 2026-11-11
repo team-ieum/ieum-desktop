@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{AppEvent, Deps, QUEUE_CAP, Supervisor, WatchState};
-use ieum_engine::{NodeStatus, Workflow};
+use ieum_engine::{NodeStatus, RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::{AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
 use serde_json::json;
@@ -193,10 +193,11 @@ async fn supervisor_runs_on_new_file() {
 #[tokio::test(flavor = "multi_thread")]
 async fn supervisor_queues_same_workflow() {
     let env = env();
-    let id = save(&env, ai_only_wf(&env.dir("in")), false);
+    let inbox = env.dir("in");
+    let id = save(&env, ai_only_wf(&inbox), true);
     for n in 0..3 {
         env.sup
-            .enqueue(&id, json!({"n": n}).as_object().unwrap().clone());
+            .enqueue(&id, &inbox, json!({"n": n}).as_object().unwrap().clone());
     }
     assert!(wait_until(Duration::from_secs(5), || runs(&env, &id) == 3).await);
     assert_eq!(env.ai.max_active.load(Ordering::SeqCst), 1);
@@ -211,10 +212,11 @@ async fn queue_cap_drops_oldest() {
         },
         Duration::from_secs(30),
     );
-    let id = save(&env, ai_only_wf(&env.dir("in")), false);
+    let inbox = env.dir("in");
+    let id = save(&env, ai_only_wf(&inbox), true);
     let job = |n: usize| json!({"n": n}).as_object().unwrap().clone();
 
-    env.sup.enqueue(&id, job(0));
+    env.sup.enqueue(&id, &inbox, job(0));
     assert!(
         wait_until(Duration::from_secs(5), || env
             .ai
@@ -225,7 +227,7 @@ async fn queue_cap_drops_oldest() {
     );
     // 0번이 도는 동안 QUEUE_CAP + 2개 → 가장 오래된 1·2번이 버려진다.
     for n in 1..=QUEUE_CAP + 2 {
-        env.sup.enqueue(&id, job(n));
+        env.sup.enqueue(&id, &inbox, job(n));
     }
     env.ai.gate.as_ref().unwrap().add_permits(1000);
     assert!(wait_until(Duration::from_secs(20), || runs(&env, &id) == QUEUE_CAP + 1).await);
@@ -452,10 +454,11 @@ async fn disabling_drops_queued_runs() {
         },
         Duration::from_secs(30),
     );
-    let id = save(&env, ai_only_wf(&env.dir("in")), true);
+    let inbox = env.dir("in");
+    let id = save(&env, ai_only_wf(&inbox), true);
     for n in 0..5 {
         env.sup
-            .enqueue(&id, json!({"n": n}).as_object().unwrap().clone());
+            .enqueue(&id, &inbox, json!({"n": n}).as_object().unwrap().clone());
     }
     assert!(
         wait_until(Duration::from_secs(5), || env
@@ -520,4 +523,154 @@ async fn journal_not_shared_between_runs() {
         let run_id = j.await.unwrap().unwrap();
         assert_eq!(env.store.get_run(&run_id).unwrap().file_ops.len(), 1);
     }
+}
+
+/// 감시가 보내는 것과 같은 트리거 출력.
+fn trigger(p: &Path) -> serde_json::Map<String, serde_json::Value> {
+    json!({"path": p, "name": p.file_name().unwrap().to_string_lossy(), "extension": "pdf", "size": 3})
+        .as_object()
+        .unwrap()
+        .clone()
+}
+
+/// 같은 앱 데이터로 앱을 다시 켠다.
+fn restart(env: &Env) -> Supervisor {
+    Supervisor::start(Deps {
+        store: env.store.clone(),
+        home: env.root.clone(),
+        trash_dir: env.root.join("trash"),
+        ai: Arc::new(AiRunner::empty()),
+        emit: Arc::new(|_| {}),
+        timing: WatchTiming::default(),
+        recheck: Duration::from_secs(30),
+    })
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn file_op_recorded_while_run_in_flight() {
+    let env = env_with(
+        FakeAi {
+            gate: Some(Semaphore::new(0)),
+            ..Default::default()
+        },
+        Duration::from_secs(30),
+    );
+    let inbox = env.dir("in");
+    // 트리거 → 이름 바꾸기 → AI(멈춤).
+    let wf: Workflow = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": inbox}},
+            {"id": "r", "type": "ACTION", "event": "local.file_rename", "config": {"path": "{{nodes.t.output.path}}", "newName": "renamed"}},
+            {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "fake", "prompt": "분류", "outputFields": [{"key": "folder", "type": "text"}]}}
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "r"}, {"id": "e2", "source": "r", "target": "a"}]
+    }))
+    .unwrap();
+    let id = save(&env, wf, false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let (sup, wid, f) = (env.sup.clone(), id.clone(), inbox.join("a.pdf"));
+    tokio::spawn(async move { sup.run_now(&wid, &f).await });
+    assert!(
+        wait_until(Duration::from_secs(5), || env
+            .ai
+            .calls
+            .load(Ordering::SeqCst)
+            == 1)
+        .await
+    );
+    assert!(inbox.join("renamed.pdf").exists());
+
+    // AI가 도는 동안에도 파일 작업이 기록에 있다.
+    let list = env.store.list_runs(Some(&id)).unwrap();
+    assert_eq!(list.len(), 1);
+    assert!(list[0].finished_at.is_empty());
+    let run_id = list[0].run_id.clone();
+    assert_eq!(env.store.get_run(&run_id).unwrap().file_ops.len(), 1);
+    // 도는 중인 실행은 되돌리지 않는다(끝날 때 기록을 다시 쓴다).
+    assert!(env.sup.undo_run(&run_id).is_err());
+
+    // 여기서 앱이 죽었다가 다시 켜지면: 끝나지 않은 기록은 중단됨으로 닫히고 되돌릴 수 있다.
+    let sup2 = restart(&env);
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.run.status, RunStatus::Cancelled);
+    assert!(!run.finished_at.is_empty());
+    assert_eq!(sup2.undo_run(&run_id).unwrap().restored.len(), 1);
+    assert!(inbox.join("a.pdf").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn late_trigger_after_disable_or_folder_change_dropped() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    // 감시 시작 전 파일은 감시가 보지 않는다.
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let id = save(&env, move_wf(&inbox, &out), true);
+
+    // 끈 뒤 늦게 도착한 트리거.
+    let mut wf = env.store.get_workflow(&id).unwrap();
+    wf.enabled = false;
+    env.sup.save_workflow(wf).unwrap();
+    env.sup.enqueue(&id, &inbox, trigger(&inbox.join("a.pdf")));
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert_eq!(runs(&env, &id), 0);
+
+    // 폴더를 바꾼 뒤 옛 폴더에서 늦게 도착한 트리거.
+    let other = env.dir("other");
+    let mut wf = env.store.get_workflow(&id).unwrap();
+    (wf.enabled, wf.workflow) = (true, move_wf(&other, &out));
+    env.sup.save_workflow(wf).unwrap();
+    env.sup.enqueue(&id, &inbox, trigger(&inbox.join("a.pdf")));
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert_eq!(runs(&env, &id), 0);
+    assert!(inbox.join("a.pdf").exists());
+    assert_eq!(env.ai.calls.load(Ordering::SeqCst), 0);
+
+    // 지금 폴더에서 온 트리거는 돈다.
+    fs::write(other.join("b.pdf"), "pdf").unwrap();
+    env.sup.enqueue(&id, &other, trigger(&other.join("b.pdf")));
+    assert!(wait_until(Duration::from_secs(5), || runs(&env, &id) == 1).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn planted_workflow_refused_at_run() {
+    let env = env();
+    let inbox = env.dir("in");
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    // 홈 자체를 옮길 곳으로 — 저장 검사를 거치지 않고 저장소에 직접 심는다.
+    let planted = env
+        .store
+        .save_workflow(StoredWorkflow {
+            id: String::new(),
+            name: "심음".into(),
+            enabled: true,
+            workflow: move_wf(&inbox, &env.root),
+            updated_at: String::new(),
+        })
+        .unwrap();
+    env.sup
+        .enqueue(&planted.id, &inbox, trigger(&inbox.join("a.pdf")));
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(runs(&env, &planted.id), 0);
+    assert!(inbox.join("a.pdf").exists());
+    assert_eq!(env.ai.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn undo_ignores_tampered_roots_outside_policy() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let id = save(&env, move_wf(&inbox, &out), false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+
+    // 기록의 허용 폴더를 홈 자체로 바꿔 심는다.
+    let mut run = env.store.get_run(&run_id).unwrap();
+    run.allowed_roots = vec![env.root.clone()];
+    env.store.save_run(&run).unwrap();
+
+    let report = env.sup.undo_run(&run_id).unwrap();
+    assert!(report.restored.is_empty(), "{report:?}");
+    assert!(out.join("sorted/a.pdf").exists());
+    assert!(!inbox.join("a.pdf").exists());
 }

@@ -114,7 +114,7 @@ const ko = {
   "status.failed": "실패",
   "status.skipped": "건너뜀",
   "status.notRun": "실행 안 됨",
-  "status.cancelled": "취소됨",
+  "status.cancelled": "중단됨",
   "status.rejected": "거부됨",
 
   "history.title": "실행 기록",
@@ -350,7 +350,7 @@ const en: Record<Key, string> = {
   "status.failed": "Failed",
   "status.skipped": "Skipped",
   "status.notRun": "Not run",
-  "status.cancelled": "Cancelled",
+  "status.cancelled": "Stopped",
   "status.rejected": "Rejected",
 
   "history.title": "Run history",
