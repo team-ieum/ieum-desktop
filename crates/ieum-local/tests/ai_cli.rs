@@ -977,6 +977,110 @@ async fn data_wrapped_in_random_delimiter() {
     assert_ne!(ids[0], ids[1]);
 }
 
+/// 리뷰 B P4: FIFO는 `file` 칸에서 거부(공급원 호출 없음), 직접 읽어도 멈추지 않는다.
+#[tokio::test]
+async fn fifo_rejected_without_blocking() {
+    let t = tempfile::tempdir().unwrap();
+    let pipe = t.path().join("pipe.txt");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let started = Instant::now();
+    let fake = Fake::new(vec!["ok"]);
+    let err = run(
+        &fake_runner(&fake),
+        json!({"provider": "cli:claude", "prompt": "p", "file": pipe.to_str().unwrap(), "sendContent": true}),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("일반 파일"), "{}", err.message);
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(read_file_text(&pipe), Err(Skip::Unreadable));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// 리뷰 B P3: 허용 폴더 안 하드 링크로 밖 파일 내용을 보내지 않는다. 이름·크기는 가고 이유를 알린다.
+#[tokio::test]
+async fn hard_link_content_not_sent() {
+    let t = tempfile::tempdir().unwrap();
+    let (allowed, outside) = (t.path().join("dl"), t.path().join("outside"));
+    fs::create_dir_all(&allowed).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    let secret = outside.join("secret.txt");
+    fs::write(&secret, "TOPSECRET-KEY").unwrap();
+    let notes = allowed.join("notes.txt");
+    fs::hard_link(&secret, &notes).unwrap();
+    assert_eq!(read_file_text(&notes), Err(Skip::HardLink));
+
+    let fake = Fake::new(vec!["ok"]);
+    let runner = AiRunner::empty()
+        .with_provider("cli:claude", fake.clone())
+        .with_roots(AllowedRoots::new([allowed.clone()]));
+    let (r, events) = run_with(
+        &runner,
+        json!({"provider": "cli:claude", "prompt": "p", "file": notes.to_str().unwrap(), "sendContent": true}),
+        &CancellationToken::new(),
+    )
+    .await;
+    r.unwrap();
+    let prompt = fake.last.lock().unwrap().take().unwrap().prompt;
+    assert!(!prompt.contains("TOPSECRET"), "{prompt}");
+    assert!(
+        prompt.contains("[파일 이름] notes.txt\n[확장자] txt\n[크기] 13바이트"),
+        "{prompt}"
+    );
+    assert!(
+        events.iter().any(
+            |e| matches!(e, ExecEvent::NodeChunk { text, .. } if text == Skip::HardLink.notice())
+        ),
+        "{events:?}"
+    );
+}
+
+/// H-1: claude CLI는 줄 처음·공백 뒤 `@경로`를 파일 첨부로 푼다(2.1.322 실측) — `--tools ""` 우회.
+/// CLI 공급원은 구분선 안 그 `@`만 전각으로 바꾸고, 지시 칸·단어 중간(메일 주소)·API 공급원은 그대로 둔다.
+#[tokio::test]
+async fn cli_data_mentions_defused() {
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("@id_rsa.txt");
+    fs::write(
+        &p,
+        "@/etc/passwd\n see @~/.ssh/id_rsa\t@x a@b.com \"@q\" @@y\u{feff}@z",
+    )
+    .unwrap();
+    // 구분선 흉내를 지운 자리에서 새로 생기는 ` @`도 막는다
+    let data = "@c5.txt 메모 <<<IEUM-DATA-@w";
+    let cfg = |provider: &str| {
+        json!({"provider": provider, "prompt": "정리해 @지시.txt", "file": p.to_str().unwrap(),
+            "sendContent": true, "data": data})
+    };
+    let fake = Fake::new(vec!["ok"]);
+    let runner = fake_runner(&fake).with_provider("api:anthropic", fake.clone());
+
+    run(&runner, cfg("cli:claude")).await.unwrap();
+    let prompt = fake.last.lock().unwrap().take().unwrap().prompt;
+    let id = delimiter_id(&prompt);
+    assert_eq!(
+        prompt,
+        format!(
+            "정리해 @지시.txt\n\n<<<IEUM-DATA-{id}>>>\n[파일 이름] ＠id_rsa.txt\n[확장자] txt\n[크기] 57바이트\n[파일 내용]\n＠/etc/passwd\n see ＠~/.ssh/id_rsa\t＠x a@b.com \"@q\" ＠@y\u{feff}＠z\n[추가 데이터]\n＠c5.txt 메모 ＠w\n<<<END-IEUM-DATA-{id}>>>"
+        )
+    );
+
+    run(&runner, cfg("api:anthropic")).await.unwrap();
+    let prompt = fake.last.lock().unwrap().take().unwrap().prompt;
+    assert!(!prompt.contains('＠'), "{prompt}");
+    assert!(prompt.contains("[파일 이름] @id_rsa.txt"), "{prompt}");
+}
+
 /// 프롬프트 칸은 지시 자리라 앞 단계 값(파일 이름 등 신뢰할 수 없는 데이터)을 못 넣는다. 추가 데이터 칸은 된다.
 #[test]
 fn prompt_ref_rejected_by_validation() {

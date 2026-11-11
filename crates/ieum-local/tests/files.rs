@@ -294,12 +294,44 @@ async fn rename_keeps_extension() {
     assert_eq!(out["name"], json!("청구서 (1).pdf"));
     assert_eq!(fs::read_to_string(root.join("청구서.pdf")).unwrap(), "a");
 
-    // 원본에 확장자가 없으면 newName 그대로
+    // 원본에 확장자가 없으면 결과에도 확장자가 생기지 않는다(`.` → `_`)
     let n = write(&root.join("noext"), "n");
     let out = run(&rn, json!({"path": s(&n), "newName": "v1.2"}))
         .await
         .unwrap();
-    assert_eq!(out["name"], json!("v1.2"));
+    assert_eq!(out["name"], json!("v1_2"));
+}
+
+/// 리뷰 B P2: 확장자 없는 원본에 AI가 실행형 확장자(`.command` 등)를 붙이거나 RTLO로 위장하지 못한다.
+#[tokio::test]
+async fn rename_extensionless_gets_no_extension_and_rejects_bidi() {
+    let (_t, root) = tmp();
+    let (rn, j) = renamer(&root);
+    for (src, new, want) in [
+        ("p1", "run.terminal", "run_terminal"),
+        ("p2", "open.fileloc", "open_fileloc"),
+        ("p3", "a.b.command", "a_b_command"),
+    ] {
+        let p = write(&root.join(src), "x");
+        let out = run(&rn, json!({"path": s(&p), "newName": new}))
+            .await
+            .unwrap();
+        assert_eq!(out["name"], json!(want));
+    }
+    let n = j.ops().len();
+    for (src, new) in [
+        ("q1", "invoice\u{202E}fdp.command"),
+        ("q2.pdf", "a\u{2067}b"),
+        ("q3.pdf", "a\u{200F}b"),
+    ] {
+        let p = write(&root.join(src), "x");
+        let err = run(&rn, json!({"path": s(&p), "newName": new}))
+            .await
+            .unwrap_err();
+        assert!(err.message.contains("방향"), "{}", err.message);
+        assert!(p.exists());
+    }
+    assert_eq!(j.ops().len(), n);
 }
 
 #[tokio::test]
@@ -471,6 +503,15 @@ async fn source_must_be_regular_file() {
     let link = root.join("link.pdf");
     symlink(&real, &link).unwrap();
     let missing = root.join("missing.pdf");
+    // 리뷰 B P4: FIFO도 일반 파일이 아니다
+    let fifo = root.join("pipe.pdf");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
     let (m, j, _) = mover(&root);
     let rn = FileRenameRunner::new(j.clone(), RecentWrites::default(), roots(&root));
     let t = FileTrashRunner::with_trash_dir(
@@ -480,7 +521,7 @@ async fn source_must_be_regular_file() {
         base.clone(),
     );
 
-    for p in [&dir, &link, &missing] {
+    for p in [&dir, &link, &missing, &fifo] {
         assert!(
             run(&m, json!({"path": s(p), "baseFolder": s(&base)}))
                 .await

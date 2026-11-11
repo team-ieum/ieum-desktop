@@ -438,10 +438,6 @@ fn field_errors(node: &Node, catalog: &Catalog) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     for f in &entry.input_fields {
         let path = field_path(f);
-        // AI 출력 칸 규칙은 실행 시점 몫
-        if entry.node_type == NodeType::Ai && path == "config.outputFields" {
-            continue;
-        }
         let mut value = get_path(node, &path);
         if entry.node_type == NodeType::Condition
             && is_empty(value)
@@ -472,18 +468,21 @@ fn field_errors(node: &Node, catalog: &Catalog) -> Vec<ValidationError> {
             );
             value = Some(&truncated);
         }
-        check(f, value, &path, nid, &mut errors);
+        check(f, value, &path, nid, false, &mut errors);
     }
     errors
 }
 
+/// `no_ref` = 부모 목록 칸이 `ref: false`(자식 칸도 참조 금지).
 fn check(
     f: &InputField,
     value: Option<&Value>,
     path: &str,
     nid: Option<&str>,
+    no_ref: bool,
     errors: &mut Vec<ValidationError>,
 ) {
+    let no_ref = no_ref || f.ref_allowed == Some(false);
     let Some(value) = value.filter(|v| !is_empty(Some(v))) else {
         return; // REQUIRED는 범위 밖
     };
@@ -497,6 +496,7 @@ fn check(
                         item.get(&child.key),
                         &format!("{path}.{i}.{}", child.key),
                         nid,
+                        no_ref,
                         errors,
                     );
                 }
@@ -504,7 +504,7 @@ fn check(
         }
         return;
     }
-    if value.as_str().is_some_and(|s| s.contains("{{")) && f.ref_allowed == Some(false) {
+    if value.as_str().is_some_and(|s| s.contains("{{")) && no_ref {
         let title = f
             .title
             .as_deref()

@@ -81,6 +81,10 @@ impl AiRunner {
         if !p.is_absolute() || !self.roots.contains(&real) {
             return Err(fail("허용된 폴더 밖 파일은 AI에 보낼 수 없어요."));
         }
+        // FIFO·장치 등은 열기에서 멈출 수 있다. 여는 쪽(content)도 O_NONBLOCK + fstat으로 다시 본다.
+        if !std::fs::symlink_metadata(&real).is_ok_and(|m| m.file_type().is_file()) {
+            return Err(fail(format!("일반 파일이 아니에요: {file}")));
+        }
         Ok(real)
     }
 
@@ -149,14 +153,28 @@ fn strip_delimiters(s: &str) -> String {
     }
 }
 
+/// claude CLI(2.1.322 실측)는 줄 처음·공백(JS `\s`) 뒤 `@경로`를 파일 첨부로 푼다(`--tools ""` 우회).
+/// 그 자리 `@`만 전각 `＠`로 바꾼다 — 단어 중간(메일 주소)·따옴표 뒤는 풀리지 않아 그대로 둔다.
+fn defuse_mentions(s: &str) -> String {
+    let mut prev = None;
+    s.chars()
+        .map(|c| {
+            let at_start = prev.is_none_or(|p: char| p.is_whitespace() || p == '\u{feff}');
+            prev = Some(c);
+            if c == '@' && at_start { '＠' } else { c }
+        })
+        .collect()
+}
+
 /// 프롬프트 = 지시 + (파일·추가 데이터가 있으면) 요청마다 새 구분선으로 감싼
 /// 파일 이름·확장자·크기(+내용)와 추가 데이터. `send_content`가 아니면 파일을 열지 않는다.
-/// 내용을 못 읽으면 `notice`로 한 줄 알린다.
+/// 내용을 못 읽으면 `notice`로 한 줄 알린다. `cli`면 데이터 속 `@` 멘션을 무력화한다(지시는 그대로).
 async fn build_prompt(
     prompt: &str,
     file: Option<&Path>,
     send_content: bool,
     extra: Option<&str>,
+    cli: bool,
     notice: &ChunkFn<'_>,
 ) -> String {
     if file.is_none() && extra.is_none() {
@@ -182,12 +200,12 @@ async fn build_prompt(
     if let Some(extra) = extra {
         parts.push(format!("[추가 데이터]\n{extra}"));
     }
-    let data = parts.join("\n");
+    let mut data = strip_delimiters(&parts.join("\n"));
+    if cli {
+        data = defuse_mentions(&data);
+    }
     let id = uuid::Uuid::new_v4();
-    format!(
-        "{prompt}\n\n{DATA_START}{id}>>>\n{}\n{DATA_END}{id}>>>",
-        strip_delimiters(&data)
-    )
+    format!("{prompt}\n\n{DATA_START}{id}>>>\n{data}\n{DATA_END}{id}>>>")
 }
 
 #[async_trait]
@@ -219,7 +237,15 @@ impl NodeRunner for AiRunner {
         let work = async {
             // 파일 읽기(PDF 추출)도 취소 select 안에서.
             let req = AiRequest {
-                prompt: build_prompt(prompt, file.as_deref(), send_content, extra, &chunk).await,
+                prompt: build_prompt(
+                    prompt,
+                    file.as_deref(),
+                    send_content,
+                    extra,
+                    provider_id.starts_with("cli:"),
+                    &chunk,
+                )
+                .await,
                 model: model.map(str::to_string),
                 schema: fields.as_deref().map(build_output_schema),
             };

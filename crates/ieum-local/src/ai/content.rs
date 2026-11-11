@@ -25,8 +25,10 @@ pub enum Skip {
     Busy,
     /// 추출이 시간 상한을 넘음.
     Timeout,
-    /// 없음·읽기 실패·바이너리·텍스트 없는 PDF.
+    /// 없음·읽기 실패·바이너리·텍스트 없는 PDF·일반 파일 아님(FIFO 등).
     Unreadable,
+    /// 하드 링크(링크 수 > 1) — 허용 폴더 밖 파일의 다른 이름일 수 있다.
+    HardLink,
 }
 
 impl Skip {
@@ -36,6 +38,9 @@ impl Skip {
             Skip::Busy => "다른 PDF를 읽는 중이라 내용 없이 이름으로만 판단해요.",
             Skip::Timeout => "파일 내용을 읽는 데 너무 오래 걸려 이름으로만 판단해요.",
             Skip::Unreadable => "파일 내용을 읽지 못해 이름으로만 판단해요.",
+            Skip::HardLink => {
+                "다른 곳의 파일과 이어진 파일(하드 링크)이라 내용 없이 이름으로만 판단해요."
+            }
         }
     }
 }
@@ -53,24 +58,47 @@ pub fn read_file_text(path: &Path) -> Result<String, Skip> {
     let text = if is_pdf {
         pdf_text(path)?
     } else {
-        utf8_text(path).ok_or(Skip::Unreadable)?
+        utf8_text(path)?
     };
     Ok(text.chars().take(MAX_CHARS).collect())
 }
 
-fn utf8_text(path: &Path) -> Option<String> {
+/// macOS `<fcntl.h>` 값.
+const O_NONBLOCK: i32 = 0x0004;
+const O_NOFOLLOW: i32 = 0x0100;
+
+/// 링크를 따라가지 않고 멈추지 않게 연 뒤(fstat) 일반 파일·링크 수 1만 돌려준다.
+/// FIFO 열기는 O_NONBLOCK이라 바로 돌아오고 종류 검사에서 걸린다.
+fn open_regular(path: &Path) -> Result<(File, u64), Skip> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NONBLOCK | O_NOFOLLOW)
+        .open(path)
+        .map_err(|_| Skip::Unreadable)?;
+    let m = f.metadata().map_err(|_| Skip::Unreadable)?;
+    if !m.file_type().is_file() {
+        return Err(Skip::Unreadable);
+    }
+    if m.nlink() > 1 {
+        return Err(Skip::HardLink);
+    }
+    Ok((f, m.len()))
+}
+
+fn utf8_text(path: &Path) -> Result<String, Skip> {
     let mut buf = Vec::new();
-    let f = File::open(path).ok()?;
+    let (f, _) = open_regular(path)?;
     if f.take(MAX_TEXT_BYTES).read_to_end(&mut buf).is_err() || buf.contains(&0) {
-        return None;
+        return Err(Skip::Unreadable);
     }
     match std::str::from_utf8(&buf) {
-        Ok(s) => Some(s.to_string()),
+        Ok(s) => Ok(s.to_string()),
         // 상한에서 잘린 마지막 글자만 버린다. 중간에 깨진 바이트가 있으면 바이너리로 본다.
         Err(e) if e.error_len().is_none() => {
-            Some(String::from_utf8_lossy(&buf[..e.valid_up_to()]).into_owned())
+            Ok(String::from_utf8_lossy(&buf[..e.valid_up_to()]).into_owned())
         }
-        Err(_) => None,
+        Err(_) => Err(Skip::Unreadable),
     }
 }
 
@@ -113,12 +141,15 @@ impl Drop for PdfSlot {
 }
 
 fn pdf_text(path: &Path) -> Result<String, Skip> {
-    let len = std::fs::metadata(path).map_err(|_| Skip::Unreadable)?.len();
+    let (f, len) = open_regular(path)?;
     if len > MAX_PDF_BYTES {
         return Err(Skip::TooBig);
     }
     let _slot = PdfSlot::take().ok_or(Skip::Busy)?;
-    let bytes = std::fs::read(path).map_err(|_| Skip::Unreadable)?;
+    let mut bytes = Vec::new();
+    f.take(MAX_PDF_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|_| Skip::Unreadable)?;
     // pdf-extract는 깨진 PDF에서 panic할 수 있다.
     catch_unwind(AssertUnwindSafe(|| {
         pdf_extract::extract_text_from_mem(&bytes)

@@ -43,3 +43,19 @@ test("config_panel_renders_choices_and_ref_fields", async () => {
   // 참조 가능한 칸(목적지)은 텍스트 입력
   expect(screen.getByTestId("field-destination").querySelector("input")).not.toBeNull();
 });
+
+test("config_panel_no_ref_picker_in_ref_false_list", () => {
+  setLang("ko");
+  const trig: WfNode = { id: "t", event: "local.folder_new_file", type: "TRIGGER", config: {} };
+  const ai: WfNode = {
+    id: "a",
+    event: "local.ai",
+    type: "AI",
+    config: { outputFields: [{ key: "folder", type: "text", description: "" }] },
+  };
+  const wf: Workflow = { nodes: [trig, ai], edges: [{ source: "t", target: "a" }] };
+  render(<ConfigPanel node={ai} workflow={wf} onChange={() => {}} />);
+  // 참조 가능한 칸(추가 데이터)엔 뜨고, ref:false 목록(출력 칸)의 이름·설명엔 안 뜬다
+  expect(screen.getByTestId("field-data").querySelector('select[aria-label="앞 단계 값 넣기"]')).not.toBeNull();
+  expect(screen.getByTestId("field-outputFields").querySelector('select[aria-label="앞 단계 값 넣기"]')).toBeNull();
+});

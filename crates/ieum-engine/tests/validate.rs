@@ -261,14 +261,27 @@ fn ref_not_allowed() {
     );
 }
 
+/// 리뷰 B P1: 출력 칸(`ref: false` 목록)의 이름·설명에 참조를 넣으면 파일 이름이 구분선 밖 schema로 간다.
 #[test]
-fn ai_output_fields_skip_field_check() {
+fn ai_output_fields_refuse_refs() {
     let mut a = ai("a", "x");
-    a["config"]["outputFields"] = json!([{"key": "{{nodes.t.output.x}}", "type": "text"}]);
-    // 칸 검사(REF_NOT_ALLOWED)는 건너뛰고 참조 검사는 받는다 — t의 출력에 x가 없다
+    a["config"]["outputFields"] = json!([
+        {"key": "folder", "type": "text", "description": "{{nodes.t.output.name}}"},
+        {"key": "{{nodes.t.output.extension}}", "type": "text"},
+    ]);
     assert_eq!(
-        codes(&chain(vec![a])),
-        vec![(RefUnknownField, Some("a"), Some("config.outputFields"))]
+        codes(&chain(vec![a]))
+            .into_iter()
+            .filter(|c| c.0 == RefNotAllowed)
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                RefNotAllowed,
+                Some("a"),
+                Some("config.outputFields.0.description")
+            ),
+            (RefNotAllowed, Some("a"), Some("config.outputFields.1.key")),
+        ]
     );
 }
 

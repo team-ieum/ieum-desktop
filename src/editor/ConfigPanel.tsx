@@ -78,7 +78,8 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder }: F
                   path={`${path}.${c.key}`}
                   value={item?.[c.key]}
                   onChange={(v) => set(i, { ...item, [c.key]: v })}
-                  refs={refs}
+                  // 목록이 ref:false면 자식 칸도 참조 금지(엔진 검증과 같게)
+                  refs={field.ref === false ? [] : refs}
                   pickFolder={pickFolder}
                 />
               ))}

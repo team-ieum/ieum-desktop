@@ -237,10 +237,21 @@ impl NodeRunner for FileMoveRunner {
     }
 }
 
+/// 양방향 서식 문자(RTLO 등) — 확장자 위장에 쓰인다.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 /// 원래 확장자를 항상 유지한다. `newName`이 이미 `.<원래 확장자>`로 끝나면(대소문자 무시) 그대로.
-fn renamed(from: &Path, new_name: &str) -> String {
+/// 원본에 확장자가 없으면 결과에도 생기지 않게 `.`을 `_`로 바꾼다. 양방향 서식 문자는 거부한다.
+fn renamed(from: &Path, new_name: &str) -> Result<String, NodeError> {
+    if new_name.chars().any(is_bidi_control) {
+        return Err(fail(
+            "새 이름에 글자 방향을 바꾸는 문자가 있어 쓸 수 없어요.",
+        ));
+    }
     let name = sanitize_name(new_name);
-    match from.extension() {
+    Ok(match from.extension() {
         Some(ext) => {
             let dot_ext = format!(".{}", ext.to_string_lossy());
             if name.to_lowercase().ends_with(&dot_ext.to_lowercase()) {
@@ -249,8 +260,8 @@ fn renamed(from: &Path, new_name: &str) -> String {
                 truncate_keep_ext(&format!("{name}{dot_ext}"))
             }
         }
-        None => name,
-    }
+        None => name.replace('.', "_"),
+    })
 }
 
 /// `local.file_rename` — 같은 폴더 안에서 이름만 바꾼다.
@@ -277,7 +288,7 @@ impl NodeRunner for FileRenameRunner {
         let from = source_file(cfg, &self.roots)?;
         // 원본이 허용 폴더 안이므로 그 폴더도 허용 폴더 안이다.
         let dir = from.parent().unwrap_or(Path::new("/")).to_path_buf();
-        let name = renamed(&from, str_cfg(cfg, "newName")?);
+        let name = renamed(&from, str_cfg(cfg, "newName")?)?;
         let to = move_no_clobber(&from, &dir, &name)?;
         record(&self.journal, &self.recent, FileOpKind::Rename, from, &to);
         Ok(output(&to, true))
