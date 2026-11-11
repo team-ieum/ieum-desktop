@@ -19,6 +19,9 @@ beforeAll(() => {
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);
+  vi.spyOn(api, "webAccount").mockResolvedValue(null);
+  vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [], apiKeys: [] });
+  vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "missing" });
 });
 afterEach(cleanup);
 
@@ -52,4 +55,36 @@ test("leaving_editor_with_unsaved_changes_asks_in_app", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "버리기" })));
   expect(screen.queryByLabelText("워크플로우 이름")).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+const ACCOUNT = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" };
+
+test("web_tab_hidden_when_logged_out", async () => {
+  vi.spyOn(api, "webAccount").mockResolvedValueOnce(null);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.queryByRole("button", { name: "웹 이음" })).toBeNull();
+  expect(screen.getByRole("button", { name: "설정" })).toBeTruthy();
+  cleanup();
+
+  vi.spyOn(api, "webAccount").mockResolvedValueOnce(ACCOUNT);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByRole("button", { name: "웹 이음" })).toBeTruthy();
+});
+
+test("auth_expired_goes_to_login", async () => {
+  vi.spyOn(api, "webAccount").mockResolvedValueOnce(ACCOUNT);
+  vi.spyOn(api, "webListWorkflows").mockRejectedValueOnce({ code: "AUTH_EXPIRED" });
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "웹 이음" })));
+
+  expect(screen.queryByRole("button", { name: "웹 이음" })).toBeNull();
+  expect(screen.getByRole("button", { name: "설정" }).getAttribute("aria-current")).toBe("page");
+  expect(screen.getByLabelText("비밀번호")).toBeTruthy();
+  expect(screen.getByText(/로그인이 만료됐어요/)).toBeTruthy();
 });

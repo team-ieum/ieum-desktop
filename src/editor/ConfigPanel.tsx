@@ -9,7 +9,7 @@ type Ref = { value: string; label: string };
 type Obj = Record<string, unknown>;
 
 const MAX_ITEMS = 10;
-const INPUT =
+export const INPUT =
   "w-full rounded-brand-sm border border-neutral-300 bg-white px-3 py-2 typo-body3_regular text-neutral-800 outline-none focus:border-main-blue";
 const SMALL_BUTTON =
   "inline-flex items-center gap-1 rounded-brand-sm border border-neutral-300 bg-white px-2.5 py-1.5 typo-caption1_semibold text-neutral-700 hover:bg-neutral-100 disabled:opacity-40";

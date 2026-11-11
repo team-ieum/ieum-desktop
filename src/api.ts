@@ -124,6 +124,73 @@ export interface Settings {
   serverUrl: string;
 }
 
+// commands.rs
+export interface Providers {
+  clis: { id: string; path: string; version: string }[];
+  apiKeys: string[];
+}
+export type ApiProvider = "anthropic" | "openai" | "gemini";
+/** 키체인 계정별 저장 여부 — 값은 오지 않는다. */
+export type KeyState = "stored" | "missing" | "error";
+export type KeychainStatus = Record<ApiProvider | "ieum-session", KeyState>;
+
+// web/* — 오류는 `{code, message?}`.
+export interface WebError {
+  code: "AUTH_FAILED" | "AUTH_LOCKED" | "AUTH_EXPIRED" | "EXTERNAL_EXPIRED" | "NETWORK" | "SERVER";
+  message?: string;
+}
+export interface WebAccount {
+  email: string;
+  serverUrl: string;
+}
+export interface WebWorkflowSummary {
+  id: string;
+  name: string;
+  description?: string | null;
+  active: boolean;
+  triggerType?: string | null;
+  updatedAt?: string | null;
+}
+export interface WebWorkflow extends Workflow {
+  id: string;
+  name: string;
+}
+export interface Page<T> {
+  content: T[];
+  hasNext: boolean;
+  nextCursor: string | null;
+}
+export interface WebExecution {
+  id: string;
+  workflowId: string;
+  status: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  [extra: string]: unknown;
+}
+export interface WebNodeLog {
+  id: string;
+  nodeId: string;
+  status: string;
+  [extra: string]: unknown;
+}
+/** BE `ExecutionEvent`(type·nodeId·status·errorMessage·executionStatus …). */
+export interface WebEvent {
+  type: string;
+  nodeId?: string;
+  status?: string;
+  errorMessage?: string;
+  executionStatus?: string;
+  [extra: string]: unknown;
+}
+/** `web-exec-event` — 이벤트 하나, 또는 밀려남(`stopped`)·폴백 최종 상태(`logs`)·오류(`error`). */
+export type WebExecPayload = { executionId: string } & (
+  | { event: WebEvent }
+  | { stopped: true }
+  | { logs: WebNodeLog[] }
+  | { error: WebError }
+);
+
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
   saveWorkflow: (wf: StoredWorkflow) => invoke<StoredWorkflow>("save_workflow", { wf }),
@@ -135,6 +202,27 @@ export const api = {
   getRun: (runId: string) => invoke<StoredRun>("get_run", { runId }),
   undoRun: (runId: string) => invoke<UndoReport>("undo_run", { runId }),
   getSettings: () => invoke<Settings>("get_settings"),
+  setSettings: (s: Settings) => invoke<void>("set_settings", { s }),
+  detectProviders: () => invoke<Providers>("detect_providers"),
+  keychainStatus: () => invoke<KeychainStatus>("keychain_status"),
+  setApiKey: (provider: ApiProvider, key: string) => invoke<void>("set_api_key", { provider, key }),
+  deleteApiKey: (provider: ApiProvider) => invoke<void>("delete_api_key", { provider }),
+  webLogin: (email: string, password: string) => invoke<WebAccount>("web_login", { email, password }),
+  webLogout: () => invoke<void>("web_logout"),
+  webAccount: () => invoke<WebAccount | null>("web_account"),
+  webListWorkflows: () => invoke<WebWorkflowSummary[]>("web_list_workflows"),
+  webGetWorkflow: (id: string) => invoke<WebWorkflow>("web_get_workflow", { id }),
+  webListExecutions: (workflowId: string, cursor: string | null) =>
+    invoke<Page<WebExecution>>("web_list_executions", { workflowId, cursor }),
+  webExecutionLogs: (workflowId: string, executionId: string) =>
+    invoke<WebNodeLog[]>("web_execution_logs", { workflowId, executionId }),
+  webWatchExecution: (workflowId: string, executionId: string) =>
+    invoke<void>("web_watch_execution", { workflowId, executionId }),
+  webUnwatchExecution: (executionId: string) => invoke<void>("web_unwatch_execution", { executionId }),
+  /** 서버 주소 + `/main`을 기본 브라우저로. */
+  openWebEditor: () => invoke<void>("open_web_editor"),
+  onWebExecEvent: (cb: (p: WebExecPayload) => void): Promise<UnlistenFn> =>
+    listen<WebExecPayload>("web-exec-event", (e) => cb(e.payload)),
   /** 폴더·파일 고르기(tauri-plugin-dialog, 권한 `dialog:allow-open`). 취소하면 null. */
   pickPath: (directory: boolean) =>
     invoke<string | null>("plugin:dialog|open", { options: { directory, multiple: false } }),

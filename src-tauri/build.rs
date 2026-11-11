@@ -11,11 +11,19 @@ const COMMANDS: &[&str] = &[
     "detect_providers",
     "set_api_key",
     "delete_api_key",
+    "keychain_status",
+    "open_web_editor",
     "get_settings",
     "set_settings",
     "web_login",
     "web_logout",
     "web_account",
+    "web_list_workflows",
+    "web_get_workflow",
+    "web_list_executions",
+    "web_execution_logs",
+    "web_watch_execution",
+    "web_unwatch_execution",
 ];
 
 fn main() {

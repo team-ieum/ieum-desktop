@@ -1,5 +1,6 @@
 //! 화면이 부르는 Tauri 명령 — 로직은 `store`·`supervisor`에 두고 여기는 얇게 감싼다.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -137,6 +138,67 @@ pub fn delete_api_key(keys: State<'_, Keys>, provider: String) -> Result<(), Str
     keys.0
         .delete(api_account(&provider)?)
         .map_err(|e| e.to_string())
+}
+
+/// 키체인 계정의 저장 여부. 값은 담지 않는다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyState {
+    Stored,
+    Missing,
+    /// 키체인 접근 오류
+    Error,
+}
+
+/// API 키 3개와 이음 세션(`ieum-session`)의 저장 여부.
+pub fn key_states(keys: &dyn KeyStore) -> BTreeMap<&'static str, KeyState> {
+    [ApiKind::Anthropic, ApiKind::OpenAi, ApiKind::Gemini]
+        .into_iter()
+        .map(ApiKind::account)
+        .chain([web::SESSION_ACCOUNT])
+        .map(|a| {
+            let state = match keys.get(a) {
+                Ok(Some(_)) => KeyState::Stored,
+                Ok(None) => KeyState::Missing,
+                Err(e) => {
+                    eprintln!("[ieum] 키체인을 확인하지 못했어요: {a}: {e}");
+                    KeyState::Error
+                }
+            };
+            (a, state)
+        })
+        .collect()
+}
+
+#[tauri::command]
+pub async fn keychain_status(
+    keys: State<'_, Keys>,
+) -> Result<BTreeMap<&'static str, KeyState>, String> {
+    let keys = keys.0.clone();
+    tauri::async_runtime::spawn_blocking(move || key_states(keys.as_ref()))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// "웹에서 수정하기" 주소 — 허용된 서버 주소 + `/main`.
+pub fn web_editor_url(server_url: &str) -> Result<String, String> {
+    Ok(format!("{}/main", web::validate_server_url(server_url)?))
+}
+
+/// 기본 브라우저로 연다. 주소는 화면이 아니라 저장된 설정에서 만든다.
+// ponytail: macOS `open`만(1단계는 macOS 전용) — 다른 OS를 내면 opener 플러그인으로.
+#[tauri::command]
+pub fn open_web_editor(sup: State<'_, Supervisor>) -> Result<(), String> {
+    let url = web_editor_url(&sup.store().get_settings()?.server_url)?;
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg(&url)
+        .status()
+        .map_err(|e| format!("브라우저를 열지 못했어요: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("브라우저를 열지 못했어요: {status}"))
+    }
 }
 
 #[tauri::command]

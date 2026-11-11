@@ -161,6 +161,8 @@ pub fn run() {
             commands::detect_providers,
             commands::set_api_key,
             commands::delete_api_key,
+            commands::keychain_status,
+            commands::open_web_editor,
             commands::get_settings,
             commands::set_settings,
             commands::web_login,
