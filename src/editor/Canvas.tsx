@@ -271,6 +271,7 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
       elementsSelectable={!readOnly}
       deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
       fitView
+      fitViewOptions={{ maxZoom: 1 }}
       proOptions={{ hideAttribution: true }}
     >
       <Background />

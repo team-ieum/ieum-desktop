@@ -5,7 +5,7 @@ import { Canvas, nodeTitle } from "../editor/Canvas";
 import { ConfigPanel } from "../editor/ConfigPanel";
 import { Palette } from "../editor/Palette";
 import { t } from "../i18n";
-import { newNode } from "../nodes/defs";
+import { newNode, nextPosition } from "../nodes/defs";
 import { useWorkflows } from "../stores/workflows";
 
 export const BUTTON =
@@ -62,8 +62,7 @@ export function Editor({
   const setNode = (node: WfNode) => setWorkflow({ ...wf, nodes: wf.nodes.map((n) => (n.id === node.id ? node : n)) });
 
   const add = (event: string) => {
-    const k = wf.nodes.length;
-    const node = newNode(event, { x: 80 + k * 40, y: 80 + k * 40 }, nodeTitle(event));
+    const node = newNode(event, nextPosition(wf.nodes), nodeTitle(event));
     setWorkflow({ ...wf, nodes: [...wf.nodes, node] });
     setSelectedId(node.id);
   };

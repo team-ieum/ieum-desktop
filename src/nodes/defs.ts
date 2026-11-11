@@ -81,6 +81,14 @@ export function newNode(event: string, position: { x: number; y: number }, label
   return { id: crypto.randomUUID(), event, type: def.node_type, label, position, config };
 }
 
+/** 새 노드 자리 — 가장 오른쪽 노드의 오른쪽(Canvas 기본 배치와 같은 320 간격). */
+export function nextPosition(nodes: WfNode[]): { x: number; y: number } {
+  const at = nodes.map((n, i) => n.position ?? { x: i * 320, y: 0 });
+  if (at.length === 0) return { x: 0, y: 0 };
+  const right = at.reduce((a, b) => (b.x > a.x ? b : a));
+  return { x: right.x + 320, y: right.y };
+}
+
 /** 조건 노드의 나가는 갈래 값(엣지 conditionType) — 엔진 `condition_branches`와 같은 규칙. */
 export function branchHandles(node: WfNode): { id: string; name: string }[] {
   const branches = node.config.branches;

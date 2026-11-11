@@ -77,6 +77,12 @@ test("canvas_read_only_blocks_edits", async () => {
   expect(ro.onSelect).not.toHaveBeenCalled();
 });
 
+test("canvas_fit_view_caps_zoom", () => {
+  setup(false);
+  expect(probe.props.fitView).toBe(true);
+  expect(probe.props.fitViewOptions?.maxZoom).toBe(1);
+});
+
 test("canvas_read_only_callbacks_guarded", async () => {
   const ro = setup(true);
   expect(probe.props.deleteKeyCode).toBeNull();
