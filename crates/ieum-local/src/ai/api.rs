@@ -497,30 +497,37 @@ impl Stream {
         let u = &self.usage;
         let n = |k: &str| u.get(k).and_then(Value::as_u64);
         let source = self.kind.account();
-        let (prompt, cached, output) = match self.kind {
+        let (prompt, cached, written, output) = match self.kind {
             ApiKind::Anthropic => {
                 return AiUsage::from_anthropic(source, Some(model), &Value::Object(u.clone()));
             }
-            ApiKind::OpenAi => (
-                n("prompt_tokens"),
-                u.get("prompt_tokens_details")
-                    .and_then(|d| d["cached_tokens"].as_u64()),
-                n("completion_tokens").unwrap_or(0),
-            ),
+            // prompt_tokens는 캐시 읽기·쓰기를 모두 포함한다(GPT-5.6+ 캐시 쓰기는 1.25배 단가).
+            ApiKind::OpenAi => {
+                let d = u.get("prompt_tokens_details");
+                (
+                    n("prompt_tokens"),
+                    d.and_then(|d| d["cached_tokens"].as_u64()),
+                    d.and_then(|d| d["cache_write_tokens"].as_u64()),
+                    n("completion_tokens").unwrap_or(0),
+                )
+            }
             // 생각 토큰은 출력 요금으로 매긴다.
             ApiKind::Gemini => (
                 n("promptTokenCount"),
                 n("cachedContentTokenCount"),
+                None,
                 n("candidatesTokenCount").unwrap_or(0) + n("thoughtsTokenCount").unwrap_or(0),
             ),
         };
         AiUsage {
             source: source.into(),
             model: Some(model.into()),
-            input_tokens: prompt.unwrap_or(0).saturating_sub(cached.unwrap_or(0)),
+            input_tokens: prompt
+                .unwrap_or(0)
+                .saturating_sub(cached.unwrap_or(0) + written.unwrap_or(0)),
             output_tokens: output,
             cache_read_tokens: cached,
-            cache_write_tokens: None,
+            cache_write_tokens: written,
         }
     }
 }

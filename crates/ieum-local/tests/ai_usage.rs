@@ -148,6 +148,28 @@ async fn openai_stream_requests_and_parses_usage() {
     );
 }
 
+/// GPT-5.6+는 캐시 쓰기를 따로 센다 — prompt_tokens에서 읽기·쓰기를 빼 일반 입력만 남긴다.
+#[tokio::test]
+async fn openai_cache_write_tokens_split() {
+    let (base, _) = serve(
+        &[
+            json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}),
+            json!({"choices":[],"usage":{"prompt_tokens":12000,"completion_tokens":5,
+                "prompt_tokens_details":{"cached_tokens":4000,"cache_write_tokens":7000}}}),
+        ],
+        true,
+    )
+    .await;
+    let u = ask(ApiKind::OpenAi, &base, Some("gpt-6-sol"))
+        .await
+        .usage
+        .unwrap();
+    assert_eq!(
+        (u.input_tokens, u.cache_read_tokens, u.cache_write_tokens),
+        (1000, Some(4000), Some(7000))
+    );
+}
+
 #[tokio::test]
 async fn gemini_usage_metadata_parsed() {
     let (base, _) = serve(
@@ -215,22 +237,40 @@ fn fake_runner(answers: Vec<&'static str>) -> AiRunner {
     )
 }
 
-#[tokio::test]
-async fn retry_sums_usage() {
-    let runner = fake_runner(vec!["JSON 아님", r#"{"color":"파랑"}"#]);
+/// 출력 칸 `color`를 요구하는 노드를 `answers`로 돌린다.
+async fn run_color(
+    answers: Vec<&'static str>,
+) -> (
+    Result<Map<String, Value>, ieum_engine::NodeError>,
+    Option<Value>,
+) {
+    let runner = fake_runner(answers);
     let node: Node = serde_json::from_value(json!({"id": "n", "event": "local.ai"})).unwrap();
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
     let config = json!({"provider": "api:anthropic", "prompt": "p",
         "outputFields": [{"key": "color", "type": "text"}]});
-    let (r, u) = runner
+    runner
         .run_metered(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
             events: &tx,
             cancel: &CancellationToken::new(),
         })
-        .await;
+        .await
+}
+
+#[tokio::test]
+async fn retry_sums_usage() {
+    let (r, u) = run_color(vec!["JSON 아님", r#"{"color":"파랑"}"#]).await;
     assert_eq!(r.unwrap()["color"], "파랑");
+    assert_eq!(u, Some(serde_json::to_value(usage(20, 4)).unwrap()));
+}
+
+/// 두 시도 모두 모양이 틀려 노드가 실패해도 쓴 토큰은 남는다.
+#[tokio::test]
+async fn failed_retries_keep_usage() {
+    let (r, u) = run_color(vec!["JSON 아님", "JSON 아님"]).await;
+    assert!(r.is_err());
     assert_eq!(u, Some(serde_json::to_value(usage(20, 4)).unwrap()));
 }
 
