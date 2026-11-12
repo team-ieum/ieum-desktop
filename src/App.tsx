@@ -7,7 +7,7 @@ import { BUTTON, Editor, PRIMARY } from "./screens/Editor";
 import { Dashboard } from "./screens/Dashboard";
 import { History } from "./screens/History";
 import { RunView } from "./screens/RunView";
-import { Settings } from "./screens/Settings";
+import { SettingsShell } from "./screens/settings/SettingsShell";
 import { Web } from "./screens/Web";
 import { WorkflowList } from "./screens/WorkflowList";
 import { Header } from "./shell/Header";
@@ -22,7 +22,14 @@ export default function App() {
   const lang = useSettings((s) => s.lang);
   const loadSettings = useSettings((s) => s.load);
   const [view, setView] = useState<View>({ page: "dashboard" });
+  const [back, setBack] = useState<View>({ page: "dashboard" });
   const account = useWeb((s) => s.account);
+  // 로그아웃하면 다음 로그인은 대시보드에서 시작한다.
+  const [lastAccount, setLastAccount] = useState(account);
+  if (account !== lastAccount) {
+    setLastAccount(account);
+    if (!account) setView({ page: "dashboard" });
+  }
   const loadAccount = useWeb((s) => s.load);
   const expired = useWeb((s) => s.expired);
   const guard = useWeb((s) => s.guard);
@@ -72,7 +79,11 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const navigate = (page: Page) => leave(() => setView({ page }));
+  const navigate = (page: Page) =>
+    leave(() => {
+      if (page === "settings") setBack(view);
+      setView({ page });
+    });
 
   if (!ready) return null;
 
@@ -81,6 +92,20 @@ export default function App() {
     return (
       <div key={lang} className="h-full">
         <AuthScreen key={account?.email ?? ""} initialEmail={account?.email} />
+      </div>
+    );
+
+  // 설정은 셸 사이드바 대신 설정 전용 사이드바.
+  if (view.page === "settings")
+    return (
+      <div key={lang} className="flex h-full flex-col">
+        <Header
+          crumb={t("nav.settings")}
+          email={account?.email ?? null}
+          onPick={(p) => (p.kind === "local" ? openEditor(p.id) : setView({ page: "web", workflow: p.id }))}
+          onOpenRun={(run) => setView({ page: "history", run })}
+        />
+        <SettingsShell onBack={() => setView(back)} version={version} />
       </div>
     );
 
@@ -126,8 +151,7 @@ export default function App() {
           <div className="min-h-0 flex-1 overflow-y-auto">
             {view.page === "dashboard" ? (
               <Dashboard onOpenRun={(run) => setView({ page: "history", run })} />
-            ) : view.page === "settings" ? (
-              <Settings />
+
             ) : view.page === "web" ? (
               <Web />
             ) : view.page === "history" ? (
