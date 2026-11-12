@@ -14,6 +14,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::account::AccountId;
 use crate::active::{Active, NOT_SIGNED_IN};
+use crate::plan_usage::{PlanUsage, PlanUsageClient};
 use crate::pricing;
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::supervisor::WorkflowEntry;
@@ -238,6 +239,12 @@ pub async fn keychain_status(
     tauri::async_runtime::spawn_blocking(move || key_states(keys.as_ref()))
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Claude 구독 사용량. 키체인 읽기는 `PlanUsageClient` 안에서 `spawn_blocking`.
+#[tauri::command]
+pub async fn claude_plan_usage(client: State<'_, PlanUsageClient>) -> Result<PlanUsage, String> {
+    Ok(client.get().await)
 }
 
 /// "웹에서 수정하기" 주소 — 허용된 서버 주소 + `/main`.

@@ -41,6 +41,7 @@
     "allow-web-dashboard-errors",
     "allow-open-help",
     "allow-open-web-workflow",
+    "allow-claude-plan-usage",
     "dialog:allow-open"
   ]
 }

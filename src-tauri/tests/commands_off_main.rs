@@ -9,7 +9,9 @@ fn keychain_commands_are_async() {
         .split("#[tauri::command]")
         .skip(1)
         .map(|chunk| chunk.split('{').next().unwrap_or(""))
-        .filter(|sig| sig.contains("Keys>") && !sig.contains("async fn"))
+        .filter(|sig| {
+            (sig.contains("Keys>") || sig.contains("PlanUsageClient>")) && !sig.contains("async fn")
+        })
         .collect();
     assert!(sync.is_empty(), "키체인을 쓰는 동기 명령: {sync:#?}");
 }

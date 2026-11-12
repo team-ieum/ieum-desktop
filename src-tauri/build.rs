@@ -34,6 +34,7 @@ const COMMANDS: &[&str] = &[
     "web_dashboard_errors",
     "open_help",
     "open_web_workflow",
+    "claude_plan_usage",
 ];
 
 fn main() {

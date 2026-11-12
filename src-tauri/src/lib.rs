@@ -1,6 +1,7 @@
 pub mod account;
 pub mod active;
 pub mod commands;
+pub mod plan_usage;
 pub mod pricing;
 pub mod store;
 pub mod supervisor;
@@ -171,6 +172,9 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(active);
     app.manage(Keys(keys));
     app.manage(crate::web::Watches::default());
+    app.manage(crate::plan_usage::PlanUsageClient::new(Arc::new(
+        crate::plan_usage::keychain_token,
+    ))?);
     tray::create(app)?;
     first_run(app, &store);
     check_update(app);
@@ -239,6 +243,7 @@ pub fn run() {
             commands::web_dashboard_errors,
             commands::open_help,
             commands::open_web_workflow,
+            commands::claude_plan_usage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
