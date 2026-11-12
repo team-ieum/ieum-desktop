@@ -44,6 +44,7 @@
     "allow-claude-plan-usage",
     "allow-folder-access",
     "allow-open-system-settings",
+    "allow-send-test-notification",
     "dialog:allow-open"
   ]
 }

@@ -37,6 +37,7 @@ const COMMANDS: &[&str] = &[
     "claude_plan_usage",
     "folder_access",
     "open_system_settings",
+    "send_test_notification",
 ];
 
 fn main() {

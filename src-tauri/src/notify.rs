@@ -1,0 +1,252 @@
+//! 내 PC 실행 시스템 알림: 규칙(수동/감시·앱 앞 여부·토글), 폴더 감시 알림 모아 보내기, 보내기.
+//! 문구엔 워크플로우 이름·노드 label만 — 경로·오류 원문·앱 이름은 넣지 않는다.
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::Duration;
+
+use serde_json::{Value, json};
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
+
+use crate::active::Active;
+use crate::store::{Language, RunTrigger, Settings};
+use crate::supervisor::{NoticeKind, RunNotice};
+
+/// 폴더 감시 끝 알림을 워크플로우별로 모으는 시간.
+pub const BATCH_WINDOW: Duration = Duration::from_secs(10);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lang {
+    Ko,
+    En,
+}
+
+impl From<Language> for Lang {
+    fn from(l: Language) -> Self {
+        match l {
+            Language::En => Lang::En,
+            // ponytail: 시스템 언어는 읽지 않고 ko — 새 의존성 없이 macOS 언어를 읽을 방법이 생기면 바꾼다.
+            Language::System | Language::Ko => Lang::Ko,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Prefs {
+    pub manual_start: bool,
+    pub manual_end: bool,
+    pub watch_end: bool,
+}
+
+impl From<&Settings> for Prefs {
+    fn from(s: &Settings) -> Self {
+        Prefs {
+            manual_start: s.notify_manual_start,
+            manual_end: s.notify_manual_end,
+            watch_end: s.notify_watch_end,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub title: String,
+    pub body: String,
+    pub target: Target,
+}
+
+/// 알림을 누르면 열 화면.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    Run(String),
+    History,
+}
+
+impl Target {
+    /// 화면 이벤트 `open-target`의 내용.
+    fn payload(&self) -> Value {
+        match self {
+            Target::Run(id) => json!({"kind": "run", "runId": id}),
+            Target::History => json!({"kind": "history"}),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Route {
+    Now(Notice),
+    Batch,
+    Drop,
+}
+
+/// 수동 실행은 앱이 앞이어도 보낸다. 감시 실행은 끝만, 앱이 앞이 아닐 때 모아서.
+pub fn route(n: &RunNotice, p: &Prefs, focused: bool, lang: Lang) -> Route {
+    let ko = lang == Lang::Ko;
+    let body = match (n.trigger, &n.kind) {
+        (RunTrigger::Manual, NoticeKind::Started) if p.manual_start => {
+            if ko { "시작했어요" } else { "Started" }.to_string()
+        }
+        (RunTrigger::Manual, NoticeKind::Finished { ok: true, secs, .. }) if p.manual_end => {
+            if ko {
+                format!("끝났어요 ({secs}초)")
+            } else {
+                format!("Finished ({secs}s)")
+            }
+        }
+        (
+            RunTrigger::Manual,
+            NoticeKind::Finished {
+                ok: false,
+                failed_node,
+                ..
+            },
+        ) if p.manual_end => match (failed_node, ko) {
+            (Some(node), true) => format!("실패했어요: {node} 단계"),
+            (Some(node), false) => format!("Failed at {node}"),
+            (None, true) => "실패했어요".into(),
+            (None, false) => "Failed".into(),
+        },
+        (RunTrigger::Watch, NoticeKind::Finished { .. }) if p.watch_end && !focused => {
+            return Route::Batch;
+        }
+        _ => return Route::Drop,
+    };
+    Route::Now(Notice {
+        title: n.workflow_name.clone(),
+        body,
+        target: Target::Run(n.run_id.clone()),
+    })
+}
+
+/// 워크플로우별 (이름, 성공 수, 실패 수).
+#[derive(Default)]
+pub struct Batcher(HashMap<String, (String, u32, u32)>);
+
+impl Batcher {
+    /// 그 워크플로우의 첫 push면 true — 호출자가 `BATCH_WINDOW` 타이머를 건다.
+    pub fn push(&mut self, workflow_id: &str, workflow_name: &str, ok: bool) -> bool {
+        let first = !self.0.contains_key(workflow_id);
+        let e = self
+            .0
+            .entry(workflow_id.to_string())
+            .or_insert_with(|| (workflow_name.to_string(), 0, 0));
+        if ok {
+            e.1 += 1;
+        } else {
+            e.2 += 1;
+        }
+        first
+    }
+
+    pub fn take(&mut self, workflow_id: &str, lang: Lang) -> Option<Notice> {
+        let (title, done, failed) = self.0.remove(workflow_id)?;
+        let body = match (lang, failed) {
+            (Lang::Ko, 0) => format!("{done}건 완료"),
+            (Lang::Ko, _) => format!("{done}건 완료, {failed}건 실패"),
+            (Lang::En, 0) => format!("{done} done"),
+            (Lang::En, _) => format!("{done} done, {failed} failed"),
+        };
+        Some(Notice {
+            title,
+            body,
+            target: Target::History,
+        })
+    }
+}
+
+/// 앱 상태로 둔다.
+pub type Pending = Mutex<Batcher>;
+
+fn settings(app: &AppHandle) -> Settings {
+    app.try_state::<Active>()
+        .and_then(|a| a.settings().get_settings().ok())
+        .unwrap_or_default()
+}
+
+fn focused(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|w| w.is_focused().ok())
+        .unwrap_or(false)
+}
+
+/// supervisor의 `RunNotice`를 규칙대로 보내거나 모은다.
+pub fn on_run_notice(app: &AppHandle, n: &RunNotice) {
+    let s = settings(app);
+    match route(n, &Prefs::from(&s), focused(app), s.language.into()) {
+        Route::Now(notice) => deliver(app, &notice),
+        Route::Batch => {
+            let Some(pending) = app.try_state::<Pending>() else {
+                return;
+            };
+            let ok = matches!(n.kind, NoticeKind::Finished { ok: true, .. });
+            let first = pending.lock().unwrap_or_else(|e| e.into_inner()).push(
+                &n.workflow_id,
+                &n.workflow_name,
+                ok,
+            );
+            if first {
+                let (app, id) = (app.clone(), n.workflow_id.clone());
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(BATCH_WINDOW).await;
+                    let lang = settings(&app).language.into();
+                    let notice = app
+                        .state::<Pending>()
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take(&id, lang);
+                    // 그사이 앱을 앞으로 가져왔으면 버린다.
+                    if let Some(notice) = notice
+                        && !focused(&app)
+                    {
+                        deliver(&app, &notice);
+                    }
+                });
+            }
+        }
+        Route::Drop => {}
+    }
+}
+
+fn show(app: &AppHandle, title: &str, body: &str, target: Option<&Target>) -> Result<(), String> {
+    let mut b = app.notification().builder().title(title);
+    if !body.is_empty() {
+        b = b.body(body);
+    }
+    if let Some(t) = target {
+        b = b.extra("target", t.payload());
+    }
+    b.show().map_err(|e| e.to_string())
+}
+
+pub fn deliver(app: &AppHandle, n: &Notice) {
+    if let Err(e) = show(app, &n.title, &n.body, Some(&n.target)) {
+        eprintln!("[ieum] 알림을 보내지 못했어요: {e}");
+    }
+}
+
+/// 앞 여부·토글과 무관하게 테스트 알림.
+pub fn send_test(app: &AppHandle) -> Result<(), String> {
+    let title = match settings(app).language.into() {
+        Lang::Ko => "알림이 켜졌어요",
+        Lang::En => "Notifications are on",
+    };
+    show(app, title, "", None)
+}
+
+/// 알림 클릭 → 창을 띄우고, 열 화면이 있으면 `open-target`. 알림을 보내기 전에 한 번 건다
+/// (플러그인은 처리기가 있을 때만 데스크톱 클릭을 넘겨준다).
+pub fn listen_clicks(app: &AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    app.notification()
+        .on_action(move |a| {
+            if a.action_id() != "tap" {
+                return;
+            }
+            crate::tray::show_main(&handle);
+            if let Some(t) = a.notification().and_then(|n| n.extra().get("target")) {
+                let _ = handle.emit("open-target", t);
+            }
+        })
+        .map_err(|e| e.to_string())
+}

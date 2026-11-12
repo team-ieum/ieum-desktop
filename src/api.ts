@@ -138,6 +138,8 @@ export interface Settings {
 export type FolderKind = "downloads" | "desktop" | "documents";
 export type FolderAccess = "granted" | "denied" | "missing";
 export type SystemSettingsPane = "files" | "notifications" | "login_items";
+/** 시스템 알림 클릭으로 열 화면(Rust `notify::Target`). */
+export type OpenTarget = { kind: "run"; runId: string } | { kind: "history" };
 /** 계정 = 서버 + 이메일. */
 export interface AccountId {
   email: string;
@@ -320,6 +322,11 @@ export const api = {
   openHelp: () => invoke<void>("open_help"),
   folderAccess: (kind: FolderKind) => invoke<FolderAccess>("folder_access", { kind }),
   openSystemSettings: (pane: SystemSettingsPane) => invoke<void>("open_system_settings", { pane }),
+  /** 앞 여부·알림 토글과 무관하게 "알림이 켜졌어요". */
+  sendTestNotification: () => invoke<void>("send_test_notification"),
+  /** 시스템 알림을 누르면 열 화면. */
+  onOpenTarget: (cb: (t: OpenTarget) => void): Promise<UnlistenFn> =>
+    listen<OpenTarget>("open-target", (e) => cb(e.payload)),
   onWebExecEvent: (cb: (p: WebExecPayload) => void): Promise<UnlistenFn> =>
     listen<WebExecPayload>("web-exec-event", (e) => cb(e.payload)),
   /** 폴더·파일 고르기(tauri-plugin-dialog, 권한 `dialog:allow-open`). 취소하면 null. */

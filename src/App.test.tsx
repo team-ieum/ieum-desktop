@@ -21,6 +21,7 @@ beforeAll(() => {
   };
   vi.spyOn(api, "getSettings").mockResolvedValue({ language: "ko", autostart: false, firstRunDone: true, serverUrl: "", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true });
   vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
+  vi.spyOn(api, "onOpenTarget").mockResolvedValue(() => {});
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);

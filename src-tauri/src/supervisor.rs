@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use ieum_engine::{
-    BuiltinRunners, Catalog, ExecEvent, NodeRunner, RunResult, RunStatus, Runners, ValidationError,
-    Workflow, run_workflow, validate,
+    BuiltinRunners, Catalog, ExecEvent, NodeRunner, NodeStatus, RunResult, RunStatus, Runners,
+    ValidationError, Workflow, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
 use ieum_local::{
@@ -44,6 +44,28 @@ pub enum AppEvent {
     },
     /// 화면 이벤트 `queue-dropped` — 줄이 넘쳐 버린 실행(트리거 파일 경로).
     QueueDropped { workflow_id: String, path: String },
+    /// 시스템 알림 재료(화면 이벤트 아님) — 실행 시작·끝.
+    RunNotice(RunNotice),
+}
+
+#[derive(Debug, Clone)]
+pub struct RunNotice {
+    pub workflow_id: String,
+    pub workflow_name: String,
+    pub run_id: String,
+    pub trigger: RunTrigger,
+    pub kind: NoticeKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoticeKind {
+    Started,
+    /// `failed_node` = 실패한 첫 노드의 label(없으면 id). 오류 문자열은 싣지 않는다.
+    Finished {
+        ok: bool,
+        secs: u64,
+        failed_node: Option<String>,
+    },
 }
 
 pub type Emit = Arc<dyn Fn(AppEvent) + Send + Sync>;
@@ -538,11 +560,22 @@ impl Supervisor {
         };
         let (tx, mut rx) = mpsc::unbounded_channel();
         let emit = self.0.deps.emit.clone();
+        let clock = std::time::Instant::now();
+        let notice = |run_id: &str, kind| {
+            emit(AppEvent::RunNotice(RunNotice {
+                workflow_id: workflow_id.to_string(),
+                workflow_name: wf.name.clone(),
+                run_id: run_id.to_string(),
+                trigger: run_trigger,
+                kind,
+            }))
+        };
         let forward = async {
             let (mut run_id, mut saved_ops, mut finished) = (String::new(), 0, None);
             while let Some(event) = rx.recv().await {
                 if let ExecEvent::RunStarted { run_id: r } = &event {
                     run_id = r.clone();
+                    notice(r, NoticeKind::Started);
                 }
                 // 파일 작업이 생기면 끝나지 않은 기록(끝 시각 없음)으로 바로 쓴다 — 도중에 앱이 꺼져도 되돌릴 수 있게.
                 if journal.ops().len() > saved_ops {
@@ -591,6 +624,25 @@ impl Supervisor {
                 workflow_id: workflow_id.to_string(),
                 event,
             });
+            let run = &stored.run;
+            let failed_node = wf
+                .workflow
+                .nodes
+                .iter()
+                .find(|n| {
+                    run.nodes
+                        .get(&n.id)
+                        .is_some_and(|r| r.status == NodeStatus::Failed)
+                })
+                .map(|n| n.label.clone().unwrap_or_else(|| n.id.clone()));
+            notice(
+                &run.run_id,
+                NoticeKind::Finished {
+                    ok: run.status == RunStatus::Succeeded,
+                    secs: clock.elapsed().as_secs(),
+                    failed_node,
+                },
+            );
         }
         saved?;
         Ok(stored.run.run_id)

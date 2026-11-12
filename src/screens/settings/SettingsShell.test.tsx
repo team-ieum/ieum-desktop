@@ -18,6 +18,7 @@ beforeAll(() => {
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [{ id: "claude", path: "/usr/local/bin/claude", version: "2.1.0" }], apiKeys: [] });
   vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "stored" });
   vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
+  vi.spyOn(api, "onOpenTarget").mockResolvedValue(() => {});
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "currentAccount").mockResolvedValue(ACCOUNT);

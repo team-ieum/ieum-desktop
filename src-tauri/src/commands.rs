@@ -328,6 +328,12 @@ pub fn open_system_settings(app: AppHandle, pane: String) -> Result<(), String> 
     open_url(&url)
 }
 
+/// 앞 여부·알림 토글과 무관하게 테스트 알림을 보낸다.
+#[tauri::command]
+pub fn send_test_notification(app: AppHandle) -> Result<(), String> {
+    crate::notify::send_test(&app)
+}
+
 #[tauri::command]
 pub fn get_settings(active: State<'_, Active>) -> Result<Settings, String> {
     active.settings().get_settings()

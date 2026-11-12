@@ -1,6 +1,7 @@
 pub mod account;
 pub mod active;
 pub mod commands;
+pub mod notify;
 pub mod permissions;
 pub mod plan_usage;
 pub mod pricing;
@@ -97,6 +98,11 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     create_main_window(app)?;
     let app_data = app.path().app_data_dir()?;
     let store = Store::new(app_data.clone());
+    // 알림 클릭 처리·모음은 감독이 실행을 시작하기(activate) 전에.
+    app.manage(notify::Pending::default());
+    if let Err(e) = notify::listen_clicks(app.handle()) {
+        eprintln!("[ieum] 알림 클릭 처리를 걸지 못했어요: {e}");
+    }
     let handle = app.handle().clone();
     let emit: Emit = Arc::new(move |e| {
         let sent = match e {
@@ -118,6 +124,10 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                     "queue-dropped",
                     json!({"workflowId": workflow_id, "path": path}),
                 )
+            }
+            AppEvent::RunNotice(n) => {
+                notify::on_run_notice(&handle, &n);
+                Ok(())
             }
         };
         if let Err(e) = sent {
@@ -187,6 +197,7 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .setup(setup)
         // 창 닫기 = 숨기기(감시는 계속).
         .on_window_event(|w, e| {
@@ -233,6 +244,7 @@ pub fn run() {
             commands::claude_plan_usage,
             commands::folder_access,
             commands::open_system_settings,
+            commands::send_test_notification,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use ieum_desktop_lib::store::{RunTrigger, Store, StoredWorkflow};
-use ieum_desktop_lib::supervisor::{AppEvent, Deps, QUEUE_CAP, Supervisor, WatchState};
+use ieum_desktop_lib::supervisor::{
+    AppEvent, Deps, NoticeKind, QUEUE_CAP, RunNotice, Supervisor, WatchState,
+};
 use ieum_engine::{ExecEvent, NodeStatus, RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
@@ -745,4 +747,81 @@ async fn undo_ignores_tampered_roots_outside_policy() {
     assert!(report.restored.is_empty(), "{report:?}");
     assert!(out.join("sorted/a.pdf").exists());
     assert!(!inbox.join("a.pdf").exists());
+}
+
+fn notices(env: &Env, id: &str) -> Vec<RunNotice> {
+    env.events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            AppEvent::RunNotice(n) if n.workflow_id == id => Some(n.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_notice_emitted_with_trigger_and_name() {
+    let env = env();
+    // 수동 실행(꺼진 워크플로우)
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let id = save(&env, move_wf(&inbox, &out), false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let manual = notices(&env, &id);
+    assert_eq!(manual.len(), 2, "{manual:?}");
+    assert!(matches!(manual[0].kind, NoticeKind::Started));
+    assert!(
+        matches!(
+            manual[1].kind,
+            NoticeKind::Finished {
+                ok: true,
+                failed_node: None,
+                ..
+            }
+        ),
+        "{manual:?}"
+    );
+    for n in &manual {
+        assert_eq!(n.trigger, RunTrigger::Manual);
+        assert_eq!(n.workflow_name, "정리");
+        assert_eq!(n.run_id, run_id);
+    }
+
+    // 감시 실행
+    let (inbox2, out2) = (env.dir("in2"), env.dir("out2"));
+    let wid = save(&env, move_wf(&inbox2, &out2), true);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    fs::write(inbox2.join("b.pdf"), "pdf").unwrap();
+    assert!(wait_until(Duration::from_secs(5), || notices(&env, &wid).len() == 2).await);
+    let watch = notices(&env, &wid);
+    assert!(matches!(watch[0].kind, NoticeKind::Started));
+    assert!(matches!(
+        watch[1].kind,
+        NoticeKind::Finished { ok: true, .. }
+    ));
+    assert!(watch.iter().all(|n| n.trigger == RunTrigger::Watch));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_notice_failed_node_is_label_not_error() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let mut wf = move_wf(&inbox, &out);
+    wf.nodes[2].label = Some("파일 옮기기".into());
+    let id = save(&env, wf, false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    // 옮길 폴더 자리에 파일을 두어 옮기기 노드를 실패시킨다.
+    fs::write(out.join("sorted"), "not a folder").unwrap();
+    env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let n = notices(&env, &id);
+    match &n[1].kind {
+        NoticeKind::Finished {
+            ok: false,
+            failed_node,
+            ..
+        } => assert_eq!(failed_node.as_deref(), Some("파일 옮기기")),
+        k => panic!("{k:?}"),
+    }
 }
