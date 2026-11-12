@@ -52,7 +52,8 @@ test("settings_search_filters_rows", async () => {
 });
 
 test("settings_clears_key_input_after_save", async () => {
-  const setKey = vi.spyOn(api, "setApiKey").mockResolvedValue();
+  let finish = () => {};
+  const setKey = vi.spyOn(api, "setApiKey").mockReturnValue(new Promise<void>((r) => (finish = r)));
   await renderShell();
 
   await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "추가" })[0]));
@@ -61,10 +62,33 @@ test("settings_clears_key_input_after_save", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "저장" })));
   expect(setKey).toHaveBeenCalledWith("anthropic", "sk-secret");
 
-  // 저장하면 입력이 접히고, 다시 펼쳐도 비어 있다.
+  // 저장이 끝나기 전에 이미 접히고 비어 있다 — 다시 펼쳐도 키가 남아 있지 않다.
   expect(screen.queryByLabelText("Anthropic API 키")).toBeNull();
   await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "추가" })[0]));
   expect((screen.getByLabelText("Anthropic API 키") as HTMLInputElement).value).toBe("");
+  await act(async () => finish());
+});
+
+test("settings_search_matches_section_desc_and_button", async () => {
+  await renderShell();
+  const search = screen.getByLabelText("설정 검색");
+
+  // 묶음 이름 → 그 묶음의 줄 전부
+  await act(async () => fireEvent.change(search, { target: { value: "API 키" } }));
+  expect(screen.queryByText("맞는 설정이 없어요.")).toBeNull();
+  expect(screen.getByText("OpenAI")).toBeTruthy();
+  expect(screen.getByText("Gemini")).toBeTruthy();
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("API 키");
+
+  // 버튼 문구
+  await act(async () => fireEvent.change(search, { target: { value: "로그아웃" } }));
+  expect(screen.getByText("me@ieum.dev")).toBeTruthy();
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("이음 계정");
+
+  // 줄 설명
+  await act(async () => fireEvent.change(search, { target: { value: "폴더 감시" } }));
+  expect(screen.getByText("로그인할 때 자동으로 시작")).toBeTruthy();
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("일반");
 });
 
 test("settings_logout_returns_to_gate", async () => {
@@ -86,4 +110,19 @@ test("settings_back_returns_to_previous_page", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "앱으로 돌아가기" })));
   expect(screen.queryByRole("button", { name: "앱으로 돌아가기" })).toBeNull();
   expect(screen.getByRole("button", { name: "실행 기록" }).getAttribute("aria-current")).toBe("page");
+});
+
+test("relogin_after_logout_opens_dashboard", async () => {
+  vi.spyOn(api, "webLogout").mockResolvedValue();
+  vi.spyOn(api, "webLogin").mockResolvedValue({ ...ACCOUNT, expiresAt: "" } as never);
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "설정" })[0]));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "로그아웃" })));
+  expect(screen.queryByRole("button", { name: "앱으로 돌아가기" })).toBeNull();
+
+  await act(async () => useWeb.getState().login(ACCOUNT.email, "pw"));
+  expect(screen.queryByRole("button", { name: "앱으로 돌아가기" })).toBeNull();
+  expect(screen.getByRole("button", { name: "대시보드" }).getAttribute("aria-current")).toBe("page");
 });

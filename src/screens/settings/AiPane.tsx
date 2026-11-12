@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, CircleCheck, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, type ApiProvider, type KeychainStatus, type KeyState, type Providers } from "../../api";
-import { t } from "../../i18n";
+import { t, type Key } from "../../i18n";
 import { GHOST, Row } from "./Row";
 
 export const PROVIDERS: { id: ApiProvider; name: string }[] = [
@@ -20,7 +20,7 @@ export function ProvidersPane({ providers }: { providers: Providers | null }) {
   return (
     <>
       {providers?.clis.map((c) => (
-        <Row key={c.id} title={cliName(c.id)} desc={cliDesc(c.version)}>
+        <Row key={c.id} title={cliName(c.id)} desc={cliDesc(c.version)} also={[t("settings.cliReady")]}>
           <span className="inline-flex shrink-0 items-center gap-1.5 typo-caption1_semibold text-node-green">
             <CircleCheck className="size-[18px]" aria-hidden="true" />
             {t("settings.cliReady")}
@@ -50,6 +50,13 @@ function KeyBadge({ state }: { state?: KeyState }) {
   if (state === "missing") return <span>{t("settings.keyMissing")}</span>;
   return null;
 }
+
+const BADGE_TEXT: Record<KeyState, Key> = { stored: "settings.keyStored", missing: "settings.keyMissing", error: "settings.keyError" };
+/** 키 줄에서 검색에 걸릴 문구 — 상태 배지와 "바꾸기/추가" 버튼. */
+export const keyTexts = (state?: KeyState) => [
+  ...(state ? [t(BADGE_TEXT[state])] : []),
+  state === "stored" ? t("settings.keyChange") : t("settings.keyAdd"),
+];
 
 const INPUT =
   "h-10 min-w-0 flex-1 rounded-[10px] border border-main-blue bg-white px-3 text-sm text-neutral-800 outline-none ring-2 ring-main-blue/15 placeholder:text-neutral-400";
@@ -96,6 +103,7 @@ export function KeysPane({ keychain, refresh }: { keychain: KeychainStatus | nul
             key={id}
             title={name}
             desc={<KeyBadge state={keychain?.[id]} />}
+            also={keyTexts(keychain?.[id])}
             below={
               isOpen && (
                 <form
@@ -133,7 +141,7 @@ export function KeysPane({ keychain, refresh }: { keychain: KeychainStatus | nul
             <button
               type="button"
               aria-expanded={isOpen}
-              onClick={() => (isOpen ? close() : (setDraft(""), setOpen(id)))}
+              onClick={() => (isOpen ? close() : setOpen(id))}
               className={`inline-flex shrink-0 items-center gap-0.5 text-sm font-semibold ${isOpen ? "text-neutral-400" : "text-sub-blue hover:underline"}`}
             >
               {stored ? t("settings.keyChange") : t("settings.keyAdd")}

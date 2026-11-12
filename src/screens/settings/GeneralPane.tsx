@@ -38,7 +38,7 @@ export function GeneralPane() {
 
   return (
     <>
-      <Row title={t("settings.language")}>
+      <Row title={t("settings.language")} also={[t("settings.lang.system"), t("settings.lang.ko"), t("settings.lang.en")]}>
         <select
           aria-label={t("settings.language")}
           className="h-9 shrink-0 rounded-[10px] border border-[#cde9f4] bg-white px-3 text-sm text-neutral-700 outline-none focus:border-main-blue"

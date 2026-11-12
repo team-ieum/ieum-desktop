@@ -11,10 +11,22 @@ export const matches = (q: string, ...texts: string[]) => {
 export const GHOST =
   "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] border border-neutral-200 bg-white px-4 text-sm font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-40";
 
-/** 왼쪽 이름·설명, 오른쪽 조작. `below`는 줄 아래로 펼치는 내용(키 입력 등). */
-export function Row({ title, desc, children, below }: { title: string; desc?: ReactNode; children?: ReactNode; below?: ReactNode }) {
+/** 왼쪽 이름·설명, 오른쪽 조작. `below`는 줄 아래로 펼치는 내용(키 입력 등), `also`는 설명·버튼처럼 검색에 걸릴 다른 문구. */
+export function Row({
+  title,
+  desc,
+  also = [],
+  children,
+  below,
+}: {
+  title: string;
+  desc?: ReactNode;
+  also?: string[];
+  children?: ReactNode;
+  below?: ReactNode;
+}) {
   const q = useContext(QueryContext);
-  if (!matches(q, title, typeof desc === "string" ? desc : "")) return null;
+  if (!matches(q, title, typeof desc === "string" ? desc : "", ...also)) return null;
   return (
     <div className="border-b border-neutral-100 py-3.5 last:border-0">
       <div className="flex items-center justify-between gap-6">

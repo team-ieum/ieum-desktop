@@ -4,7 +4,7 @@ import { api, type KeychainStatus, type Providers } from "../../api";
 import { t, type Key } from "../../i18n";
 import { useWeb } from "../../stores/web";
 import { AccountPane, serverHost } from "./AccountPane";
-import { cliDesc, cliName, KeysPane, PROVIDERS, ProvidersPane } from "./AiPane";
+import { cliDesc, cliName, keyTexts, KeysPane, PROVIDERS, ProvidersPane } from "./AiPane";
 import { GeneralPane } from "./GeneralPane";
 import { matches, QueryContext } from "./Row";
 
@@ -48,14 +48,21 @@ export function SettingsShell({ onBack, version }: { onBack: () => void; version
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // 줄 이름·설명 — Row가 숨기는 기준과 같다. 줄이 하나도 안 남는 묶음은 메뉴·본문에서 뺀다.
+  // 줄 이름·설명·버튼 문구 — Row가 숨기는 기준과 같다. 묶음 이름이 맞으면 그 묶음의 줄은 다 보이고,
+  // 줄이 하나도 안 남는 묶음은 메뉴·본문에서 뺀다.
   const texts: Record<Id, string[]> = {
-    account: account ? [account.email, `${t("settings.loggedInAs")} · ${serverHost(account.serverUrl)}`] : [],
-    general: [t("settings.language"), t("settings.autostart"), t("settings.autostartDesc")],
-    providers: providers?.clis.length === 0 ? [t("settings.noCli")] : (providers?.clis ?? []).flatMap((c) => [cliName(c.id), cliDesc(c.version)]),
-    keys: PROVIDERS.map((p) => p.name),
+    account: account ? [account.email, `${t("settings.loggedInAs")} · ${serverHost(account.serverUrl)}`, t("settings.logout")] : [],
+    general: [t("settings.language"), t("settings.lang.system"), t("settings.lang.ko"), t("settings.lang.en"), t("settings.autostart"), t("settings.autostartDesc")],
+    providers:
+      providers?.clis.length === 0
+        ? [t("settings.noCli")]
+        : (providers?.clis ?? []).flatMap((c) => [cliName(c.id), cliDesc(c.version), t("settings.cliReady")]),
+    keys: PROVIDERS.flatMap((p) => [p.name, ...keyTexts(keychain?.[p.id])]),
   };
-  const visible = SECTIONS.filter((s) => (q.trim() ? texts[s.id].some((x) => matches(q, x)) : true));
+  const titleHit = (s: (typeof SECTIONS)[number]) => matches(q, t(s.label));
+  const visible = SECTIONS.filter((s) => titleHit(s) || texts[s.id].some((x) => matches(q, x)));
+  // 검색으로 선택한 묶음이 숨으면 위 경로는 남은 첫 묶음을 가리킨다.
+  const shown = visible.find((s) => s.id === sel) ?? visible[0];
 
   const panes: Record<Id, ReactNode> = {
     account: <AccountPane />,
@@ -97,8 +104,8 @@ export function SettingsShell({ onBack, version }: { onBack: () => void; version
               <button
                 type="button"
                 onClick={() => pick(s.id)}
-                aria-current={sel === s.id ? "true" : undefined}
-                className={`flex h-10 w-full items-center gap-2.5 rounded-xl px-3.5 text-sm transition-colors ${sel === s.id ? NAV_ON : NAV_OFF}`}
+                aria-current={shown?.id === s.id ? "true" : undefined}
+                className={`flex h-10 w-full items-center gap-2.5 rounded-xl px-3.5 text-sm transition-colors ${shown?.id === s.id ? NAV_ON : NAV_OFF}`}
               >
                 <s.icon className="size-[18px]" aria-hidden="true" />
                 {t(s.label)}
@@ -113,21 +120,27 @@ export function SettingsShell({ onBack, version }: { onBack: () => void; version
       <main className="flex min-w-0 flex-1 flex-col bg-white text-neutral-800">
         <div className="flex h-12 shrink-0 items-center gap-1.5 border-b border-neutral-200 px-8 text-sm text-neutral-500">
           {t("settings.title")}
-          <span className="text-neutral-300">/</span>
-          <span className="font-semibold text-main-deep-blue">{t(SECTIONS.find((s) => s.id === sel)!.label)}</span>
+          {shown && (
+            <>
+              <span className="text-neutral-300">/</span>
+              <span data-testid="settings-crumb" className="font-semibold text-main-deep-blue">
+                {t(shown.label)}
+              </span>
+            </>
+          )}
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[640px] px-4 pt-6 pb-10">
+          <div className="mx-auto max-w-[640px] pt-6 pb-10">
             {loadError && <p className="mb-4 typo-caption1_semibold text-danger-700">{loadError}</p>}
             {visible.length === 0 && <p className="typo-body3_regular text-neutral-500">{t("settings.noMatch")}</p>}
-            <QueryContext.Provider value={q}>
-              {visible.map((s) => (
-                <section key={s.id} id={`settings-${s.id}`} className="mb-6 scroll-mt-6">
-                  <h3 className="mb-2.5 typo-body1_bold text-main-deep-blue">{t(s.label)}</h3>
+            {visible.map((s) => (
+              <section key={s.id} id={`settings-${s.id}`} className="mb-6 scroll-mt-6">
+                <h3 className="mb-2.5 typo-body1_bold text-main-deep-blue">{t(s.label)}</h3>
+                <QueryContext.Provider value={titleHit(s) ? "" : q}>
                   <div className="rounded-brand-md border border-[#cde9f4] bg-white px-5">{panes[s.id]}</div>
-                </section>
-              ))}
-            </QueryContext.Provider>
+                </QueryContext.Provider>
+              </section>
+            ))}
           </div>
         </div>
       </main>

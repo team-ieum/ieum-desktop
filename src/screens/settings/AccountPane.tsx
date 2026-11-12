@@ -33,7 +33,7 @@ export function AccountPane() {
 
   return (
     <>
-      <Row title={account.email} desc={`${t("settings.loggedInAs")} · ${serverHost(account.serverUrl)}`}>
+      <Row title={account.email} desc={`${t("settings.loggedInAs")} · ${serverHost(account.serverUrl)}`} also={[t("settings.logout")]}>
         <button type="button" className={GHOST} disabled={busy} onClick={() => void doLogout()}>
           <LogOut className="size-[15px]" aria-hidden="true" />
           {t("settings.logout")}

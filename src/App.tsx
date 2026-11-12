@@ -41,6 +41,12 @@ export default function App() {
   const [view, setView] = useState<View>({ page: "local" });
   const [back, setBack] = useState<View>({ page: "local" });
   const account = useWeb((s) => s.account);
+  // 로그아웃하면 다음 로그인은 대시보드에서 시작한다.
+  const [lastAccount, setLastAccount] = useState(account);
+  if (account !== lastAccount) {
+    setLastAccount(account);
+    if (!account) setView({ page: "dashboard" });
+  }
   const loadAccount = useWeb((s) => s.load);
   const expired = useWeb((s) => s.expired);
   const guard = useWeb((s) => s.guard);
