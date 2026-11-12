@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use ieum_desktop_lib::store::{Store, StoredWorkflow};
+use ieum_desktop_lib::store::{RunTrigger, Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{AppEvent, Deps, QUEUE_CAP, Supervisor, WatchState};
 use ieum_engine::{ExecEvent, NodeStatus, RunStatus, Workflow};
 use ieum_local::WatchTiming;
@@ -275,6 +275,37 @@ async fn disabled_workflow_not_watched() {
     assert!(inbox.join("a.pdf").exists());
     let entry = env.sup.list_workflows().unwrap().remove(0);
     assert_eq!(entry.watch, WatchState::Off);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_run_records_watch_trigger() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let id = save(&env, move_wf(&inbox, &out), true);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    assert!(wait_until(Duration::from_secs(5), || runs(&env, &id) == 1).await);
+    let summary = &env.store.list_runs(Some(&id)).unwrap()[0];
+    assert_eq!(summary.trigger, Some(RunTrigger::Watch));
+    let run = env.store.get_run(&summary.run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Watch));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_now_records_manual_trigger() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let id = save(&env, move_wf(&inbox, &out), false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+
+    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Manual));
+    assert_eq!(
+        env.store.list_runs(Some(&id)).unwrap()[0].trigger,
+        Some(RunTrigger::Manual)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -24,7 +24,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::store::{Store, StoredRun, StoredWorkflow, now};
+use crate::store::{RunTrigger, Store, StoredRun, StoredWorkflow, now};
 
 /// 워크플로우 하나의 대기 실행 상한. 넘으면 가장 오래된 것부터 버린다.
 pub const QUEUE_CAP: usize = 100;
@@ -476,6 +476,11 @@ impl Supervisor {
         trigger: Map<String, Value>,
     ) -> Result<String, String> {
         let wf = self.store().get_workflow(workflow_id)?;
+        let run_trigger = if folder.is_some() {
+            RunTrigger::Watch
+        } else {
+            RunTrigger::Manual
+        };
         // 감시가 보낸 뒤 꺼졌거나 폴더가 바뀐 워크플로우의 늦은 트리거는 버린다.
         if let Some(f) = folder
             && trigger_folder(&wf) != Some(f)
@@ -529,6 +534,7 @@ impl Supervisor {
             file_ops: journal.ops(),
             allowed_roots: roots.paths().to_vec(),
             undo: None,
+            trigger: Some(run_trigger),
         };
         let (tx, mut rx) = mpsc::unbounded_channel();
         let emit = self.0.deps.emit.clone();

@@ -107,7 +107,10 @@ export interface StoredRun {
   fileOps: FileOp[];
   allowedRoots: string[];
   undo: UndoReport | null;
+  trigger?: RunTrigger | null;
 }
+/** 폴더 감시·수동. 옛 기록은 없음. */
+export type RunTrigger = "watch" | "manual";
 export interface RunSummary {
   runId: string;
   workflowId: string;
@@ -116,8 +119,7 @@ export interface RunSummary {
   finishedAt: string;
   fileOps: number;
   undone: boolean;
-  /** 폴더 감시·수동(Rust는 Task 4). 옛 기록은 없음. */
-  trigger?: "watch" | "manual" | null;
+  trigger?: RunTrigger | null;
 }
 export interface Settings {
   language: "system" | "ko" | "en";

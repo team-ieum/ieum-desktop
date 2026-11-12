@@ -36,6 +36,17 @@ pub struct StoredRun {
     /// 그 실행의 `roots_for_workflow` 결과(실제 경로).
     pub allowed_roots: Vec<PathBuf>,
     pub undo: Option<UndoReport>,
+    /// 옛 기록에는 없다.
+    #[serde(default)]
+    pub trigger: Option<RunTrigger>,
+}
+
+/// 폴더 감시로 돌았는지, 지금 실행(수동)인지.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunTrigger {
+    Watch,
+    Manual,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +59,7 @@ pub struct RunSummary {
     pub finished_at: String,
     pub file_ops: usize,
     pub undone: bool,
+    pub trigger: Option<RunTrigger>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +246,7 @@ impl Store {
                 finished_at: r.finished_at,
                 file_ops: r.file_ops.len(),
                 undone: r.undo.is_some(),
+                trigger: r.trigger,
             })
             .collect();
         list.sort_by(|a, b| b.started_at.cmp(&a.started_at));
