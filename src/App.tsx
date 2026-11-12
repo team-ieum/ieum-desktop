@@ -97,12 +97,14 @@ export default function App() {
       setView({ page });
     });
 
-  // 상태 줄 → 설정의 그 메뉴. 설정 안에서 누르면 돌아갈 곳은 그대로.
-  const openSettings = (section: "providers" | "keys") =>
+  // 상태 줄 팝오버 → 설정 AI 제공자. 설정 안에서 누르면 돌아갈 곳은 그대로.
+  const openAiSettings = () =>
     leave(() => {
       if (view.page !== "settings") setBack(view);
-      setView({ page: "settings", section });
+      setView({ page: "settings", section: "ai" });
     });
+  // 상태 줄 팝오버 → 대시보드 AI 사용량 카드.
+  const openUsage = () => leave(() => setView({ page: "dashboard" }));
 
   if (!ready) return null;
 
@@ -138,7 +140,7 @@ export default function App() {
           version={version}
           initial={"section" in view ? view.section : undefined}
         />
-        <StatusBar onOpen={openSettings} />
+        <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
       </div>
     );
 
@@ -205,7 +207,7 @@ export default function App() {
           </div>
         </main>
       </div>
-      <StatusBar onOpen={openSettings} />
+      <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
     </div>
   );
 }

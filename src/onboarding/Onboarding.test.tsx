@@ -26,6 +26,10 @@ beforeAll(() => {
   vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "missing" });
   vi.spyOn(api, "openSystemSettings").mockResolvedValue();
   vi.spyOn(api, "sendTestNotification").mockResolvedValue();
+  vi.spyOn(api, "claudePlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "codexPlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
 });
 beforeEach(() => {
   vi.spyOn(api, "setSettings").mockReset().mockResolvedValue();
@@ -46,6 +50,15 @@ test("onboarding_shows_after_login_when_not_done", async () => {
   expect(heading()).toBe("AI 연결");
   expect(screen.getAllByRole("listitem")).toHaveLength(3);
   expect(screen.queryByTestId("crumb")).toBeNull();
+});
+
+test("onboarding_ai_step_uses_provider_cards", async () => {
+  await act(async () => {
+    render(<Onboarding onDone={() => {}} />);
+  });
+  const names = screen.getAllByRole("article").map((a) => a.getAttribute("aria-label"));
+  expect(names).toEqual(["Claude (구독)", "Codex (구독)", "Antigravity (구독)", "Anthropic API", "OpenAI API", "Gemini API"]);
+  expect(screen.getByLabelText("Gemini API 키")).toBeTruthy();
 });
 
 test("onboarding_not_shown_after_done_even_for_other_account", async () => {

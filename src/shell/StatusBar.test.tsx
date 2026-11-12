@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { api, type PlanUsage, type UsageSummary } from "../api";
 import { setLang } from "../i18n";
@@ -23,11 +23,68 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const mount = async () => {
+const mount = async (onUsage = () => {}, onSettings = () => {}) => {
   await act(async () => {
-    render(<StatusBar onOpen={() => {}} />);
+    render(<StatusBar onUsage={onUsage} onSettings={onSettings} />);
   });
 };
+
+const OK: PlanUsage = {
+  state: "ok",
+  windows: [{ kind: "five_hour", usedPct: 34, resetsAt: inHours(58) }],
+  checkedAt: new Date().toISOString(),
+  accountEmail: null,
+};
+
+test("status_bar_opens_usage_popover_not_settings", async () => {
+  vi.spyOn(api, "claudePlanUsage").mockResolvedValue(OK);
+  vi.spyOn(api, "codexPlanUsage").mockResolvedValue({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null });
+  vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "usageSummary").mockResolvedValue({ ...SUMMARY, bySource: [{ source: "openai", input: 10, output: 5, usd: 1.5 }] });
+  const onSettings = vi.fn();
+  await mount(() => {}, onSettings);
+
+  await act(async () => fireEvent.click(screen.getByText("Claude 66% · 2일 10시간")));
+  expect(onSettings).not.toHaveBeenCalled();
+  const pop = within(screen.getByRole("dialog", { name: "AI 사용량" }));
+  expect(pop.getByText("66% 남음 · 2일 10시간 뒤 초기화")).toBeTruthy();
+  expect(pop.getByText("로그인 필요")).toBeTruthy();
+  expect(pop.getByText("확인 불가")).toBeTruthy();
+  expect(pop.getByText("이번 달 예상 $1.50")).toBeTruthy();
+  expect(document.activeElement).toBe(pop.getByRole("button", { name: "새로 고침" }));
+
+  const calls = (api.codexPlanUsage as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+  await act(async () => fireEvent.click(pop.getByRole("button", { name: "새로 고침" })));
+  expect((api.codexPlanUsage as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(calls + 1);
+
+  // Esc·바깥 클릭으로 닫힌다.
+  await act(async () => fireEvent.keyDown(document, { key: "Escape" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  await act(async () => fireEvent.click(screen.getByText("오늘 API 예상 $0.42")));
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  await act(async () => fireEvent.mouseDown(document.body));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("popover_links_open_usage_and_ai_settings", async () => {
+  vi.spyOn(api, "claudePlanUsage").mockResolvedValue(OK);
+  vi.spyOn(api, "codexPlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
+  const onUsage = vi.fn();
+  const onSettings = vi.fn();
+  await mount(onUsage, onSettings);
+
+  await act(async () => fireEvent.click(screen.getByText("오늘 API 예상 $0.42")));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "사용량 자세히" })));
+  expect(onUsage).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  await act(async () => fireEvent.click(screen.getByText("오늘 API 예상 $0.42")));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "AI 설정 열기" })));
+  expect(onSettings).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
 
 test("status_bar_shows_plan_and_today_cost", async () => {
   const plan: PlanUsage = {

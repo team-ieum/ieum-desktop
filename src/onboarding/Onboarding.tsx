@@ -1,10 +1,9 @@
-import { CircleCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { api, type KeychainStatus, type Providers } from "../api";
+import { api, type KeychainStatus } from "../api";
 import symbol from "../assets/symbol.png";
 import { t, type Key } from "../i18n";
 import { BUTTON, PRIMARY } from "../screens/Editor";
-import { KeysPane } from "../screens/settings/AiPane";
+import { AiProvidersPane, usePlans } from "../screens/settings/AiPane";
 import { Switch } from "../screens/settings/GeneralPane";
 import { useSettings } from "../stores/settings";
 
@@ -15,27 +14,18 @@ const STEPS: { title: Key; desc: Key }[] = [
 ];
 const NOTIFY = 1;
 
-const PILL = "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 typo-caption1_semibold";
-
-/** 1단계 — 구독 Claude는 상태만, API 키는 설정 화면 부품 그대로. */
+/** 1단계 — 설정 "AI 제공자"와 같은 카드(구독 3장 + API 키 3장). 길어서 상자 안에서 스크롤. */
 function AiStep() {
-  const [providers, setProviders] = useState<Providers | null>(null);
+  const { plans, refresh: refreshPlan } = usePlans();
   const [keychain, setKeychain] = useState<KeychainStatus | null>(null);
   const refresh = useCallback(() => {
-    api.detectProviders().then(setProviders, () => {});
     api.keychainStatus().then(setKeychain, () => {});
   }, []);
   useEffect(refresh, [refresh]);
   return (
-    <>
-      {providers?.clis.some((c) => c.id === "claude") && (
-        <p className={`${PILL} mb-2 bg-node-green/10 text-node-green`}>
-          <CircleCheck className="size-4" aria-hidden="true" />
-          {t("onboarding.ai.claude")}
-        </p>
-      )}
-      <KeysPane keychain={keychain} refresh={refresh} />
-    </>
+    <div className="max-h-[360px] overflow-y-auto pr-1">
+      <AiProvidersPane plans={plans} refreshPlan={refreshPlan} keychain={keychain} refreshKeys={refresh} />
+    </div>
   );
 }
 

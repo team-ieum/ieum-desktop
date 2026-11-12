@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import App from "../../App";
 import { api } from "../../api";
 import { setLang } from "../../i18n";
@@ -23,6 +23,10 @@ beforeAll(() => {
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "currentAccount").mockResolvedValue(ACCOUNT);
   vi.spyOn(api, "webListWorkflows").mockResolvedValue([]);
+  vi.spyOn(api, "claudePlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "codexPlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
 });
 beforeEach(() => {
   useSettings.setState({ settings: { language: "ko", autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true } });
@@ -53,34 +57,91 @@ test("settings_search_filters_rows", async () => {
   expect(nav.textContent).not.toContain("API 키");
 });
 
-test("settings_clears_key_input_after_save", async () => {
+const card = (name: string) => within(screen.getByRole("article", { name }));
+const inHours = (h: number) => new Date(Date.now() + h * 3600_000 + 30_000).toISOString();
+
+test("ai_providers_section_lists_six_cards", async () => {
+  await renderShell();
+  const nav = screen.getByRole("navigation").textContent ?? "";
+  expect(nav).toContain("AI 제공자");
+  expect(nav).not.toContain("API 키");
+  const names = within(document.getElementById("settings-ai")!)
+    .getAllByRole("article")
+    .map((a) => a.getAttribute("aria-label"));
+  expect(names).toEqual(["Claude (구독)", "Codex (구독)", "Antigravity (구독)", "Anthropic API", "OpenAI API", "Gemini API"]);
+});
+
+test("subscription_card_shows_login_hint_when_not_logged_in", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+  vi.spyOn(api, "codexPlanUsage").mockResolvedValue({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null });
+  await renderShell();
+  const codex = card("Codex (구독)");
+  expect(codex.getByText("로그인 필요")).toBeTruthy();
+  expect(codex.getByText("codex")).toBeTruthy();
+  await act(async () => fireEvent.click(codex.getByRole("button", { name: "명령 복사" })));
+  expect(writeText).toHaveBeenCalledWith("codex");
+  expect(codex.getByRole("button", { name: "복사됨" })).toBeTruthy();
+});
+
+test("subscription_card_shows_email_and_windows", async () => {
+  const load = vi.spyOn(api, "claudePlanUsage").mockResolvedValue({
+    state: "ok",
+    windows: [
+      { kind: "five_hour", usedPct: 34, resetsAt: inHours(58) },
+      { kind: "seven_day", usedPct: 10, resetsAt: inHours(100) },
+    ],
+    checkedAt: new Date(Date.now() - 3 * 60_000 - 5_000).toISOString(),
+    accountEmail: "me@claude.dev",
+  });
+  await renderShell();
+  const claude = card("Claude (구독)");
+  expect(claude.getByText("연결됨")).toBeTruthy();
+  expect(claude.getByText("me@claude.dev")).toBeTruthy();
+  expect(claude.getByText("66% 남음 · 2일 10시간 뒤 초기화")).toBeTruthy();
+  expect(claude.getByText("90% 남음 · 4일 4시간 뒤 초기화")).toBeTruthy();
+  expect(claude.getByText("3분 전에 조회")).toBeTruthy();
+  const calls = load.mock.calls.length;
+  await act(async () => fireEvent.click(claude.getByRole("button", { name: "사용량 새로 고침" })));
+  expect(load.mock.calls.length).toBe(calls + 1);
+});
+
+test("api_key_card_save_and_delete", async () => {
   let finish = () => {};
   const setKey = vi.spyOn(api, "setApiKey").mockReturnValue(new Promise<void>((r) => (finish = r)));
+  const del = vi.spyOn(api, "deleteApiKey").mockResolvedValue();
+  const keychain = vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "stored", gemini: "missing", "ieum-session": "stored" });
+  onTestFinished(() => void keychain.mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "stored" }));
   await renderShell();
 
-  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "추가" })[0]));
-  const key = screen.getByLabelText("Anthropic API 키") as HTMLInputElement;
+  const anthropic = card("Anthropic API");
+  expect(anthropic.getByText("console.anthropic.com/settings/keys")).toBeTruthy();
+  expect(anthropic.queryByRole("button", { name: "삭제" })).toBeNull();
+  const key = anthropic.getByLabelText("Anthropic API 키") as HTMLInputElement;
   await act(async () => fireEvent.change(key, { target: { value: "sk-secret" } }));
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "저장" })));
+  await act(async () => fireEvent.click(anthropic.getByRole("button", { name: "저장" })));
   expect(setKey).toHaveBeenCalledWith("anthropic", "sk-secret");
-
-  // 저장이 끝나기 전에 이미 접히고 비어 있다 — 다시 펼쳐도 키가 남아 있지 않다.
-  expect(screen.queryByLabelText("Anthropic API 키")).toBeNull();
-  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "추가" })[0]));
-  expect((screen.getByLabelText("Anthropic API 키") as HTMLInputElement).value).toBe("");
+  // 저장이 끝나기 전에 이미 비어 있다 — 키를 상태에 남기지 않는다.
+  expect(key.value).toBe("");
   await act(async () => finish());
+
+  const openai = card("OpenAI API");
+  expect(openai.getByText("키체인에 저장됨")).toBeTruthy();
+  await act(async () => fireEvent.click(openai.getByRole("button", { name: "삭제" })));
+  expect(del).toHaveBeenCalledWith("openai");
 });
 
 test("settings_search_matches_section_desc_and_button", async () => {
   await renderShell();
   const search = screen.getByLabelText("설정 검색");
 
-  // 묶음 이름 → 그 묶음의 줄 전부
+  // 카드 설명 → 그 카드만
   await act(async () => fireEvent.change(search, { target: { value: "API 키" } }));
   expect(screen.queryByText("맞는 설정이 없어요.")).toBeNull();
-  expect(screen.getByText("OpenAI")).toBeTruthy();
-  expect(screen.getByText("Gemini")).toBeTruthy();
-  expect(screen.getByTestId("settings-crumb").textContent).toBe("API 키");
+  expect(screen.getByRole("article", { name: "OpenAI API" })).toBeTruthy();
+  expect(screen.getByRole("article", { name: "Gemini API" })).toBeTruthy();
+  expect(screen.queryByRole("article", { name: "Codex (구독)" })).toBeNull();
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("AI 제공자");
 
   // 버튼 문구
   await act(async () => fireEvent.change(search, { target: { value: "로그아웃" } }));

@@ -1,23 +1,22 @@
-import { ArrowLeft, CircleUserRound, KeyRound, Search, ShieldCheck, SlidersHorizontal, Terminal, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bot, CircleUserRound, Search, ShieldCheck, SlidersHorizontal, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, type KeychainStatus, type PlanUsage, type Providers, type UsageSummary } from "../../api";
+import { api, type KeychainStatus, type Providers, type UsageSummary } from "../../api";
 import { t, type Key } from "../../i18n";
 import { useWeb } from "../../stores/web";
 import { AccountPane, serverHost } from "./AccountPane";
-import { cliDesc, cliName, keyTexts, KeysPane, PROVIDERS, ProvidersPane } from "./AiPane";
+import { AiProvidersPane, aiTexts, usePlans } from "./AiPane";
 import { GeneralPane } from "./GeneralPane";
 import { aiStatus, PermissionsPane } from "./PermissionsPane";
 import { matches, QueryContext } from "./Row";
 
-export type SettingsSection = "account" | "general" | "permissions" | "providers" | "keys";
+export type SettingsSection = "account" | "general" | "permissions" | "ai";
 type Id = SettingsSection;
 
 const SECTIONS: { id: Id; group: Key; label: Key; icon: LucideIcon }[] = [
   { id: "account", group: "settings.groupAccount", label: "settings.account", icon: CircleUserRound },
   { id: "general", group: "settings.general", label: "settings.general", icon: SlidersHorizontal },
   { id: "permissions", group: "settings.general", label: "settings.permissions", icon: ShieldCheck },
-  { id: "providers", group: "settings.ai", label: "settings.cli", icon: Terminal },
-  { id: "keys", group: "settings.ai", label: "settings.apiKey", icon: KeyRound },
+  { id: "ai", group: "settings.ai", label: "settings.cli", icon: Bot },
 ];
 
 const NAV_ON = "bg-main-deep-blue font-semibold text-white shadow-[0_4px_12px_-4px_rgba(41,83,124,.4)]";
@@ -31,15 +30,14 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
   const [loadError, setLoadError] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<Id>(initial);
+  const { plans, refresh: refreshPlan } = usePlans();
   // undefined = 읽는 중, null = 못 읽음(Rust 명령이 아직 없을 때도)
-  const [plan, setPlan] = useState<PlanUsage | null | undefined>(undefined);
   const [usage, setUsage] = useState<UsageSummary | null | undefined>(undefined);
   const search = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(() => {
     api.detectProviders().then(setProviders, (e) => setLoadError(String(e)));
     api.keychainStatus().then(setKeychain, (e) => setLoadError(String(e)));
-    api.claudePlanUsage().then(setPlan, () => setPlan(null));
     api.usageSummary("month").then(setUsage, () => setUsage(null));
   }, []);
   useEffect(refresh, [refresh]);
@@ -83,11 +81,7 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
       t("settings.replayOnboarding"),
       t("settings.replayOnboardingDesc"),
     ],
-    providers:
-      providers?.clis.length === 0
-        ? [t("settings.noCli")]
-        : (providers?.clis ?? []).flatMap((c) => [cliName(c.id), cliDesc(c.version), t("settings.cliReady")]),
-    keys: PROVIDERS.flatMap((p) => [p.name, ...keyTexts(keychain?.[p.id])]),
+    ai: aiTexts(plans, keychain),
   };
   const titleHit = (s: (typeof SECTIONS)[number]) => matches(q, t(s.label));
   const visible = SECTIONS.filter((s) => titleHit(s) || texts[s.id].some((x) => matches(q, x)));
@@ -102,9 +96,8 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
   const panes: Record<Id, ReactNode> = {
     account: <AccountPane />,
     general: <GeneralPane />,
-    permissions: <PermissionsPane providers={providers} keychain={keychain} onAi={() => pick("providers")} />,
-    providers: <ProvidersPane providers={providers} plan={plan} />,
-    keys: <KeysPane keychain={keychain} refresh={refresh} usage={usage} />,
+    permissions: <PermissionsPane providers={providers} keychain={keychain} onAi={() => pick("ai")} />,
+    ai: <AiProvidersPane plans={plans} refreshPlan={refreshPlan} keychain={keychain} refreshKeys={refresh} usage={usage} />,
   };
 
   return (
@@ -168,7 +161,8 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
               <section key={s.id} id={`settings-${s.id}`} className="mb-6 scroll-mt-6">
                 <h3 className="mb-2.5 typo-body1_bold text-main-deep-blue">{t(s.label)}</h3>
                 <QueryContext.Provider value={titleHit(s) ? "" : q}>
-                  <div className="rounded-brand-md border border-[#cde9f4] bg-white px-5">{panes[s.id]}</div>
+                  {/* AI 제공자는 카드마다 테두리가 있다. */}
+                  {s.id === "ai" ? panes.ai : <div className="rounded-brand-md border border-[#cde9f4] bg-white px-5">{panes[s.id]}</div>}
                 </QueryContext.Provider>
               </section>
             ))}
