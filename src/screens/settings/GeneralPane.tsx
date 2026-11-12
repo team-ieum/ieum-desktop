@@ -21,7 +21,8 @@ export function Switch({ on, label, disabled, onChange }: { on: boolean; label: 
   );
 }
 
-export function GeneralPane() {
+/** 설정 한 칸 바꿔 저장 — 실패하면 `error`에 Rust 오류. */
+export function useSettingsUpdate() {
   const settings = useSettings((s) => s.settings);
   const save = useSettings((s) => s.save);
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +36,11 @@ export function GeneralPane() {
       setError(String(e));
     }
   };
+  return { settings, update, error, setError };
+}
+
+export function GeneralPane() {
+  const { settings, update, error } = useSettingsUpdate();
 
   return (
     <>
@@ -50,9 +56,6 @@ export function GeneralPane() {
           <option value="ko">{t("settings.lang.ko")}</option>
           <option value="en">{t("settings.lang.en")}</option>
         </select>
-      </Row>
-      <Row title={t("settings.autostart")} desc={t("settings.autostartDesc")}>
-        <Switch on={settings?.autostart ?? false} label={t("settings.autostart")} disabled={!settings} onChange={(v) => void update({ autostart: v })} />
       </Row>
       {error && <p className="pb-3 typo-caption1_semibold text-danger-700">{error}</p>}
     </>

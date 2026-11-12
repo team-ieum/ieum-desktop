@@ -1,4 +1,4 @@
-import { ArrowLeft, CircleUserRound, KeyRound, Search, SlidersHorizontal, Terminal, type LucideIcon } from "lucide-react";
+import { ArrowLeft, CircleUserRound, KeyRound, Search, ShieldCheck, SlidersHorizontal, Terminal, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type KeychainStatus, type PlanUsage, type Providers, type UsageSummary } from "../../api";
 import { t, type Key } from "../../i18n";
@@ -6,14 +6,16 @@ import { useWeb } from "../../stores/web";
 import { AccountPane, serverHost } from "./AccountPane";
 import { cliDesc, cliName, keyTexts, KeysPane, PROVIDERS, ProvidersPane } from "./AiPane";
 import { GeneralPane } from "./GeneralPane";
+import { aiStatus, PermissionsPane } from "./PermissionsPane";
 import { matches, QueryContext } from "./Row";
 
-export type SettingsSection = "account" | "general" | "providers" | "keys";
+export type SettingsSection = "account" | "general" | "permissions" | "providers" | "keys";
 type Id = SettingsSection;
 
 const SECTIONS: { id: Id; group: Key; label: Key; icon: LucideIcon }[] = [
   { id: "account", group: "settings.groupAccount", label: "settings.account", icon: CircleUserRound },
   { id: "general", group: "settings.general", label: "settings.general", icon: SlidersHorizontal },
+  { id: "permissions", group: "settings.general", label: "settings.permissions", icon: ShieldCheck },
   { id: "providers", group: "settings.ai", label: "settings.cli", icon: Terminal },
   { id: "keys", group: "settings.ai", label: "settings.apiKey", icon: KeyRound },
 ];
@@ -62,7 +64,25 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
   // 줄이 하나도 안 남는 묶음은 메뉴·본문에서 뺀다.
   const texts: Record<Id, string[]> = {
     account: account ? [account.email, `${t("settings.loggedInAs")} · ${serverHost(account.serverUrl)}`, t("settings.logout")] : [],
-    general: [t("settings.language"), t("settings.lang.system"), t("settings.lang.ko"), t("settings.lang.en"), t("settings.autostart"), t("settings.autostartDesc")],
+    general: [t("settings.language"), t("settings.lang.system"), t("settings.lang.ko"), t("settings.lang.en")],
+    permissions: [
+      ...(["downloads", "desktop", "documents"] as const).map((k) => t(`onboarding.folder.${k}`)),
+      t("settings.notifyTest"),
+      t("settings.notifyTestDesc"),
+      t("settings.notifyTestSend"),
+      t("onboarding.openSettings"),
+      t("settings.notifyManualStart"),
+      t("settings.notifyManualEnd"),
+      t("settings.notifyWatchEnd"),
+      t("settings.autostart"),
+      t("settings.autostartDesc"),
+      t("settings.loginItems"),
+      t("settings.aiStatus"),
+      aiStatus(providers, keychain),
+      t("settings.toAi"),
+      t("settings.replayOnboarding"),
+      t("settings.replayOnboardingDesc"),
+    ],
     providers:
       providers?.clis.length === 0
         ? [t("settings.noCli")]
@@ -74,16 +94,17 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
   // 검색으로 선택한 묶음이 숨으면 위 경로는 남은 첫 묶음을 가리킨다.
   const shown = visible.find((s) => s.id === sel) ?? visible[0];
 
-  const panes: Record<Id, ReactNode> = {
-    account: <AccountPane />,
-    general: <GeneralPane />,
-    providers: <ProvidersPane providers={providers} plan={plan} />,
-    keys: <KeysPane keychain={keychain} refresh={refresh} usage={usage} />,
-  };
-
   const pick = (id: Id) => {
     setSel(id);
     document.getElementById(`settings-${id}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  };
+
+  const panes: Record<Id, ReactNode> = {
+    account: <AccountPane />,
+    general: <GeneralPane />,
+    permissions: <PermissionsPane providers={providers} keychain={keychain} onAi={() => pick("providers")} />,
+    providers: <ProvidersPane providers={providers} plan={plan} />,
+    keys: <KeysPane keychain={keychain} refresh={refresh} usage={usage} />,
   };
 
   return (

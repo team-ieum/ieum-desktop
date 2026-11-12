@@ -27,6 +27,7 @@ beforeAll(() => {
 beforeEach(() => {
   useSettings.setState({ settings: { language: "ko", autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true } });
   useWeb.setState({ account: ACCOUNT, expired: false, offline: false });
+  vi.spyOn(api, "folderAccess").mockResolvedValue("granted");
 });
 afterEach(cleanup);
 
@@ -46,7 +47,8 @@ test("settings_search_filters_rows", async () => {
   expect(screen.queryByText("언어")).toBeNull();
   expect(screen.queryByText("me@ieum.dev")).toBeNull();
   const nav = screen.getByRole("navigation");
-  expect(nav.textContent).toContain("일반");
+  expect(nav.textContent).toContain("권한·준비");
+  expect(document.getElementById("settings-general")).toBeNull();
   expect(nav.textContent).not.toContain("이음 계정");
   expect(nav.textContent).not.toContain("AI 제공자");
   expect(nav.textContent).not.toContain("API 키");
@@ -87,9 +89,46 @@ test("settings_search_matches_section_desc_and_button", async () => {
   expect(screen.getByTestId("settings-crumb").textContent).toBe("이음 계정");
 
   // 줄 설명
-  await act(async () => fireEvent.change(search, { target: { value: "폴더 감시" } }));
+  await act(async () => fireEvent.change(search, { target: { value: "메뉴 막대" } }));
   expect(screen.getByText("로그인할 때 자동으로 시작")).toBeTruthy();
-  expect(screen.getByTestId("settings-crumb").textContent).toBe("일반");
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("권한·준비");
+});
+
+test("permissions_pane_rechecks_folders_on_open", async () => {
+  const access = vi.spyOn(api, "folderAccess").mockResolvedValue("denied");
+  access.mockClear();
+  await renderShell();
+  expect(access).toHaveBeenCalledTimes(3);
+  expect(screen.getAllByText("거부됨")).toHaveLength(3);
+});
+
+test("notify_toggles_save_settings", async () => {
+  const set = vi.spyOn(api, "setSettings").mockResolvedValue();
+  await renderShell();
+  await act(async () => fireEvent.click(screen.getByRole("switch", { name: "폴더 감시 끝·실패" })));
+  expect(set).toHaveBeenCalledWith(expect.objectContaining({ notifyWatchEnd: false, notifyManualStart: true }));
+});
+
+test("autostart_toggle_lives_only_here", async () => {
+  await renderShell();
+  const general = document.getElementById("settings-general")!;
+  const perms = document.getElementById("settings-permissions")!;
+  expect(general.textContent).not.toContain("로그인할 때 자동으로 시작");
+  expect(perms.querySelector('[role="switch"][aria-label="로그인할 때 자동으로 시작"]')).toBeTruthy();
+});
+
+test("replay_onboarding_resets_flag", async () => {
+  const set = vi.spyOn(api, "setSettings").mockResolvedValue();
+  await renderShell();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "온보딩 다시 보기" })));
+  expect(set).toHaveBeenCalledWith(expect.objectContaining({ onboardingDone: false }));
+});
+
+test("settings_search_finds_permissions", async () => {
+  await renderShell();
+  await act(async () => fireEvent.change(screen.getByLabelText("설정 검색"), { target: { value: "알림" } }));
+  expect(screen.getByRole("navigation").textContent).toContain("권한·준비");
+  expect(screen.getByRole("button", { name: "테스트 알림 보내기" })).toBeTruthy();
 });
 
 test("settings_logout_returns_to_gate", async () => {

@@ -25,11 +25,11 @@ const PILL_OF: Record<FolderAccess, string> = {
   missing: "bg-neutral-100 text-neutral-500",
 };
 
-/** 1단계 — 폴더마다 한 번 읽어 macOS 허용 창을 띄운다. 들어오자마자 묻지 않는다(누를 때만). */
-function FoldersStep() {
+/** 1단계 — 폴더마다 한 번 읽어 macOS 허용 창을 띄운다. 온보딩은 누를 때만 묻고, 설정(`checkOnOpen`)은 열 때마다 다시 확인한다. */
+export function FoldersStep({ checkOnOpen = false }: { checkOnOpen?: boolean }) {
   const [state, setState] = useState<Partial<Record<FolderKind, FolderAccess | "checking">>>({});
   const [error, setError] = useState<string | null>(null);
-  const check = async (k: FolderKind) => {
+  const check = useCallback(async (k: FolderKind) => {
     setError(null);
     setState((s) => ({ ...s, [k]: "checking" }));
     try {
@@ -39,7 +39,10 @@ function FoldersStep() {
       setState((s) => ({ ...s, [k]: undefined }));
       setError(String(e));
     }
-  };
+  }, []);
+  useEffect(() => {
+    if (checkOnOpen) for (const k of FOLDERS) void check(k);
+  }, [checkOnOpen, check]);
   return (
     <>
       {FOLDERS.map((k) => {
