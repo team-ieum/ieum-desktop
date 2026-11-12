@@ -221,6 +221,8 @@ export const api = {
   webUnwatchExecution: (executionId: string) => invoke<void>("web_unwatch_execution", { executionId }),
   /** 서버 주소 + `/main`을 기본 브라우저로. */
   openWebEditor: () => invoke<void>("open_web_editor"),
+  /** 설치·사용 안내 문서를 기본 브라우저로(Rust 명령은 Task 5). */
+  openHelp: () => invoke<void>("open_help"),
   onWebExecEvent: (cb: (p: WebExecPayload) => void): Promise<UnlistenFn> =>
     listen<WebExecPayload>("web-exec-event", (e) => cb(e.payload)),
   /** 폴더·파일 고르기(tauri-plugin-dialog, 권한 `dialog:allow-open`). 취소하면 null. */

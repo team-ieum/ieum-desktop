@@ -6,6 +6,7 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
+    "core:app:allow-version",
     "allow-list-workflows",
     "allow-save-workflow",
     "allow-delete-workflow",

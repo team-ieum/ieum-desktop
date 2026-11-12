@@ -3,11 +3,22 @@ import type { Settings } from "./api";
 
 const ko = {
   "app.name": "IEUM",
-  "nav.workflows": "워크플로우",
-  "nav.history": "기록",
+  "nav.dashboard": "대시보드",
+  "nav.local": "내 PC",
+  "nav.history": "실행 기록",
   "nav.web": "웹 이음",
   "nav.settings": "설정",
+  "nav.newCanvas": "새 캔버스",
+  "nav.recent": "최근 작업",
+  "nav.recentEmpty": "최근 작업이 없어요.",
+  "nav.badgeWeb": "웹",
+  "nav.help": "도움말",
+  "nav.collapse": "사이드바 접기",
+  "nav.expand": "사이드바 펼치기",
 
+  "dashboard.title": "대시보드",
+
+  "banner.tagline": "모든 창작자를\n잇는 연결.",
   "banner.autostart": "로그인할 때 IEUM이 자동으로 켜져요. 설정에서 끌 수 있어요.",
   "banner.close": "닫기",
 
@@ -239,10 +250,22 @@ export type Key = keyof typeof ko;
 
 const en: Record<Key, string> = {
   "app.name": "IEUM",
-  "nav.workflows": "Workflows",
-  "nav.history": "History",
+  "nav.dashboard": "Dashboard",
+  "nav.local": "Local",
+  "nav.history": "Run history",
   "nav.web": "IEUM Web",
   "nav.settings": "Settings",
+  "nav.newCanvas": "New canvas",
+  "nav.recent": "Recent",
+  "nav.recentEmpty": "No recent work.",
+  "nav.badgeWeb": "Web",
+  "nav.help": "Help",
+  "nav.collapse": "Collapse sidebar",
+  "nav.expand": "Expand sidebar",
+
+  "dashboard.title": "Dashboard",
+
+  "banner.tagline": "Connecting\nevery creator.",
 
   "banner.autostart": "IEUM starts automatically when you log in. You can turn this off in Settings.",
   "banner.close": "Close",

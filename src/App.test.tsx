@@ -4,6 +4,10 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import App from "./App";
 import { api } from "./api";
 
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.2.0") }));
+
+const ACCOUNT = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" };
+
 beforeAll(() => {
   globalThis.ResizeObserver = class {
     observe() {}
@@ -19,7 +23,8 @@ beforeAll(() => {
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);
-  vi.spyOn(api, "webAccount").mockResolvedValue(null);
+  vi.spyOn(api, "webAccount").mockResolvedValue(ACCOUNT);
+  vi.spyOn(api, "webListWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [], apiKeys: [] });
   vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "missing" });
 });
@@ -32,17 +37,17 @@ test("leaving_editor_with_unsaved_changes_asks_in_app", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "새 워크플로우" }));
   });
-  const history = screen.getByRole("button", { name: "기록" });
+  const history = screen.getByRole("button", { name: "실행 기록" });
 
   // 고치기 전에는 묻지 않고 바로 간다 — 다시 편집기로.
   await act(async () => fireEvent.click(history));
   expect(screen.queryByRole("alert")).toBeNull();
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "워크플로우" })));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "내 PC" })));
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "새 워크플로우" })));
 
   await act(async () => fireEvent.change(screen.getByLabelText("워크플로우 이름"), { target: { value: "고침" } }));
 
-  // 탭 이동: 취소하면 편집기와 고친 내용이 남는다.
+  // 메뉴 이동: 취소하면 편집기와 고친 내용이 남는다.
   await act(async () => fireEvent.click(history));
   expect(screen.getByRole("alert").textContent).toContain("저장하지 않은 변경");
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "취소" })));
@@ -57,34 +62,20 @@ test("leaving_editor_with_unsaved_changes_asks_in_app", async () => {
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-const ACCOUNT = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" };
-
-test("web_tab_hidden_when_logged_out", async () => {
-  vi.spyOn(api, "webAccount").mockResolvedValueOnce(null);
+test("shell_shows_header_crumb_and_new_canvas_opens_editor", async () => {
   await act(async () => {
     render(<App />);
   });
-  expect(screen.queryByRole("button", { name: "웹 이음" })).toBeNull();
-  expect(screen.getByRole("button", { name: "설정" })).toBeTruthy();
-  cleanup();
+  // 위쪽 줄: 로고 글자·현재 위치·계정 첫 글자
+  expect(screen.getByText("IEUM")).toBeTruthy();
+  expect(screen.getByTestId("crumb").textContent).toBe("내 PC");
+  expect(screen.getByLabelText(ACCOUNT.email).textContent).toBe("M");
+  expect(await screen.findByText(/v0\.2\.0/)).toBeTruthy();
 
-  vi.spyOn(api, "webAccount").mockResolvedValueOnce(ACCOUNT);
-  await act(async () => {
-    render(<App />);
-  });
-  expect(screen.getByRole("button", { name: "웹 이음" })).toBeTruthy();
-});
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /새 캔버스/ })));
+  expect(screen.getByLabelText("워크플로우 이름")).toBeTruthy();
 
-test("auth_expired_goes_to_login", async () => {
-  vi.spyOn(api, "webAccount").mockResolvedValueOnce(ACCOUNT);
-  vi.spyOn(api, "webListWorkflows").mockRejectedValueOnce({ code: "AUTH_EXPIRED" });
-  await act(async () => {
-    render(<App />);
-  });
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "웹 이음" })));
-
-  expect(screen.queryByRole("button", { name: "웹 이음" })).toBeNull();
-  expect(screen.getByRole("button", { name: "설정" }).getAttribute("aria-current")).toBe("page");
-  expect(screen.getByLabelText("비밀번호")).toBeTruthy();
-  expect(screen.getByText(/로그인이 만료됐어요/)).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "대시보드" })));
+  expect(screen.getByTestId("crumb").textContent).toBe("대시보드");
+  expect(screen.getByRole("heading", { name: "대시보드" })).toBeTruthy();
 });
