@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleX, Globe, Laptop, Loader2 } from "lucide-react";
+import { CheckCircle2, ChevronRight, CircleX, File, Globe, Laptop, Loader2 } from "lucide-react";
 import type { RunSummary, WebDashboardExecution } from "../api";
 import { t, type Key } from "../i18n";
 import { formatDuration, formatRelative } from "./format";
@@ -13,6 +13,8 @@ export type Row = {
   durationSeconds: number | null;
   trigger: string | null;
   at: string;
+  /** 내 PC만 — 실행 기록 표의 파일 작업 열. */
+  fileOps?: number;
 };
 
 /** 끝 시각 없는 기록은 실행 중(History RunPill과 같은 규칙). */
@@ -25,6 +27,7 @@ export const localRow = (r: RunSummary, name: string): Row => ({
   durationSeconds: r.finishedAt ? (Date.parse(r.finishedAt) - Date.parse(r.startedAt)) / 1000 : null,
   trigger: r.trigger ?? null,
   at: r.startedAt,
+  fileOps: r.fileOps,
 });
 
 // 웹 mapWorkflowDashboardExecution
@@ -54,7 +57,7 @@ const TRIGGER: Record<string, Key> = {
   WEBHOOK: "dashboard.trigger.webhook",
   EVENT: "dashboard.trigger.webhook",
 };
-const triggerText = (v: string | null) => (v === null ? "—" : TRIGGER[v] ? t(TRIGGER[v]) : v);
+const triggerText = (v: string) => (TRIGGER[v] ? t(TRIGGER[v]) : v);
 
 const displayId = (id: string) => `RUN-${id.replace(/-/g, "").slice(0, 8).toUpperCase()}`;
 
@@ -71,17 +74,20 @@ const PILL = "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 t
 const TH = "border-b border-neutral-200 px-5 py-2.5 text-left typo-caption1_semibold tracking-wide text-neutral-400";
 const COLS: Key[] = ["dashboard.col.id", "dashboard.col.workflow", "dashboard.col.status", "dashboard.col.duration", "dashboard.col.trigger", "dashboard.col.at"];
 
+/** `showSource={false}` = 실행 기록 표(출처 열 대신 파일 작업 열·화살표). */
 export function RunTable({ rows, showSource = true, onOpen }: { rows: Row[]; showSource?: boolean; onOpen: (r: Row) => void }) {
+  const cols: Key[] = showSource ? ["dashboard.col.source", ...COLS] : [...COLS.slice(0, 5), "history.fileOps", COLS[5]];
   if (rows.length === 0) return <p className="px-5 py-8 text-center typo-body2_regular text-neutral-500">{t("dashboard.recentEmpty")}</p>;
   return (
     <table className="w-full border-collapse">
       <thead>
         <tr className="bg-neutral-50">
-          {(showSource ? (["dashboard.col.source", ...COLS] as Key[]) : COLS).map((k) => (
+          {cols.map((k) => (
             <th key={k} className={TH}>
               {t(k)}
             </th>
           ))}
+          {!showSource && <th className="border-b border-neutral-200" />}
         </tr>
       </thead>
       <tbody>
@@ -92,7 +98,9 @@ export function RunTable({ rows, showSource = true, onOpen }: { rows: Row[]; sho
             <tr
               key={`${r.source}:${r.id}`}
               tabIndex={0}
-              className="cursor-pointer border-b border-neutral-100 hover:bg-neutral-50 focus-visible:bg-neutral-50 focus-visible:outline-none"
+              className={`cursor-pointer border-b border-neutral-100 hover:bg-neutral-50 focus-visible:bg-neutral-50 focus-visible:outline-none ${
+                !showSource && r.status === "running" ? "bg-main-light-blue/30" : ""
+              }`}
               onClick={() => onOpen(r)}
               onKeyDown={(e) => e.key === "Enter" && onOpen(r)}
             >
@@ -116,11 +124,28 @@ export function RunTable({ rows, showSource = true, onOpen }: { rows: Row[]; sho
                 {r.durationSeconds === null || (r.status === "running" && r.durationSeconds <= 0) ? "—" : formatDuration(r.durationSeconds)}
               </td>
               <td className="px-5 py-3">
-                <span className="inline-flex items-center rounded-md border border-neutral-200 bg-neutral-50 px-2 py-0.5 typo-caption1_medium text-neutral-600">
-                  {triggerText(r.trigger)}
-                </span>
+                {r.trigger === null ? (
+                  <span className="typo-body3_medium text-neutral-400">—</span>
+                ) : (
+                  <span className="inline-flex items-center rounded-md border border-neutral-200 bg-neutral-50 px-2 py-0.5 typo-caption1_medium text-neutral-600">
+                    {triggerText(r.trigger)}
+                  </span>
+                )}
               </td>
+              {!showSource && (
+                <td className="px-5 py-3 typo-body3_medium tabular-nums text-neutral-600">
+                  <span className="inline-flex items-center gap-1.5">
+                    <File className="size-3.5 text-neutral-400" aria-hidden="true" />
+                    {t("history.fileCount").replace("{n}", String(r.fileOps ?? 0))}
+                  </span>
+                </td>
+              )}
               <td className="px-5 py-3 typo-caption1_regular text-neutral-400">{r.at ? formatRelative(r.at) : "—"}</td>
+              {!showSource && (
+                <td className="w-10 py-3 pr-4 text-right">
+                  <ChevronRight className="inline size-4 text-neutral-300" aria-hidden="true" />
+                </td>
+              )}
             </tr>
           );
         })}

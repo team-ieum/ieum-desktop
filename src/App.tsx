@@ -87,7 +87,12 @@ export default function App() {
   return (
     // 언어가 바뀌면 화면 전체를 다시 그린다.
     <div key={lang} className="flex h-full flex-col">
-      <Header crumb={t(NAV.find((n) => n.page === view.page)!.label)} email={account?.email ?? null} />
+      <Header
+        crumb={t(NAV.find((n) => n.page === view.page)!.label)}
+        email={account?.email ?? null}
+        onPick={(p) => leave(() => (p.kind === "local" ? openEditor(p.id) : setView({ page: "web", workflow: p.id })))}
+        onOpenRun={(run) => leave(() => setView({ page: "history", run }))}
+      />
       <div className="flex min-h-0 flex-1">
         <Sidebar
           current={view.page}

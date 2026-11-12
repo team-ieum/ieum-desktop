@@ -1,9 +1,34 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, Search } from "lucide-react";
+import { useEffect, useState } from "react";
 import symbol from "../assets/symbol.png";
 import { t } from "../i18n";
+import { NotificationsMenu } from "./NotificationsMenu";
+import { SearchDialog, type SearchPick } from "./SearchDialog";
 
-/** 위쪽 줄 — 로고·현재 위치·계정. 검색(⌘K)·알림 종은 Task 13에서 동작과 함께 붙인다. */
-export function Header({ crumb, email }: { crumb: string; email: string | null }) {
+/** 위쪽 줄 — 로고·현재 위치·찾기(⌘K)·알림 종·계정. */
+export function Header({
+  crumb,
+  email,
+  onPick,
+  onOpenRun,
+}: {
+  crumb: string;
+  email: string | null;
+  onPick: (item: SearchPick) => void;
+  onOpenRun: (runId: string) => void;
+}) {
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setSearching(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <header className="z-40 flex h-14 w-full shrink-0 items-center gap-3.5 border-b border-[#cde9f4] bg-linear-to-b from-[#EAF7FE] to-main-light-blue px-5">
       <div className="inline-flex h-10 items-center gap-2.5 rounded-xl px-2">
@@ -15,6 +40,16 @@ export function Header({ crumb, email }: { crumb: string; email: string | null }
         {crumb}
       </span>
       <div className="flex-1" />
+      <button
+        type="button"
+        className="inline-flex h-9 min-w-[220px] items-center gap-2.5 rounded-full border border-[#cde9f4] bg-white/70 pr-2.5 pl-3.5 text-[13px] text-main-deep-blue hover:bg-white/90"
+        onClick={() => setSearching(true)}
+      >
+        <Search className="size-[15px]" aria-hidden="true" />
+        <span className="flex-1 text-left">{t("header.search")}</span>
+        <span className="rounded-md border border-[#cde9f4] bg-white px-1.5 py-0.5 font-mono text-[11px] font-semibold opacity-80">⌘K</span>
+      </button>
+      <NotificationsMenu onOpenRun={onOpenRun} />
       {email && (
         <div
           role="img"
@@ -25,6 +60,7 @@ export function Header({ crumb, email }: { crumb: string; email: string | null }
           {email[0].toUpperCase()}
         </div>
       )}
+      <SearchDialog open={searching} onClose={() => setSearching(false)} onPick={onPick} />
     </header>
   );
 }
