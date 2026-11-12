@@ -29,7 +29,6 @@ beforeAll(() => {
 });
 beforeEach(() => {
   vi.spyOn(api, "setSettings").mockReset().mockResolvedValue();
-  vi.spyOn(api, "folderAccess").mockReset().mockResolvedValue("granted");
   useSettings.setState({ settings: BASE });
   useWeb.setState({ account: ACCOUNT, expired: false, offline: false });
 });
@@ -44,7 +43,8 @@ test("onboarding_shows_after_login_when_not_done", async () => {
   await act(async () => {
     render(<App />);
   });
-  expect(heading()).toBe("감시할 폴더");
+  expect(heading()).toBe("AI 연결");
+  expect(screen.getAllByRole("listitem")).toHaveLength(3);
   expect(screen.queryByTestId("crumb")).toBeNull();
 });
 
@@ -55,46 +55,23 @@ test("onboarding_not_shown_after_done_even_for_other_account", async () => {
     render(<App />);
   });
   expect(screen.getByTestId("crumb").textContent).toBe("대시보드");
-  expect(screen.queryByText("감시할 폴더")).toBeNull();
+  expect(screen.queryByRole("list", { name: "온보딩 진행" })).toBeNull();
 });
 
 test("onboarding_restarts_when_not_finished", async () => {
   const first = render(<Onboarding onDone={() => {}} />);
   await click("건너뛰기");
-  expect(heading()).toBe("AI 연결");
+  expect(heading()).toBe("알림");
   first.unmount();
   await act(async () => {
     render(<Onboarding onDone={() => {}} />);
   });
-  expect(heading()).toBe("감시할 폴더");
+  expect(heading()).toBe("AI 연결");
   expect(api.setSettings).not.toHaveBeenCalled();
-});
-
-test("folder_step_shows_checking_while_pending", async () => {
-  vi.mocked(api.folderAccess).mockReturnValue(new Promise(() => {}));
-  render(<Onboarding onDone={() => {}} />);
-  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "허용하기" })[0]));
-  const btn = screen.getByRole("button", { name: "확인 중" }) as HTMLButtonElement;
-  expect(btn.disabled).toBe(true);
-  expect(api.folderAccess).toHaveBeenCalledWith("downloads");
-});
-
-test("folder_denied_shows_settings_link_and_recheck", async () => {
-  vi.mocked(api.folderAccess).mockResolvedValue("denied");
-  render(<Onboarding onDone={() => {}} />);
-  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "허용하기" })[0]));
-  expect(screen.getByText("거부됨")).toBeTruthy();
-  await click("시스템 설정 열기");
-  expect(api.openSystemSettings).toHaveBeenCalledWith("files");
-  vi.mocked(api.folderAccess).mockResolvedValue("granted");
-  await click("다시 확인");
-  expect(api.folderAccess).toHaveBeenCalledTimes(2);
-  expect(screen.getByText("허용됨")).toBeTruthy();
 });
 
 test("notification_step_has_no_skip", async () => {
   render(<Onboarding onDone={() => {}} />);
-  await click("건너뛰기");
   await click("건너뛰기");
   expect(heading()).toBe("알림");
   expect(screen.queryByRole("button", { name: "건너뛰기" })).toBeNull();
@@ -113,7 +90,6 @@ test("notification_send_failure_shows_error_not_question", async () => {
   vi.spyOn(api, "openSystemSettings").mockRejectedValueOnce("설정 못 엶");
   render(<Onboarding onDone={() => {}} />);
   await click("건너뛰기");
-  await click("건너뛰기");
   await click("알림 켜기");
   // 대기 중엔 연타 막힘
   expect((screen.getByRole("button", { name: "알림 켜기" }) as HTMLButtonElement).disabled).toBe(true);
@@ -130,7 +106,6 @@ test("autostart_step_shows_current_value", async () => {
   const onDone = vi.fn();
   render(<Onboarding onDone={onDone} />);
   await click("건너뛰기");
-  await click("건너뛰기");
   await click("알림 켜기");
   await click("아니요");
   await click("다음");
@@ -144,7 +119,6 @@ test("autostart_step_shows_current_value", async () => {
 test("new_install_turning_autostart_off_marks_first_run_done", async () => {
   useSettings.setState({ settings: { ...BASE, firstRunDone: false, autostart: false } });
   render(<Onboarding onDone={() => {}} />);
-  await click("건너뛰기");
   await click("건너뛰기");
   await click("알림 켜기");
   await click("예");

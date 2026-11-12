@@ -9,12 +9,12 @@ use ieum_local::UndoReport;
 use ieum_local::ai::keys::ScopedKeys;
 use ieum_local::ai::{ApiKind, KeyStore, detect_clis};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::account::AccountId;
 use crate::active::{Active, NOT_SIGNED_IN};
-use crate::permissions::{self, FolderAccess};
+use crate::permissions;
 use crate::plan_usage::{PlanUsage, PlanUsageClient};
 use crate::pricing;
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
@@ -299,25 +299,6 @@ pub fn open_web_workflow(active: State<'_, Active>, id: String) -> Result<(), St
 #[tauri::command]
 pub fn open_help() -> Result<(), String> {
     open_url(HELP_URL)
-}
-
-/// 폴더를 한 번 읽어 권한을 확인한다. macOS 허용 창이 뜨면 답할 때까지 멈추므로 `spawn_blocking`.
-#[tauri::command]
-pub async fn folder_access(app: AppHandle, kind: String) -> Result<FolderAccess, String> {
-    let path = match kind.as_str() {
-        "downloads" => app.path().download_dir(),
-        "desktop" => app.path().desktop_dir(),
-        "documents" => app.path().document_dir(),
-        _ => return Err("모르는 폴더 종류예요.".into()),
-    }
-    .map_err(|e| format!("폴더 위치를 찾지 못했어요: {e}"))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        permissions::classify(
-            std::fs::read_dir(path).and_then(|mut d| d.next().transpose().map(|_| ())),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())
 }
 
 /// 정해진 시스템 설정 창만 연다(`files`·`notifications`·`login_items`).

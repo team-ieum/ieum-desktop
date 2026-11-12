@@ -42,7 +42,6 @@
     "allow-open-help",
     "allow-open-web-workflow",
     "allow-claude-plan-usage",
-    "allow-folder-access",
     "allow-open-system-settings",
     "allow-send-test-notification",
     "dialog:allow-open"

@@ -1,6 +1,5 @@
 import { api, type KeychainStatus, type Providers, type Settings } from "../../api";
 import { t, type Key } from "../../i18n";
-import { FoldersStep } from "../../onboarding/Onboarding";
 import { cliName, PROVIDERS } from "./AiPane";
 import { Switch, useSettingsUpdate } from "./GeneralPane";
 import { GHOST, Row } from "./Row";
@@ -18,7 +17,7 @@ export const aiStatus = (providers: Providers | null, keychain: KeychainStatus |
   return names.length ? t("settings.aiConnected").replace("{names}", names.join(", ")) : t("settings.aiNone");
 };
 
-/** 권한·준비 — 업데이트 뒤 풀린 권한을 여기서 복구한다. 폴더는 열 때마다 다시 확인. */
+/** 권한·준비 — 업데이트 뒤 풀린 권한을 여기서 복구한다. 폴더는 확인하지 않고 시스템 설정 길만. */
 export function PermissionsPane({ providers, keychain, onAi }: { providers: Providers | null; keychain: KeychainStatus | null; onAi: () => void }) {
   const { settings, update, error, setError } = useSettingsUpdate();
   const run = (call: Promise<void>) => {
@@ -29,7 +28,11 @@ export function PermissionsPane({ providers, keychain, onAi }: { providers: Prov
 
   return (
     <>
-      <FoldersStep action="settings.folderCheck" />
+      <Row title={t("settings.filesHint")} also={[t("onboarding.openSettings")]}>
+        <button type="button" className={GHOST} onClick={() => run(api.openSystemSettings("files"))}>
+          {t("onboarding.openSettings")}
+        </button>
+      </Row>
       <Row title={t("settings.notifyTest")} desc={t("settings.notifyTestDesc")} also={[t("settings.notifyTestSend"), t("onboarding.openSettings")]}>
         <div className="flex items-center gap-2">
           <button type="button" className={GHOST} onClick={() => run(api.openSystemSettings("notifications"))}>

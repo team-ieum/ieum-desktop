@@ -66,7 +66,7 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
     account: account ? [account.email, `${t("settings.loggedInAs")} · ${serverHost(account.serverUrl)}`, t("settings.logout")] : [],
     general: [t("settings.language"), t("settings.lang.system"), t("settings.lang.ko"), t("settings.lang.en")],
     permissions: [
-      ...(["downloads", "desktop", "documents"] as const).map((k) => t(`onboarding.folder.${k}`)),
+      t("settings.filesHint"),
       t("settings.notifyTest"),
       t("settings.notifyTestDesc"),
       t("settings.notifyTestSend"),

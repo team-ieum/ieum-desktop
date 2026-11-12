@@ -135,8 +135,6 @@ export interface Settings {
   notifyManualEnd: boolean;
   notifyWatchEnd: boolean;
 }
-export type FolderKind = "downloads" | "desktop" | "documents";
-export type FolderAccess = "granted" | "denied" | "missing";
 export type SystemSettingsPane = "files" | "notifications" | "login_items";
 /** 시스템 알림 클릭으로 열 화면(Rust `notify::Target`). */
 export type OpenTarget = { kind: "run"; runId: string } | { kind: "history" };
@@ -320,7 +318,6 @@ export const api = {
   openWebEditor: () => invoke<void>("open_web_editor"),
   /** 설치·사용 안내 문서를 기본 브라우저로(Rust 명령은 Task 5). */
   openHelp: () => invoke<void>("open_help"),
-  folderAccess: (kind: FolderKind) => invoke<FolderAccess>("folder_access", { kind }),
   openSystemSettings: (pane: SystemSettingsPane) => invoke<void>("open_system_settings", { pane }),
   /** 앞 여부·알림 토글과 무관하게 "알림이 켜졌어요". */
   sendTestNotification: () => invoke<void>("send_test_notification"),

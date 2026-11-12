@@ -15,17 +15,3 @@ fn keychain_commands_are_async() {
         .collect();
     assert!(sync.is_empty(), "키체인을 쓰는 동기 명령: {sync:#?}");
 }
-
-/// 폴더 읽기도 macOS 허용 창이 뜨면 멈춘다 — 이 목록의 명령은 `async fn`이어야 한다.
-const ASYNC_ONLY: &[&str] = &["folder_access"];
-
-#[test]
-fn folder_access_is_async_off_main() {
-    let src = include_str!("../src/commands.rs");
-    for name in ASYNC_ONLY {
-        assert!(
-            src.contains(&format!("pub async fn {name}(")),
-            "{name}은 async 명령이어야 해요"
-        );
-    }
-}

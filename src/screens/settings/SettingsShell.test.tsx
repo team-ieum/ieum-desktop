@@ -27,7 +27,6 @@ beforeAll(() => {
 beforeEach(() => {
   useSettings.setState({ settings: { language: "ko", autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true } });
   useWeb.setState({ account: ACCOUNT, expired: false, offline: false });
-  vi.spyOn(api, "folderAccess").mockResolvedValue("granted");
 });
 afterEach(cleanup);
 
@@ -94,14 +93,14 @@ test("settings_search_matches_section_desc_and_button", async () => {
   expect(screen.getByTestId("settings-crumb").textContent).toBe("권한·준비");
 });
 
-test("permissions_pane_checks_folders_only_on_click", async () => {
-  const access = vi.spyOn(api, "folderAccess").mockResolvedValue("denied");
-  access.mockClear();
+test("permissions_pane_opens_files_settings_without_checking_folders", async () => {
+  const open = vi.spyOn(api, "openSystemSettings").mockResolvedValue();
   await renderShell();
-  expect(access).toHaveBeenCalledTimes(0);
-  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "확인하기" })[0]));
-  expect(access).toHaveBeenCalledTimes(1);
-  expect(screen.getAllByText("거부됨")).toHaveLength(1);
+  expect(open).not.toHaveBeenCalled();
+  const perms = document.getElementById("settings-permissions")!;
+  expect(perms.textContent).toContain("폴더 권한은 워크플로우가 처음 그 폴더를 쓸 때 macOS가 물어봐요");
+  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "시스템 설정 열기" })[0]));
+  expect(open).toHaveBeenCalledWith("files");
 });
 
 test("notify_toggles_save_settings", async () => {

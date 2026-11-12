@@ -1,29 +1,6 @@
-//! 폴더 권한 판정·시스템 설정 딥링크.
+//! 시스템 설정 딥링크.
 
-use std::io::{Error, ErrorKind};
-
-use ieum_desktop_lib::permissions::{FolderAccess, classify, system_settings_url};
-
-#[test]
-fn classify_maps_io_errors() {
-    assert_eq!(classify(Ok(())), FolderAccess::Granted);
-    assert_eq!(
-        classify(Err(Error::from(ErrorKind::NotFound))),
-        FolderAccess::Missing
-    );
-    assert_eq!(
-        classify(Err(Error::from(ErrorKind::PermissionDenied))),
-        FolderAccess::Denied
-    );
-    assert_eq!(
-        classify(Err(Error::from(ErrorKind::Other))),
-        FolderAccess::Denied
-    );
-    assert_eq!(
-        serde_json::to_value(FolderAccess::Granted).unwrap(),
-        "granted"
-    );
-}
+use ieum_desktop_lib::permissions::system_settings_url;
 
 #[test]
 fn system_settings_url_only_known_panes() {

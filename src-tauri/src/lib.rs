@@ -242,7 +242,6 @@ pub fn run() {
             commands::open_help,
             commands::open_web_workflow,
             commands::claude_plan_usage,
-            commands::folder_access,
             commands::open_system_settings,
             commands::send_test_notification,
         ])

@@ -1,85 +1,23 @@
 import { CircleCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { api, type FolderAccess, type FolderKind, type KeychainStatus, type Providers } from "../api";
+import { api, type KeychainStatus, type Providers } from "../api";
 import symbol from "../assets/symbol.png";
 import { t, type Key } from "../i18n";
 import { BUTTON, PRIMARY } from "../screens/Editor";
 import { KeysPane } from "../screens/settings/AiPane";
 import { Switch } from "../screens/settings/GeneralPane";
-import { Row } from "../screens/settings/Row";
 import { useSettings } from "../stores/settings";
 
 const STEPS: { title: Key; desc: Key }[] = [
-  { title: "onboarding.folders.title", desc: "onboarding.folders.desc" },
   { title: "onboarding.ai.title", desc: "onboarding.ai.desc" },
   { title: "onboarding.notify.title", desc: "onboarding.notify.desc" },
   { title: "onboarding.autostart.title", desc: "onboarding.autostart.desc" },
 ];
-const NOTIFY = 2;
+const NOTIFY = 1;
 
-const FOLDERS: FolderKind[] = ["downloads", "desktop", "documents"];
 const PILL = "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 typo-caption1_semibold";
-const PILL_OF: Record<FolderAccess, string> = {
-  granted: "bg-node-green/10 text-node-green",
-  denied: "bg-danger-100 text-danger-700",
-  missing: "bg-neutral-100 text-neutral-500",
-};
 
-/** 1단계 — 폴더마다 한 번 읽어 macOS 허용 창을 띄운다. 누를 때만 묻는다(설정 화면은 버튼 문구만 `action`으로 바꿈). */
-export function FoldersStep({ action = "onboarding.allow" }: { action?: Key }) {
-  const [state, setState] = useState<Partial<Record<FolderKind, FolderAccess | "checking">>>({});
-  const [error, setError] = useState<string | null>(null);
-  const check = async (k: FolderKind) => {
-    setError(null);
-    setState((s) => ({ ...s, [k]: "checking" }));
-    try {
-      const r = await api.folderAccess(k);
-      setState((s) => ({ ...s, [k]: r }));
-    } catch (e) {
-      setState((s) => ({ ...s, [k]: undefined }));
-      setError(String(e));
-    }
-  };
-  const openFiles = () => {
-    setError(null);
-    api.openSystemSettings("files").catch((e) => setError(String(e)));
-  };
-  return (
-    <>
-      {FOLDERS.map((k) => {
-        const s = state[k];
-        return (
-          <Row key={k} title={t(`onboarding.folder.${k}`)}>
-            <div className="flex items-center gap-2">
-              {s === undefined || s === "checking" ? (
-                <button type="button" className={PRIMARY} disabled={s === "checking"} onClick={() => void check(k)}>
-                  {t(s ? "onboarding.checking" : action)}
-                </button>
-              ) : (
-                <>
-                  {s === "denied" && (
-                    <>
-                      <button type="button" className={BUTTON} onClick={openFiles}>
-                        {t("onboarding.openSettings")}
-                      </button>
-                      <button type="button" className={BUTTON} onClick={() => void check(k)}>
-                        {t("onboarding.recheck")}
-                      </button>
-                    </>
-                  )}
-                  <span className={`${PILL} ${PILL_OF[s]}`}>{t(`onboarding.${s}`)}</span>
-                </>
-              )}
-            </div>
-          </Row>
-        );
-      })}
-      {error && <p className="pt-2 typo-caption1_semibold text-danger-700">{error}</p>}
-    </>
-  );
-}
-
-/** 2단계 — 구독 Claude는 상태만, API 키는 설정 화면 부품 그대로. */
+/** 1단계 — 구독 Claude는 상태만, API 키는 설정 화면 부품 그대로. */
 function AiStep() {
   const [providers, setProviders] = useState<Providers | null>(null);
   const [keychain, setKeychain] = useState<KeychainStatus | null>(null);
@@ -104,7 +42,7 @@ function AiStep() {
 /** `failed` = 테스트 알림을 보내지 못함 — 묻지 않고 오류·설정 열기·다시 보내기만. */
 type Notice = "idle" | "asked" | "yes" | "no" | "failed";
 
-/** 3단계 — 테스트 알림 → 보였는지 묻는다. 안 보였으면 설정 열기·다시 보내기. */
+/** 2단계 — 테스트 알림 → 보였는지 묻는다. 안 보였으면 설정 열기·다시 보내기. */
 function NotifyStep({ notice, setNotice }: { notice: Notice; setNotice: (n: Notice) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -157,7 +95,7 @@ function NotifyStep({ notice, setNotice }: { notice: Notice; setNotice: (n: Noti
   );
 }
 
-/** 첫 실행 온보딩 4단계. [시작하기]가 저장에 성공해야 끝 — 그 전에 끄면 다음에 1단계부터. */
+/** 첫 실행 온보딩 3단계. [시작하기]가 저장에 성공해야 끝 — 그 전에 끄면 다음에 1단계부터. */
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const settings = useSettings((s) => s.settings);
   const [step, setStep] = useState(0);
@@ -199,8 +137,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         <h1 className="mt-6 typo-title2_bold text-main-deep-blue">{t(STEPS[step].title)}</h1>
         <p className="mt-2 typo-body2_medium text-neutral-500">{t(STEPS[step].desc)}</p>
         <div className="mt-6 min-h-[180px]">
-          {step === 0 && <FoldersStep />}
-          {step === 1 && <AiStep />}
+          {step === 0 && <AiStep />}
           {step === NOTIFY && <NotifyStep notice={notice} setNotice={setNotice} />}
           {last && (
             <div className="flex items-center justify-between gap-6 rounded-brand-md bg-neutral-50 px-4 py-3.5">
