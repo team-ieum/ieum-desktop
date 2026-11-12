@@ -102,12 +102,12 @@ export function Sidebar({
       </nav>
 
       {!collapsed && (
-        <div className="mt-5 min-h-0 px-3">
-          <div className="flex items-center justify-between px-3 pb-1.5 text-[11px] font-semibold tracking-[.08em] text-main-gray uppercase">
+        <div className="mt-5 flex min-h-0 flex-1 flex-col px-3">
+          <div className="flex shrink-0 items-center justify-between px-3 pb-1.5 text-[11px] font-semibold tracking-[.08em] text-main-gray uppercase">
             {t("nav.recent")}
             <MoreHorizontal className="size-[13px]" aria-hidden="true" />
           </div>
-          <div className="flex flex-col gap-0.5">
+          <div className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
             {recent.length === 0 && <p className="px-3 py-2 text-[12px] text-neutral-500">{t("nav.recentEmpty")}</p>}
             {recent.map((r, i) => (
               <button
@@ -143,10 +143,10 @@ export function Sidebar({
         </div>
       )}
 
-      <div className="flex-1" />
+      {collapsed && <div className="flex-1" />}
 
       {!collapsed && (
-        <div className="relative m-3 overflow-hidden rounded-xl bg-main-deep-blue p-3.5 text-white">
+        <div className="relative m-3 shrink-0 overflow-hidden rounded-xl bg-main-deep-blue p-3.5 text-white">
           <div className="absolute -top-5 -right-5 h-[90px] w-[90px] rounded-full bg-sub-blue/35" />
           <div className="absolute right-[18px] -bottom-[18px] h-[50px] w-[50px] rounded-full bg-node-yellow/50" />
           <div className="relative text-lg leading-snug whitespace-pre-line">{t("banner.tagline")}</div>
@@ -154,7 +154,7 @@ export function Sidebar({
         </div>
       )}
 
-      <div className={`flex gap-1.5 border-t border-[#cde9f4] bg-white/40 p-3 ${collapsed ? "flex-col items-center" : ""}`}>
+      <div className={`flex shrink-0 gap-1.5 border-t border-[#cde9f4] bg-white/40 p-3 ${collapsed ? "flex-col items-center" : ""}`}>
         {!collapsed && (
           <button
             type="button"

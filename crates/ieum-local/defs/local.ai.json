@@ -18,7 +18,7 @@
       "choices": [
         {
           "id": "cli:claude",
-          "name": "Claude 구독(claude CLI)"
+          "name": "Claude (구독)"
         },
         {
           "id": "api:anthropic",

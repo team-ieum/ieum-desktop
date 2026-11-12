@@ -11,8 +11,7 @@ export const PROVIDERS: { id: ApiProvider; name: string }[] = [
   { id: "gemini", name: "Gemini" },
 ];
 
-const CLI_NAMES: Record<string, string> = { claude: "Claude Code" };
-export const cliName = (id: string) => CLI_NAMES[id] ?? id;
+export const cliName = (id: string) => (id === "claude" ? t("choice.provider.cli:claude") : id);
 export const cliDesc = (version: string) => `${t("settings.cliFound")} (${version})`;
 
 /** Claude 구독 창별 남은 비율 막대·초기화 시각. undefined = 읽는 중, null = 못 읽음. */

@@ -68,6 +68,14 @@ impl CliKind {
         }
     }
 
+    /// 사용자에게 보이는 이름(오류 문구).
+    fn label(self) -> &'static str {
+        match self {
+            CliKind::Claude => "Claude (구독)",
+            CliKind::Codex => "Codex (구독)",
+        }
+    }
+
     /// 도구 차단 포함 인자. claude: 내장 도구 0 + MCP 0 + 사용자 설정 파일 안 읽음 + safe-mode(CLAUDE.md·스킬·
     /// 플러그인·훅 끔) + 세션 저장 안 함. codex: 읽기 전용 샌드박스.
     fn args(self, req: &AiRequest, schema_file: Option<&Path>) -> Vec<String> {
@@ -223,7 +231,7 @@ impl StreamState {
     }
 
     fn finish(self, exited_ok: bool, stderr: &str) -> Result<AiAnswer, AiError> {
-        let name = self.kind.program();
+        let name = self.kind.label();
         if let Some(e) = self.error {
             return Err(AiError(format!("{name}: {e}")));
         }
@@ -242,7 +250,7 @@ impl StreamState {
                     let skip = s.chars().count().saturating_sub(STDERR_TAIL);
                     s.chars().skip(skip).collect()
                 };
-                Err(AiError(format!("{name} CLI가 답을 주지 못했어요: {tail}")))
+                Err(AiError(format!("{name}이 답을 주지 못했어요: {tail}")))
             }
         }
     }
@@ -360,7 +368,7 @@ impl CliProvider {
 #[async_trait]
 impl AiProvider for CliProvider {
     async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
-        let name = self.kind.program();
+        let name = self.kind.label();
         if let Some(m) = req.model.as_deref().filter(|m| !valid_model(m)) {
             return Err(AiError(format!(
                 "모델 이름이 올바르지 않아요(‘-’로 시작하거나 공백·제어문자가 있음): {m:?}"
@@ -390,7 +398,7 @@ impl AiProvider for CliProvider {
             .process_group(0)
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| AiError(format!("{name} CLI를 실행하지 못했어요: {e}")))?;
+            .map_err(|e| AiError(format!("{name}을 실행하지 못했어요: {e}")))?;
         let pgid = child.id().map(|pid| pid as i32);
         let _group = pgid.map(KillGroup);
         let (mut stdin, stdout, mut stderr) = (
@@ -446,7 +454,7 @@ impl AiProvider for CliProvider {
             .await
             .map_err(|_| {
                 AiError(format!(
-                    "{name} CLI가 {}초 안에 답하지 않아 멈췄어요(시간 초과).",
+                    "{name}이 {}초 안에 답하지 않아 멈췄어요(시간 초과).",
                     self.timeout.as_secs()
                 ))
             })?;

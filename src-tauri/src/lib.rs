@@ -145,6 +145,14 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let home = app.path().home_dir()?;
+    // 키체인 항목 하나로 옮길 때 찾을 옛 계정별 항목 — 계정 폴더 이름(파일만 읽는다).
+    let scopes = std::fs::read_dir(app_data.join("accounts"))
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|k| crate::account::is_valid_key(k))
+        .collect();
+    ieum_local::ai::keys::set_legacy_scopes(scopes);
     let keys: Arc<dyn KeyStore> = Arc::new(Keychain);
     let active = Active::new(BaseDeps {
         app_data,
