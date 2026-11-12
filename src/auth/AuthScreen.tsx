@@ -73,9 +73,11 @@ function ServerLink() {
           </button>
         </form>
       )}
-      <div className="mt-2 text-center">
-        <ErrorText msg={error} />
-      </div>
+      {error && (
+        <div className="mt-2 text-center">
+          <ErrorText msg={error} />
+        </div>
+      )}
     </div>
   );
 }

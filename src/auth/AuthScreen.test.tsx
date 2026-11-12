@@ -43,7 +43,7 @@ test("signup_link_sends_code_and_shows_error", async () => {
   expect(send).toHaveBeenCalledWith("new@b.c");
   expect(screen.getByText("서버에 연결하지 못했어요")).toBeTruthy();
   // 로그인으로 돌아갈 수 있다.
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "로그인" })));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "로그인으로" })));
   expect(screen.getByLabelText("비밀번호")).toBeTruthy();
 });
 
@@ -60,4 +60,26 @@ test("server_link_saves_address", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "저장" })));
   expect(set).toHaveBeenCalledWith({ ...S, serverUrl: "https://evil.example" });
   expect(screen.getByText("허용되지 않은 서버 주소예요")).toBeTruthy();
+});
+
+test("missing_command_error_shows_server_text_not_raw", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(api, "sendCode").mockRejectedValue("Command web_send_code not found");
+  await act(async () => {
+    render(<AuthScreen />);
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "회원가입" })));
+  await act(async () => fireEvent.change(screen.getByLabelText("이메일"), { target: { value: "new@b.c" } }));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "인증번호 받기" })));
+  expect(screen.getByRole("alert").textContent).toBe("서버 오류");
+  expect(document.body.textContent).not.toContain("not found");
+});
+
+test("no_empty_error_slot_without_error", async () => {
+  await act(async () => {
+    render(<AuthScreen />);
+  });
+  const server = screen.getByRole("button", { name: /서버: green\.kiacms\.co\.kr/ });
+  // 서버 링크 묶음에 빈 오류 칸이 남아 칼럼 높이를 늘리지 않는다.
+  expect(server.parentElement?.lastElementChild).toBe(server);
 });

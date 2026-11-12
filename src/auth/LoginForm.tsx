@@ -21,6 +21,13 @@ export function Field({ label, icon: Icon, after, ...input }: { label: string; i
 export const SUBMIT =
   "mt-4 typo-body2_bold w-full rounded-2xl bg-main-deep-blue py-3.5 text-neutral-50 shadow-[0_4px_14px_4px_color-mix(in_srgb,var(--color-main-deep-blue)_25%,transparent)] hover:brightness-105 disabled:opacity-60";
 
+/** 관문의 `web_*` 오류는 문구로. 그 밖(명령 없음·IPC 실패 등) 원문은 화면에 내지 않고 서버 오류로. */
+export function authErrorText(e: unknown): string {
+  if (typeof e === "object" && e !== null && "code" in e) return webErrorText(e);
+  console.error("[ieum] 인증 요청 실패", e);
+  return t("web.err.SERVER");
+}
+
 export const ErrorText = ({ msg }: { msg: string | null }) =>
   msg ? (
     <p role="alert" className="typo-caption1_semibold text-danger-700">
@@ -47,7 +54,7 @@ export function LoginForm({ initialEmail = "", onSignup }: { initialEmail?: stri
     try {
       await login(email.trim(), pw);
     } catch (err) {
-      setError(webErrorText(err));
+      setError(authErrorText(err));
     } finally {
       setBusy(false);
     }
