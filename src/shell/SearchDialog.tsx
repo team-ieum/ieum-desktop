@@ -41,7 +41,7 @@ export function SearchDialog({ open, onClose, onPick }: { open: boolean; onClose
 
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") onClose();
-    else if (e.key === "ArrowDown") setSel((s) => Math.min(s + 1, items.length - 1));
+    else if (e.key === "ArrowDown") setSel((s) => Math.max(0, Math.min(s + 1, items.length - 1)));
     else if (e.key === "ArrowUp") setSel((s) => Math.max(s - 1, 0));
     else if (e.key === "Enter") pick(sel);
     else return;
@@ -53,6 +53,7 @@ export function SearchDialog({ open, onClose, onPick }: { open: boolean; onClose
       <div
         role="dialog"
         aria-label={t("header.search")}
+        aria-modal="true"
         className="flex h-fit max-h-[60vh] w-[560px] flex-col overflow-hidden rounded-xl border border-[#cde9f4] bg-white shadow-[0_20px_60px_-20px_rgba(41,83,124,.35)]"
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -61,8 +62,11 @@ export function SearchDialog({ open, onClose, onPick }: { open: boolean; onClose
           <input
             autoFocus
             role="combobox"
+            aria-label={t("header.searchPlaceholder")}
             aria-expanded="true"
             aria-controls="search-results"
+            aria-autocomplete="list"
+            aria-activedescendant={items[sel] ? `search-opt-${sel}` : undefined}
             className="h-12 flex-1 bg-transparent typo-body2_regular text-neutral-800 outline-none placeholder:text-neutral-400"
             placeholder={t("header.searchPlaceholder")}
             value={q}
@@ -88,6 +92,7 @@ export function SearchDialog({ open, onClose, onPick }: { open: boolean; onClose
               return (
                 <li
                   key={`${it.kind}:${it.id}`}
+                  id={`search-opt-${i}`}
                   role="option"
                   aria-selected={i === sel}
                   className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 typo-body2_regular ${

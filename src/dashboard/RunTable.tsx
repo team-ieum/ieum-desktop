@@ -1,4 +1,4 @@
-import { Ban, CheckCircle2, ChevronRight, CircleX, File, Globe, Laptop, Loader2, ShieldX } from "lucide-react";
+import { Ban, CheckCircle2, ChevronRight, CircleX, File, Globe, Laptop, Loader2, ShieldX, Undo2 } from "lucide-react";
 import type { RunSummary, WebDashboardExecution } from "../api";
 import { t, type Key } from "../i18n";
 import { formatDuration, formatRelative } from "./format";
@@ -16,6 +16,8 @@ export type Row = {
   at: string;
   /** 내 PC만 — 실행 기록 표의 파일 작업 열. */
   fileOps?: number;
+  /** 내 PC만 — 되돌린 실행. */
+  undone?: boolean;
 };
 
 const LOCAL_STATUS = { succeeded: "success", failed: "error", cancelled: "cancelled", rejected: "rejected" } as const;
@@ -31,6 +33,7 @@ export const localRow = (r: RunSummary, name: string): Row => ({
   trigger: r.trigger ?? null,
   at: r.startedAt,
   fileOps: r.fileOps,
+  undone: r.undone,
 });
 
 // 웹 mapWorkflowDashboardExecution
@@ -160,6 +163,12 @@ export function RunTable({
                   <span className="inline-flex items-center gap-1.5">
                     <File className="size-3.5 text-neutral-400" aria-hidden="true" />
                     {t("history.fileCount").replace("{n}", String(r.fileOps ?? 0))}
+                    {r.undone && (
+                      <span className="inline-flex items-center gap-1 rounded-md border border-main-light-blue bg-main-light-blue px-1.5 py-0.5 typo-caption2_semibold text-main-deep-blue">
+                        <Undo2 className="size-3" aria-hidden="true" />
+                        {t("history.undone")}
+                      </span>
+                    )}
                   </span>
                 </td>
               )}

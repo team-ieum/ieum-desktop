@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { api, type RunSummary } from "../api";
 import { setLang } from "../i18n";
@@ -38,5 +38,20 @@ test("history_table_shows_trigger_column", async () => {
   expect(screen.getByText("—")).toBeTruthy();
   expect(screen.getAllByText("3개")).toHaveLength(2);
   expect(screen.getByText("2개 중 2개 표시")).toBeTruthy();
+  vi.restoreAllMocks();
+});
+
+test("history_filter_failed_label_no_match_and_undone", async () => {
+  vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
+  vi.spyOn(api, "listRuns").mockResolvedValue([
+    { runId: "u1", workflowId: "w1", status: "succeeded", startedAt: "2026-11-11T00:00:00Z", finishedAt: "2026-11-11T00:00:01Z", fileOps: 2, undone: true },
+  ]);
+  await act(async () => {
+    render(<History />);
+  });
+  expect(screen.getByText("되돌림")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /실패/ })));
+  expect(screen.getByText("조건에 맞는 실행이 없어요.")).toBeTruthy();
+  expect(screen.queryByText("아직 실행 기록이 없어요.")).toBeNull();
   vi.restoreAllMocks();
 });

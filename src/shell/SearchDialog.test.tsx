@@ -53,3 +53,15 @@ test("search_web_offline_still_lists_local", async () => {
   expect(screen.getAllByRole("option")).toHaveLength(2);
   expect(screen.getByText("웹 이음 연결 안 됨")).toBeTruthy();
 });
+
+test("search_active_option_is_announced", async () => {
+  await mount();
+  const box = screen.getByRole("combobox");
+  type("없는이름");
+  fireEvent.keyDown(box, { key: "ArrowDown" });
+  type("pdf");
+  fireEvent.keyDown(box, { key: "ArrowDown" });
+  const active = box.getAttribute("aria-activedescendant")!;
+  expect(document.getElementById(active)?.textContent).toContain("PDF 요약 메일");
+  expect(document.getElementById(active)?.getAttribute("aria-selected")).toBe("true");
+});

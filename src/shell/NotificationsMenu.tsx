@@ -1,5 +1,5 @@
 import { Bell, CircleX, Globe, Laptop } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type WebDashboardError } from "../api";
 import { formatRelative } from "../dashboard/format";
 import { t } from "../i18n";
@@ -10,6 +10,8 @@ import { useWorkflows } from "../stores/workflows";
 
 type Item = { kind: "local" | "web"; id: string; workflowId: string; name: string; message: string | null; at: string };
 const MAX = 20;
+/** 웹 오류 다시 읽는 간격 — 창이 보일 때만. */
+export const POLL_MS = 60_000;
 
 /** 위쪽 줄 종 — 내 PC 실패 + 웹 이음 오류. 배지 = 마지막으로 연 뒤 생긴 수. */
 export function NotificationsMenu({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
@@ -22,13 +24,32 @@ export function NotificationsMenu({ onOpenRun }: { onOpenRun: (runId: string) =>
   const [webErrors, setWebErrors] = useState<WebDashboardError[]>([]);
   const [open, setOpen] = useState(false);
 
+  const bell = useRef<HTMLButtonElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+
+  // 내 PC 실패는 runFinished 때 subscribeExecEvents가 useRuns를 다시 읽어 따라온다.
+  // 웹 오류는 창이 보이는 동안 60초마다, 다시 보일 때 바로.
   useEffect(() => {
     void loadRuns();
-    guard(api.dashboardErrors(null)).then(
-      (p) => setWebErrors(p.content),
-      () => setWebErrors([]),
-    );
+    const fetchWeb = () =>
+      guard(api.dashboardErrors(null)).then(
+        (p) => setWebErrors(p.content),
+        () => setWebErrors([]),
+      );
+    void fetchWeb();
+    const tick = setInterval(() => document.visibilityState === "visible" && void fetchWeb(), POLL_MS);
+    const onVisible = () => document.visibilityState === "visible" && void fetchWeb();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(tick);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [loadRuns, guard]);
+
+  // 열리면 첫 항목(없으면 메뉴)으로 포커스 — Esc가 먹게.
+  useEffect(() => {
+    if (open) (menu.current?.querySelector<HTMLElement>("[role=menuitem]") ?? menu.current)?.focus();
+  }, [open]);
 
   const items: Item[] = [
     ...runs
@@ -60,6 +81,23 @@ export function NotificationsMenu({ onOpenRun }: { onOpenRun: (runId: string) =>
     if (!open && settings) void save({ ...settings, notificationsSeenAt: new Date().toISOString() }).catch(() => {});
     setOpen(!open);
   };
+  const close = () => {
+    setOpen(false);
+    bell.current?.focus();
+  };
+  const onMenuKey = (e: React.KeyboardEvent) => {
+    const els = [...(menu.current?.querySelectorAll<HTMLElement>("[role=menuitem]") ?? [])];
+    const at = els.indexOf(document.activeElement as HTMLElement);
+    const go = (i: number) => els[(i + els.length) % els.length]?.focus();
+    if (e.key === "Escape") close();
+    else if (e.key === "ArrowDown") go(at + 1);
+    else if (e.key === "ArrowUp") go(at - 1);
+    else if (e.key === "Home") go(0);
+    else if (e.key === "End") go(els.length - 1);
+    else if (e.key === "Tab") setOpen(false);
+    else return;
+    if (e.key !== "Tab") e.preventDefault();
+  };
   const choose = (i: Item) => {
     setOpen(false);
     if (i.kind === "local") onOpenRun(i.id);
@@ -69,6 +107,7 @@ export function NotificationsMenu({ onOpenRun }: { onOpenRun: (runId: string) =>
   return (
     <div className="relative">
       <button
+        ref={bell}
         type="button"
         aria-label={t("header.notifications")}
         aria-haspopup="menu"
@@ -90,7 +129,11 @@ export function NotificationsMenu({ onOpenRun }: { onOpenRun: (runId: string) =>
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
+            ref={menu}
             role="menu"
+            aria-label={t("header.notifications")}
+            tabIndex={-1}
+            onKeyDown={onMenuKey}
             className="absolute top-12 right-0 z-50 flex max-h-[420px] w-[340px] flex-col overflow-hidden rounded-xl border border-[#cde9f4] bg-white shadow-[0_20px_60px_-20px_rgba(41,83,124,.35)]"
           >
             <p className="border-b border-neutral-200 px-4 py-3 typo-body2_bold text-main-deep-blue">{t("header.notifications")}</p>
@@ -105,6 +148,7 @@ export function NotificationsMenu({ onOpenRun }: { onOpenRun: (runId: string) =>
                       key={`${i.kind}:${i.id}`}
                       type="button"
                       role="menuitem"
+                      tabIndex={-1}
                       className="flex w-full items-start gap-2.5 rounded-lg px-3 py-2 text-left hover:bg-neutral-50"
                       onClick={() => choose(i)}
                     >
