@@ -90,7 +90,8 @@ export function SignupForm({ onBack }: { onBack(): void }) {
     const c = errCode(err);
     if (c === "EMAIL_TAKEN") go(1);
     else if (c === "CODE_INVALID") go(2);
-    setError(authErrorText(err));
+    // 가입 중 429(인증번호 재전송·차단)도 AUTH_LOCKED로 오니 로그인 잠김 문구 대신.
+    setError(c === "AUTH_LOCKED" ? t("auth.err.tooMany") : authErrorText(err));
   };
 
   const run = async (f: () => Promise<void>) => {

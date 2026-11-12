@@ -184,6 +184,41 @@ async fn activate_failure_clears_session_and_slot() {
     assert_eq!(settings.get_settings().unwrap().current_account, Some(id));
 }
 
+/// `web_register`(= `BeClient::register`)는 가입만 — 활성 계정·세션 키를 건드리지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn register_leaves_active_and_session_alone() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().canonicalize().unwrap();
+    fs::create_dir_all(root.join("trash")).unwrap();
+    let settings = Store::new(root.join("data"));
+    let keys = Arc::new(FakeKeys::default());
+    let active = new_active(&root, &settings, keys.clone());
+    let base = serve().await;
+    let client = BeClient::new(&base, keys.clone()).unwrap();
+
+    client
+        .register("new@x.com", "Pw1!secret", "새 사람")
+        .await
+        .unwrap();
+    assert_eq!(active.current().await, None);
+    assert_eq!(account_of(&active).await, None);
+    assert!(keys.get(SESSION_ACCOUNT).unwrap().is_none());
+
+    // 이미 다른 계정이 활성이어도 그대로.
+    let a = AccountId {
+        email: "a@x.com".into(),
+        server_url: base.clone(),
+    };
+    active.activate(a.clone()).await.unwrap();
+    client
+        .register("new@x.com", "Pw1!secret", "새 사람")
+        .await
+        .unwrap();
+    assert_eq!(active.current().await, Some(a.clone()));
+    assert_eq!(settings.get_settings().unwrap().current_account, Some(a));
+    assert!(keys.get(SESSION_ACCOUNT).unwrap().is_none());
+}
+
 /// 클라이언트를 못 만들어도(서버 주소 설정 오류 등) 로그아웃은 감시를 멈춘다.
 #[tokio::test(flavor = "multi_thread")]
 async fn logout_deactivates_even_without_client() {

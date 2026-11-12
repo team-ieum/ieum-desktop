@@ -289,7 +289,7 @@ export const api = {
   sendCode: (email: string) => invoke<void>("web_send_code", { email }),
   verifyCode: (email: string, code: string) => invoke<void>("web_verify_code", { email, code }),
   register: (email: string, password: string, name: string) =>
-    invoke<WebAccount>("web_register", { email, password, name }),
+    invoke<void>("web_register", { email, password, name }),
   webListWorkflows: () => invoke<WebWorkflowSummary[]>("web_list_workflows"),
   webGetWorkflow: (id: string) => invoke<WebWorkflow>("web_get_workflow", { id }),
   webListExecutions: (workflowId: string, cursor: string | null) =>

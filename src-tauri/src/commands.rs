@@ -419,18 +419,7 @@ pub async fn web_verify_code(
         .await
 }
 
-/// 가입하고 바로 로그인·활성화(`login_and_activate`).
-pub async fn register_and_activate(
-    active: &Active,
-    client: &BeClient,
-    email: &str,
-    password: &str,
-    name: &str,
-) -> Result<WebAccount, WebError> {
-    client.register(email, password, name).await?;
-    login_and_activate(active, client, email, password).await
-}
-
+/// 가입만 — 로그인·활성화는 화면이 이어서 부르는 `web_login`이 한다(가입 성공·로그인 실패를 화면이 구분하게).
 #[tauri::command]
 pub async fn web_register(
     active: State<'_, Active>,
@@ -438,9 +427,10 @@ pub async fn web_register(
     email: String,
     password: String,
     name: String,
-) -> Result<WebAccount, WebError> {
-    let client = be_client(&active, &keys)?;
-    register_and_activate(&active, &client, &email, &password, &name).await
+) -> Result<(), WebError> {
+    be_client(&active, &keys)?
+        .register(&email, &password, &name)
+        .await
 }
 
 #[tauri::command]

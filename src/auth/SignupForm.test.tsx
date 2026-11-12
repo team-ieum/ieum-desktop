@@ -82,6 +82,7 @@ test("signup_shows_distinct_errors", async () => {
   expect(texts[0]).toBe("이미 가입된 이메일이에요.");
   expect(texts[1]).toBe("인증번호가 맞지 않거나 만료됐어요.");
   expect(texts[2]).toBe("서버에 연결하지 못했어요");
+  expect(texts[4]).toBe("요청이 많아요. 잠시 뒤에 다시 해 주세요.");
   expect(new Set(texts).size).toBe(texts.length);
 });
 
