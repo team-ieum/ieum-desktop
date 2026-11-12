@@ -118,7 +118,7 @@ export function AuthScreen({ initialEmail }: { initialEmail?: string }) {
         <p className="relative typo-caption1_medium text-white/55">IEUM desktop{version && ` · v${version}`}</p>
       </aside>
       <section className="flex basis-1/2 items-center justify-center overflow-y-auto bg-neutral-white px-12">
-        <div className="w-[400px]">
+        <div className="w-[420px]">
           {mode === "login" ? (
             <LoginForm initialEmail={initialEmail} onSignup={() => setMode("signup")} />
           ) : (

@@ -237,6 +237,31 @@ export type WebExecPayload = { executionId: string } & (
   | { error: WebError }
 );
 
+// usage.rs(Task 14) — 내 PC AI 노드가 쓴 토큰·예상 금액. usd null = 가격표에 없는 모델·구독.
+export type UsageRange = "today" | "week" | "month";
+export interface UsageSummary {
+  totalUsd: number;
+  totalInput: number;
+  totalOutput: number;
+  unpricedCalls: number;
+  bySource: { source: string; input: number; output: number; usd: number | null }[];
+  byWorkflow: { workflowId: string; input: number; output: number; usd: number | null }[];
+  byDay: { date: string; usd: number; input: number; output: number }[];
+  asOf: string;
+}
+
+// plan_usage.rs(Task 15) — Claude 구독 창별 사용 비율.
+export interface PlanWindow {
+  kind: "five_hour" | "seven_day" | "seven_day_opus";
+  usedPct: number;
+  resetsAt: string;
+}
+export interface PlanUsage {
+  state: "ok" | "unavailable" | "not_logged_in";
+  windows: PlanWindow[];
+  checkedAt: string;
+}
+
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
   saveWorkflow: (wf: StoredWorkflow) => invoke<StoredWorkflow>("save_workflow", { wf }),
@@ -290,4 +315,7 @@ export const api = {
     invoke<string | null>("plugin:dialog|open", { options: { directory, multiple: false } }),
   onExecEvent: (cb: (p: ExecPayload) => void): Promise<UnlistenFn> =>
     listen<ExecPayload>("exec-event", (e) => cb(e.payload)),
+  // Rust 명령은 다음 세션(Task 14·15) — 그 전엔 실패하고 화면은 빈 상태를 보인다.
+  usageSummary: (range: UsageRange) => invoke<UsageSummary>("usage_summary", { range }),
+  claudePlanUsage: () => invoke<PlanUsage>("claude_plan_usage"),
 };

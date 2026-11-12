@@ -59,8 +59,8 @@ export function SignupForm({ onBack }: { onBack(): void }) {
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);
   const [tried, setTried] = useState(false);
-  // 가입은 됐는데 자동 로그인이 실패한 경우 — 다시 누르면 로그인만.
-  const [registered, setRegistered] = useState(false);
+  // 가입은 됐는데 자동 로그인이 실패한 경우 — 같은 이메일로 다시 누르면 로그인만.
+  const [registered, setRegistered] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const boxes = useRef<(HTMLInputElement | null)[]>([]);
@@ -126,9 +126,9 @@ export function SignupForm({ onBack }: { onBack(): void }) {
     setTried(true);
     if (issues.length || password !== confirm) return;
     return run(async () => {
-      if (!registered) {
+      if (registered !== email.trim()) {
         await api.register(email.trim(), password, name.trim());
-        setRegistered(true);
+        setRegistered(email.trim());
       }
       await login(email.trim(), password);
     });
@@ -202,7 +202,8 @@ export function SignupForm({ onBack }: { onBack(): void }) {
           </div>
         )}
         {step === 2 && (
-          <div>
+          // 시안: 인증번호 → 확인 버튼 32px
+          <div className="mb-8">
             <p className="mb-2 pl-3 typo-body1_medium text-main-deep-blue">{t("auth.step.code")}</p>
             <div className="flex justify-between gap-2">
               {code.map((c, i) => (
@@ -251,7 +252,8 @@ export function SignupForm({ onBack }: { onBack(): void }) {
                       className={`flex items-center gap-1.5 typo-caption1_medium ${ok ? "text-main-blue" : bad ? "text-danger-700" : "text-neutral-400"}`}
                     >
                       {ok ? <Check className="size-3.5" aria-hidden="true" /> : <span aria-hidden="true">•</span>}
-                      {t(`auth.pw.${rule}`)}
+                      <span>{t(`auth.pw.${rule}`)}</span>
+                      <span className="sr-only">{t(ok ? "auth.pw.met" : "auth.pw.unmet")}</span>
                     </li>
                   );
                 })}

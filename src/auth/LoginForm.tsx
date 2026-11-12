@@ -30,7 +30,7 @@ export function authErrorText(e: unknown): string {
 
 export const ErrorText = ({ msg }: { msg: string | null }) =>
   msg ? (
-    <p role="alert" className="typo-caption1_semibold text-danger-700">
+    <p role="alert" className="pl-3 typo-caption1_semibold text-danger-700">
       {msg}
     </p>
   ) : null;

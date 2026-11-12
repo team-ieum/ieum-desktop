@@ -6,6 +6,7 @@ import { Hero } from "../dashboard/Hero";
 import { localSide, merge, webSide, type Source } from "../dashboard/metrics";
 import { localRow, RunTable, webRow, type Row } from "../dashboard/RunTable";
 import { StatusCards } from "../dashboard/StatusCards";
+import { UsageCard } from "../dashboard/UsageCard";
 import { t } from "../i18n";
 import { useRuns } from "../stores/runs";
 import { useSettings } from "../stores/settings";
@@ -159,6 +160,7 @@ export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void })
           <>
             <Hero todayRuns={m.todayRuns} hourly={m.hourly} sides={sides} />
             <StatusCards stats={m.stats} />
+            <UsageCard hidden={source === "web"} />
             <div className="overflow-hidden rounded-brand-md border border-neutral-200 bg-neutral-white shadow-sm">
               <div className="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-3.5">
                 <h3 className="typo-body2_semibold text-neutral-900">{t("dashboard.recent")}</h3>

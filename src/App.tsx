@@ -11,6 +11,7 @@ import { SettingsShell } from "./screens/settings/SettingsShell";
 import { Web } from "./screens/Web";
 import { WorkflowList } from "./screens/WorkflowList";
 import { Header } from "./shell/Header";
+import { StatusBar } from "./shell/StatusBar";
 import { NAV, type Page, type View } from "./shell/nav";
 import { recentItems, Sidebar } from "./shell/Sidebar";
 import { subscribeExecEvents } from "./stores/runs";
@@ -85,6 +86,13 @@ export default function App() {
       setView({ page });
     });
 
+  // 상태 줄 → 설정의 그 메뉴. 설정 안에서 누르면 돌아갈 곳은 그대로.
+  const openSettings = (section: "providers" | "keys") =>
+    leave(() => {
+      if (view.page !== "settings") setBack(view);
+      setView({ page: "settings", section });
+    });
+
   if (!ready) return null;
 
   // 관문: 로그인 전·만료면 로그인 화면만(만료면 이메일을 채운다). 오프라인은 관문으로 보내지 않는다.
@@ -105,7 +113,13 @@ export default function App() {
           onPick={(p) => (p.kind === "local" ? openEditor(p.id) : setView({ page: "web", workflow: p.id }))}
           onOpenRun={(run) => setView({ page: "history", run })}
         />
-        <SettingsShell onBack={() => setView(back)} version={version} />
+        <SettingsShell
+          key={"section" in view ? view.section : ""}
+          onBack={() => setView(back)}
+          version={version}
+          initial={"section" in view ? view.section : undefined}
+        />
+        <StatusBar onOpen={openSettings} />
       </div>
     );
 
@@ -172,6 +186,7 @@ export default function App() {
           </div>
         </main>
       </div>
+      <StatusBar onOpen={openSettings} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { ArrowLeft, CircleUserRound, KeyRound, Search, SlidersHorizontal, Terminal, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, type KeychainStatus, type Providers } from "../../api";
+import { api, type KeychainStatus, type PlanUsage, type Providers, type UsageSummary } from "../../api";
 import { t, type Key } from "../../i18n";
 import { useWeb } from "../../stores/web";
 import { AccountPane, serverHost } from "./AccountPane";
@@ -8,7 +8,8 @@ import { cliDesc, cliName, keyTexts, KeysPane, PROVIDERS, ProvidersPane } from "
 import { GeneralPane } from "./GeneralPane";
 import { matches, QueryContext } from "./Row";
 
-type Id = "account" | "general" | "providers" | "keys";
+export type SettingsSection = "account" | "general" | "providers" | "keys";
+type Id = SettingsSection;
 
 const SECTIONS: { id: Id; group: Key; label: Key; icon: LucideIcon }[] = [
   { id: "account", group: "settings.groupAccount", label: "settings.account", icon: CircleUserRound },
@@ -21,20 +22,29 @@ const NAV_ON = "bg-main-deep-blue font-semibold text-white shadow-[0_4px_12px_-4
 const NAV_OFF = "font-normal text-main-deep-blue hover:bg-white/50 [&_svg]:opacity-70";
 
 /** 설정 페이지 — 셸 사이드바 대신 설정 전용 사이드바(돌아가기·검색·묶음 메뉴)와 본문. */
-export function SettingsShell({ onBack, version }: { onBack: () => void; version: string }) {
+export function SettingsShell({ onBack, version, initial = "account" }: { onBack: () => void; version: string; initial?: Id }) {
   const account = useWeb((s) => s.account);
   const [providers, setProviders] = useState<Providers | null>(null);
   const [keychain, setKeychain] = useState<KeychainStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [q, setQ] = useState("");
-  const [sel, setSel] = useState<Id>("account");
+  const [sel, setSel] = useState<Id>(initial);
+  // undefined = 읽는 중, null = 못 읽음(Rust 명령이 아직 없을 때도)
+  const [plan, setPlan] = useState<PlanUsage | null | undefined>(undefined);
+  const [usage, setUsage] = useState<UsageSummary | null | undefined>(undefined);
   const search = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(() => {
     api.detectProviders().then(setProviders, (e) => setLoadError(String(e)));
     api.keychainStatus().then(setKeychain, (e) => setLoadError(String(e)));
+    api.claudePlanUsage().then(setPlan, () => setPlan(null));
+    api.usageSummary("month").then(setUsage, () => setUsage(null));
   }, []);
   useEffect(refresh, [refresh]);
+  // 상태 줄에서 들어오면 그 묶음으로.
+  useEffect(() => {
+    if (initial !== "account") document.getElementById(`settings-${initial}`)?.scrollIntoView?.({ block: "start" });
+  }, [initial]);
 
   // ⌘F = 설정 검색
   useEffect(() => {
@@ -67,8 +77,8 @@ export function SettingsShell({ onBack, version }: { onBack: () => void; version
   const panes: Record<Id, ReactNode> = {
     account: <AccountPane />,
     general: <GeneralPane />,
-    providers: <ProvidersPane providers={providers} />,
-    keys: <KeysPane keychain={keychain} refresh={refresh} />,
+    providers: <ProvidersPane providers={providers} plan={plan} />,
+    keys: <KeysPane keychain={keychain} refresh={refresh} usage={usage} />,
   };
 
   const pick = (id: Id) => {

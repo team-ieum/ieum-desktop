@@ -27,7 +27,11 @@ pub struct WebWorkflowSummary {
     #[serde(default)]
     pub services: Option<Vec<String>>,
     /// BE `nodes` 배열의 길이만 — 화면에는 `nodeCount`로 간다.
-    #[serde(default, rename(deserialize = "nodes", serialize = "nodeCount"), deserialize_with = "count")]
+    #[serde(
+        default,
+        rename(deserialize = "nodes", serialize = "nodeCount"),
+        deserialize_with = "count"
+    )]
     pub node_count: Option<usize>,
 }
 

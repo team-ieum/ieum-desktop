@@ -43,7 +43,7 @@ export function Toolbar({ name, onName, dirty, enabled, onEnabled, problems, onB
           type="button"
           role="switch"
           aria-checked={enabled}
-          aria-label={status}
+          aria-label={t("list.status.active")}
           onClick={() => onEnabled(!enabled)}
           className={`relative h-6 w-11 cursor-pointer select-none rounded-full transition-colors duration-200 ${enabled ? "bg-node-green" : "bg-neutral-300"}`}
         >

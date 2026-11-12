@@ -85,6 +85,23 @@ test("signup_shows_distinct_errors", async () => {
   expect(new Set(texts).size).toBe(texts.length);
 });
 
+test("signup_registers_again_when_email_changes_after_login_failed", async () => {
+  const register = vi.spyOn(api, "register").mockResolvedValue({} as never);
+  vi.spyOn(api, "webLogin").mockRejectedValueOnce({ code: "NETWORK" }).mockResolvedValue(ACCOUNT as never);
+  await toStep3();
+  await fillInfo();
+  expect(register).toHaveBeenCalledTimes(1);
+  // 가입은 됐고 로그인만 실패 → 이메일을 바꿔 다시 가입하면 새 이메일로 register해야 한다.
+  await click("변경");
+  await type("이메일", "other@b.c");
+  await click("인증번호 받기");
+  await act(async () => fireEvent.paste(digits()[0], { clipboardData: { getData: () => "123456" } }));
+  await click("확인");
+  await fillInfo();
+  expect(register).toHaveBeenCalledTimes(2);
+  expect(register).toHaveBeenLastCalledWith("other@b.c", PW, "홍길동");
+});
+
 test("signup_blocks_weak_password_before_request", async () => {
   const register = vi.spyOn(api, "register").mockResolvedValue({} as never);
   await toStep3();

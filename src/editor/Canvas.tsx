@@ -153,17 +153,18 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
 const nodeTypes = { ieum: NodeCard };
 const edgeTypes = { animated: AnimatedEdge };
 
-// 웹 WorkFlowPage WORKFLOW_CANVAS_CLASS 그대로.
+// 웹 WorkFlowPage WORKFLOW_CANVAS_CLASS 그대로. Tailwind v4는 임의 선택자의 `_`를 공백으로 바꾸므로
+// 클래스 이름 안 밑줄은 `\_`로(String.raw — 스캐너가 소스 글자 그대로 읽는다).
 const WORKFLOW_CANVAS_CLASS = [
   "bg-[#f7f6fc]",
-  "[&_.react-flow__controls]:overflow-hidden [&_.react-flow__controls]:rounded-[0.7rem]",
-  "[&_.react-flow__controls]:border [&_.react-flow__controls]:border-[#d8e3e7]",
-  "[&_.react-flow__controls]:shadow-[0_8px_20px_rgba(43,72,86,0.09)]",
-  "[&_.react-flow__controls-button]:size-8 [&_.react-flow__controls-button]:border-b-[#e5ecef]",
-  "[&_.react-flow__minimap]:rounded-xl [&_.react-flow__minimap]:border [&_.react-flow__minimap]:border-[#d8e3e7]",
-  "[&_.react-flow__minimap]:bg-white/90 [&_.react-flow__minimap]:shadow-[0_8px_20px_rgba(43,72,86,0.08)]",
-  "[&_.react-flow__edge.selected_.react-flow__edge-path]:stroke-[2px]",
-  "max-[560px]:[&_.react-flow__minimap]:hidden",
+  String.raw`[&_.react-flow\_\_controls]:overflow-hidden [&_.react-flow\_\_controls]:rounded-[0.7rem]`,
+  String.raw`[&_.react-flow\_\_controls]:border [&_.react-flow\_\_controls]:border-[#d8e3e7]`,
+  String.raw`[&_.react-flow\_\_controls]:shadow-[0_8px_20px_rgba(43,72,86,0.09)]`,
+  String.raw`[&_.react-flow\_\_controls-button]:size-8 [&_.react-flow\_\_controls-button]:border-b-[#e5ecef]`,
+  String.raw`[&_.react-flow\_\_minimap]:rounded-xl [&_.react-flow\_\_minimap]:border [&_.react-flow\_\_minimap]:border-[#d8e3e7]`,
+  String.raw`[&_.react-flow\_\_minimap]:bg-white/90 [&_.react-flow\_\_minimap]:shadow-[0_8px_20px_rgba(43,72,86,0.08)]`,
+  String.raw`[&_.react-flow\_\_edge.selected_.react-flow\_\_edge-path]:stroke-[2px]`,
+  String.raw`max-[560px]:[&_.react-flow\_\_minimap]:hidden`,
 ].join(" ");
 
 const MARKER = { type: MarkerType.ArrowClosed, color: "#a8b0ba" };

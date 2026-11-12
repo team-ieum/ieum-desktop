@@ -1,7 +1,8 @@
 import { ChevronDown, ChevronRight, CircleCheck, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
-import { api, type ApiProvider, type KeychainStatus, type KeyState, type Providers } from "../../api";
+import { api, type ApiProvider, type KeychainStatus, type KeyState, type PlanUsage, type Providers, type UsageSummary } from "../../api";
 import { t, type Key } from "../../i18n";
+import { formatReset, formatTokens, formatUsd } from "../../usage/format";
 import { GHOST, Row } from "./Row";
 
 export const PROVIDERS: { id: ApiProvider; name: string }[] = [
@@ -14,13 +15,41 @@ const CLI_NAMES: Record<string, string> = { claude: "Claude Code" };
 export const cliName = (id: string) => CLI_NAMES[id] ?? id;
 export const cliDesc = (version: string) => `${t("settings.cliFound")} (${version})`;
 
+/** Claude 구독 창별 남은 비율 막대·초기화 시각. undefined = 읽는 중, null = 못 읽음. */
+function PlanBars({ plan }: { plan: PlanUsage | null | undefined }) {
+  if (plan === undefined) return null;
+  if (plan?.state === "not_logged_in") return <p className="typo-caption1_regular text-neutral-500">{t("usage.claudeNotLoggedIn")}</p>;
+  if (!plan || plan.state !== "ok" || plan.windows.length === 0) return <p className="typo-caption1_regular text-neutral-500">{t("usage.empty")}</p>;
+  const now = new Date();
+  return (
+    <ul className="flex flex-col gap-2.5">
+      {plan.windows.map((w) => {
+        const left = Math.max(0, Math.min(100, Math.round(100 - w.usedPct)));
+        return (
+          <li key={w.kind}>
+            <div className="flex justify-between gap-2 typo-caption1_medium text-neutral-700">
+              <span>{t(`usage.window.${w.kind}`)}</span>
+              <span className="tabular-nums text-neutral-500">
+                {left}% {t("usage.left")} · {t("usage.resetsIn").replace("{time}", formatReset(w.resetsAt, now))}
+              </span>
+            </div>
+            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-100" role="progressbar" aria-label={t(`usage.window.${w.kind}`)} aria-valuenow={left} aria-valuemin={0} aria-valuemax={100}>
+              <div className="h-full rounded-full bg-main-blue" style={{ width: `${left}%` }} />
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /** 찾은 구독형 AI(지금은 Claude). */
-export function ProvidersPane({ providers }: { providers: Providers | null }) {
+export function ProvidersPane({ providers, plan }: { providers: Providers | null; plan?: PlanUsage | null }) {
   if (providers && providers.clis.length === 0) return <Row title={t("settings.noCli")} />;
   return (
     <>
       {providers?.clis.map((c) => (
-        <Row key={c.id} title={cliName(c.id)} desc={cliDesc(c.version)} also={[t("settings.cliReady")]}>
+        <Row key={c.id} title={cliName(c.id)} desc={cliDesc(c.version)} also={[t("settings.cliReady")]} below={c.id === "claude" && <PlanBars plan={plan} />}>
           <span className="inline-flex shrink-0 items-center gap-1.5 typo-caption1_semibold text-node-green">
             <CircleCheck className="size-[18px]" aria-hidden="true" />
             {t("settings.cliReady")}
@@ -58,12 +87,21 @@ export const keyTexts = (state?: KeyState) => [
   state === "stored" ? t("settings.keyChange") : t("settings.keyAdd"),
 ];
 
+/** "이번 달 12.3만 토큰 · 예상 $1.85" — 못 읽으면 빈 상태 문구. */
+const monthText = (usage: UsageSummary | null, id: ApiProvider) => {
+  if (!usage) return t("usage.empty");
+  const s = usage.bySource.find((x) => x.source === id);
+  return t("usage.month")
+    .replace("{tokens}", formatTokens(s ? s.input + s.output : 0))
+    .replace("{usd}", formatUsd(s ? s.usd : 0));
+};
+
 const INPUT =
   "h-10 min-w-0 flex-1 rounded-[10px] border border-main-blue bg-white px-3 text-sm text-neutral-800 outline-none ring-2 ring-main-blue/15 placeholder:text-neutral-400";
 const SAVE = "inline-flex h-10 shrink-0 items-center rounded-[10px] bg-main-deep-blue px-4 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-40";
 
 /** Anthropic·OpenAI·Gemini 키 — "바꾸기/추가"로 줄 안에서 입력을 펼친다. */
-export function KeysPane({ keychain, refresh }: { keychain: KeychainStatus | null; refresh: () => void }) {
+export function KeysPane({ keychain, refresh, usage }: { keychain: KeychainStatus | null; refresh: () => void; usage?: UsageSummary | null }) {
   const [open, setOpen] = useState<ApiProvider | null>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -102,7 +140,12 @@ export function KeysPane({ keychain, refresh }: { keychain: KeychainStatus | nul
           <Row
             key={id}
             title={name}
-            desc={<KeyBadge state={keychain?.[id]} />}
+            desc={
+              <>
+                <KeyBadge state={keychain?.[id]} />
+                {usage !== undefined && <span className="mt-0.5 block">{monthText(usage, id)}</span>}
+              </>
+            }
             also={keyTexts(keychain?.[id])}
             below={
               isOpen && (
@@ -151,6 +194,11 @@ export function KeysPane({ keychain, refresh }: { keychain: KeychainStatus | nul
         );
       })}
       {error && <p className="pb-3 typo-caption1_semibold text-danger-700">{error}</p>}
+      {usage && (
+        <p className="pb-3 typo-caption2_regular text-neutral-400">
+          {t("usage.asOf").replace("{date}", usage.asOf)} · {t("usage.onlyIeum")}
+        </p>
+      )}
     </>
   );
 }
