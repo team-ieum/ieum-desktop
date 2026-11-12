@@ -94,12 +94,14 @@ test("settings_search_matches_section_desc_and_button", async () => {
   expect(screen.getByTestId("settings-crumb").textContent).toBe("권한·준비");
 });
 
-test("permissions_pane_rechecks_folders_on_open", async () => {
+test("permissions_pane_checks_folders_only_on_click", async () => {
   const access = vi.spyOn(api, "folderAccess").mockResolvedValue("denied");
   access.mockClear();
   await renderShell();
-  expect(access).toHaveBeenCalledTimes(3);
-  expect(screen.getAllByText("거부됨")).toHaveLength(3);
+  expect(access).toHaveBeenCalledTimes(0);
+  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "확인하기" })[0]));
+  expect(access).toHaveBeenCalledTimes(1);
+  expect(screen.getAllByText("거부됨")).toHaveLength(1);
 });
 
 test("notify_toggles_save_settings", async () => {

@@ -107,6 +107,24 @@ test("notification_step_has_no_skip", async () => {
   expect(next().disabled).toBe(false);
 });
 
+test("notification_send_failure_shows_error_not_question", async () => {
+  let fail = (_: unknown) => {};
+  vi.spyOn(api, "sendTestNotification").mockReturnValueOnce(new Promise<void>((_, r) => (fail = r)));
+  vi.spyOn(api, "openSystemSettings").mockRejectedValueOnce("설정 못 엶");
+  render(<Onboarding onDone={() => {}} />);
+  await click("건너뛰기");
+  await click("건너뛰기");
+  await click("알림 켜기");
+  // 대기 중엔 연타 막힘
+  expect((screen.getByRole("button", { name: "알림 켜기" }) as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => fail("보내기 실패"));
+  expect(screen.queryByText("알림이 보였나요?")).toBeNull();
+  expect(screen.getByText("보내기 실패")).toBeTruthy();
+  expect((screen.getByRole("button", { name: "다음" }) as HTMLButtonElement).disabled).toBe(false);
+  await click("시스템 설정 열기");
+  expect(screen.getByText("설정 못 엶")).toBeTruthy();
+});
+
 test("autostart_step_shows_current_value", async () => {
   useSettings.setState({ settings: { ...BASE, autostart: true } });
   const onDone = vi.fn();

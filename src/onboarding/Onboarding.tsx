@@ -25,11 +25,11 @@ const PILL_OF: Record<FolderAccess, string> = {
   missing: "bg-neutral-100 text-neutral-500",
 };
 
-/** 1단계 — 폴더마다 한 번 읽어 macOS 허용 창을 띄운다. 온보딩은 누를 때만 묻고, 설정(`checkOnOpen`)은 열 때마다 다시 확인한다. */
-export function FoldersStep({ checkOnOpen = false }: { checkOnOpen?: boolean }) {
+/** 1단계 — 폴더마다 한 번 읽어 macOS 허용 창을 띄운다. 누를 때만 묻는다(설정 화면은 버튼 문구만 `action`으로 바꿈). */
+export function FoldersStep({ action = "onboarding.allow" }: { action?: Key }) {
   const [state, setState] = useState<Partial<Record<FolderKind, FolderAccess | "checking">>>({});
   const [error, setError] = useState<string | null>(null);
-  const check = useCallback(async (k: FolderKind) => {
+  const check = async (k: FolderKind) => {
     setError(null);
     setState((s) => ({ ...s, [k]: "checking" }));
     try {
@@ -39,10 +39,11 @@ export function FoldersStep({ checkOnOpen = false }: { checkOnOpen?: boolean }) 
       setState((s) => ({ ...s, [k]: undefined }));
       setError(String(e));
     }
-  }, []);
-  useEffect(() => {
-    if (checkOnOpen) for (const k of FOLDERS) void check(k);
-  }, [checkOnOpen, check]);
+  };
+  const openFiles = () => {
+    setError(null);
+    api.openSystemSettings("files").catch((e) => setError(String(e)));
+  };
   return (
     <>
       {FOLDERS.map((k) => {
@@ -52,13 +53,13 @@ export function FoldersStep({ checkOnOpen = false }: { checkOnOpen?: boolean }) 
             <div className="flex items-center gap-2">
               {s === undefined || s === "checking" ? (
                 <button type="button" className={PRIMARY} disabled={s === "checking"} onClick={() => void check(k)}>
-                  {t(s ? "onboarding.checking" : "onboarding.allow")}
+                  {t(s ? "onboarding.checking" : action)}
                 </button>
               ) : (
                 <>
                   {s === "denied" && (
                     <>
-                      <button type="button" className={BUTTON} onClick={() => void api.openSystemSettings("files")}>
+                      <button type="button" className={BUTTON} onClick={openFiles}>
                         {t("onboarding.openSettings")}
                       </button>
                       <button type="button" className={BUTTON} onClick={() => void check(k)}>
@@ -100,29 +101,37 @@ function AiStep() {
   );
 }
 
-type Notice = "idle" | "asked" | "yes" | "no";
+/** `failed` = 테스트 알림을 보내지 못함 — 묻지 않고 오류·설정 열기·다시 보내기만. */
+type Notice = "idle" | "asked" | "yes" | "no" | "failed";
 
 /** 3단계 — 테스트 알림 → 보였는지 묻는다. 안 보였으면 설정 열기·다시 보내기. */
 function NotifyStep({ notice, setNotice }: { notice: Notice; setNotice: (n: Notice) => void }) {
   const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
   const send = async () => {
     setError(null);
+    setSending(true);
     try {
       await api.sendTestNotification();
       setNotice("asked");
     } catch (e) {
       setError(String(e));
-      setNotice("no");
+      setNotice("failed");
     }
+    setSending(false);
+  };
+  const openNotifications = () => {
+    setError(null);
+    api.openSystemSettings("notifications").catch((e) => setError(String(e)));
   };
   return (
     <div className="flex flex-col items-start gap-4">
       {notice === "idle" && (
-        <button type="button" className={PRIMARY} onClick={() => void send()}>
+        <button type="button" className={PRIMARY} disabled={sending} onClick={() => void send()}>
           {t("onboarding.notify.enable")}
         </button>
       )}
-      {notice !== "idle" && (
+      {notice !== "idle" && notice !== "failed" && (
         <div className="flex items-center gap-3">
           <span className="typo-body2_semibold text-neutral-800">{t("onboarding.notify.seen")}</span>
           <button type="button" className={notice === "yes" ? PRIMARY : BUTTON} onClick={() => setNotice("yes")}>
@@ -133,12 +142,12 @@ function NotifyStep({ notice, setNotice }: { notice: Notice; setNotice: (n: Noti
           </button>
         </div>
       )}
-      {notice === "no" && (
+      {(notice === "no" || notice === "failed") && (
         <div className="flex items-center gap-2">
-          <button type="button" className={BUTTON} onClick={() => void api.openSystemSettings("notifications")}>
+          <button type="button" className={BUTTON} onClick={openNotifications}>
             {t("onboarding.openSettings")}
           </button>
-          <button type="button" className={BUTTON} onClick={() => void send()}>
+          <button type="button" className={BUTTON} disabled={sending} onClick={() => void send()}>
             {t("onboarding.notify.resend")}
           </button>
         </div>
@@ -218,7 +227,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <button
               type="button"
               className={PRIMARY}
-              disabled={step === NOTIFY && notice !== "yes" && notice !== "no"}
+              disabled={step === NOTIFY && (notice === "idle" || notice === "asked")}
               onClick={() => setStep(step + 1)}
             >
               {t("onboarding.next")}

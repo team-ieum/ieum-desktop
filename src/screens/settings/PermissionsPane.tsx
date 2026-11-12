@@ -29,7 +29,7 @@ export function PermissionsPane({ providers, keychain, onAi }: { providers: Prov
 
   return (
     <>
-      <FoldersStep checkOnOpen />
+      <FoldersStep action="settings.folderCheck" />
       <Row title={t("settings.notifyTest")} desc={t("settings.notifyTestDesc")} also={[t("settings.notifyTestSend"), t("onboarding.openSettings")]}>
         <div className="flex items-center gap-2">
           <button type="button" className={GHOST} onClick={() => run(api.openSystemSettings("notifications"))}>
