@@ -2,7 +2,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use ieum_desktop_lib::plan_usage::{PlanUsage, PlanUsageClient, TokenSource};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use ieum_desktop_lib::plan_usage::{
+    CACHE_TTL, PlanUsage, PlanUsageClient, TokenRead, TokenSource, token_from_security,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -55,11 +60,11 @@ async fn serve(route: impl Fn(&Req) -> (u16, String) + Send + Sync + 'static) ->
 
 fn token(t: Option<&str>) -> TokenSource {
     let t = t.map(str::to_string);
-    Arc::new(move || t.clone())
+    Arc::new(move || t.clone().map_or(TokenRead::Missing, TokenRead::Found))
 }
 
 fn client(url: &str, t: Option<&str>) -> PlanUsageClient {
-    PlanUsageClient::with_url(url, token(t)).unwrap()
+    PlanUsageClient::with_url(url, token(t), CACHE_TTL).unwrap()
 }
 
 fn sample() -> Value {
@@ -166,10 +171,73 @@ async fn plan_usage_cached_60s() {
 
 #[test]
 fn plan_usage_only_anthropic_or_loopback() {
-    assert!(
-        PlanUsageClient::with_url("https://evil.example/api/oauth/usage", token(None)).is_err()
-    );
-    assert!(PlanUsageClient::with_url("http://127.0.0.1:1/api/oauth/usage", token(None)).is_ok());
+    let bad = "https://evil.example/api/oauth/usage";
+    assert!(PlanUsageClient::with_url(bad, token(None), CACHE_TTL).is_err());
+    let ok = "http://127.0.0.1:1/api/oauth/usage";
+    assert!(PlanUsageClient::with_url(ok, token(None), CACHE_TTL).is_ok());
+}
+
+#[tokio::test]
+async fn plan_usage_ok_when_windows_all_unused() {
+    // 로그인돼 있고 API도 정상인데 두 창 모두 아직 안 씀 → 창 없이 ok.
+    let body = r#"{"five_hour":{"utilization":0,"resets_at":null},"seven_day":{"utilization":0,"resets_at":null},"seven_day_opus":null}"#;
+    let (url, _) = serve(move |_| (200, body.to_string())).await;
+    let u = client(&url, Some(TOKEN)).get().await;
+    assert_eq!(u.state, "ok");
+    assert!(u.windows.is_empty());
+}
+
+/// 읽을 때마다 세는 가짜 키체인.
+fn counting(read: fn() -> TokenRead) -> (TokenSource, Arc<AtomicUsize>) {
+    let n = Arc::new(AtomicUsize::new(0));
+    let seen = n.clone();
+    let src: TokenSource = Arc::new(move || {
+        seen.fetch_add(1, Ordering::SeqCst);
+        read()
+    });
+    (src, n)
+}
+
+#[tokio::test]
+async fn plan_usage_denied_not_asked_again() {
+    let url = "http://127.0.0.1:1/api/oauth/usage";
+    // 캐시 시간 0: 항목 없음은 매번 다시 보고, 거부는 한 번만 묻는다.
+    let (missing, n_missing) = counting(|| TokenRead::Missing);
+    let c = PlanUsageClient::with_url(url, missing, Duration::ZERO).unwrap();
+    for _ in 0..3 {
+        assert_eq!(c.get().await.state, "not_logged_in");
+    }
+    assert_eq!(n_missing.load(Ordering::SeqCst), 3);
+
+    let (denied, n_denied) = counting(|| TokenRead::Denied);
+    let c = PlanUsageClient::with_url(url, denied, Duration::ZERO).unwrap();
+    for _ in 0..3 {
+        assert_eq!(c.get().await.state, "not_logged_in");
+    }
+    assert_eq!(n_denied.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn security_exit_codes_map_to_token_read() {
+    let ok = br#"{"claudeAiOauth":{"accessToken":"abc"}}"#;
+    assert!(matches!(token_from_security(Some(0), ok), TokenRead::Found(t) if t == "abc"));
+    assert!(matches!(
+        token_from_security(Some(0), b"{}"),
+        TokenRead::Missing
+    ));
+    assert!(matches!(
+        token_from_security(Some(44), b""),
+        TokenRead::Missing
+    ));
+    assert!(matches!(
+        token_from_security(Some(128), b""),
+        TokenRead::Denied
+    ));
+    assert!(matches!(
+        token_from_security(Some(51), b""),
+        TokenRead::Denied
+    ));
+    assert!(matches!(token_from_security(None, b""), TokenRead::Missing));
 }
 
 /// 수동 확인용(실제 키체인·Anthropic): `cargo test -p ieum-desktop --test plan_usage -- --ignored`.
