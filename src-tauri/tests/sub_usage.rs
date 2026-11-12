@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use ieum_desktop_lib::plan_usage::{CACHE_TTL, PlanUsage, TokenRead, claude_account_email};
 use ieum_desktop_lib::sub_usage::{
     AgyRun, AntigravityUsageClient, CodexAuth, CodexUsageClient, agy_login_from_secret,
-    codex_auth_from_json,
+    agy_version_ok, codex_auth_from_json,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -320,6 +320,83 @@ async fn antigravity_cached_60s() {
     let b = c.get().await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(a.checked_at, b.checked_at);
+}
+
+#[tokio::test]
+async fn antigravity_denied_not_asked_again() {
+    // 캐시 시간 0: 없음은 매번 다시 보고, 거부는 한 번만 묻는다.
+    let cases: [(fn() -> TokenRead, usize); 2] =
+        [(|| TokenRead::Missing, 3), (|| TokenRead::Denied, 1)];
+    for (read, want) in cases {
+        let n: Calls = Arc::default();
+        let seen = n.clone();
+        let c = AntigravityUsageClient::new(
+            Arc::new(move || {
+                seen.fetch_add(1, Ordering::SeqCst);
+                read()
+            }),
+            Arc::new(|| AgyRun::Out(agy_sample())),
+            std::time::Duration::ZERO,
+        );
+        for _ in 0..3 {
+            assert_eq!(c.get().await.state, "not_logged_in");
+        }
+        assert_eq!(n.load(Ordering::SeqCst), want);
+    }
+}
+
+#[tokio::test]
+async fn antigravity_concurrent_calls_run_agy_once() {
+    let (c, calls) = agy(agy_secret, || {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        AgyRun::Out(agy_sample())
+    });
+    let (a, b) = tokio::join!(c.get(), c.get());
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "동시 호출에도 agy는 하나만"
+    );
+    assert_eq!(a.checked_at, b.checked_at);
+}
+
+#[test]
+fn agy_version_gate() {
+    assert!(!agy_version_ok("1.1.10\n"));
+    assert!(agy_version_ok("1.1.11\n"));
+    assert!(agy_version_ok("1.5.1"));
+    assert!(agy_version_ok("2.0.0"));
+    assert!(!agy_version_ok("0.9.99"));
+    assert!(!agy_version_ok("unknown"));
+    assert!(!agy_version_ok(""));
+}
+
+#[tokio::test]
+async fn codex_window_kinds_by_length() {
+    // 무료 플랜: 30일 창 하나(secondary null). 7일 정확히는 weekly.
+    let body = json!({
+        "plan_type": "free",
+        "rate_limit": {
+            "primary_window": {"used_percent": 3, "limit_window_seconds": 2_592_000, "reset_at": 1_794_000_000},
+            "secondary_window": null
+        }
+    });
+    let (url, _) = serve(move |_| (200, body.to_string())).await;
+    let u = codex(&url, Some(codex_auth())).get().await;
+    let got: Vec<&str> = u.windows.iter().map(|w| w.kind).collect();
+    assert_eq!(got, vec!["monthly"]);
+
+    let body = json!({
+        "plan_type": "plus",
+        "rate_limit": {
+            "primary_window": {"used_percent": 1, "limit_window_seconds": 86_400, "reset_at": 1_794_000_000},
+            "secondary_window": {"used_percent": 2, "limit_window_seconds": 604_800, "reset_at": 1_794_000_000}
+        }
+    });
+    let (url, _) = serve(move |_| (200, body.to_string())).await;
+    let u = codex(&url, Some(codex_auth())).get().await;
+    let got: Vec<&str> = u.windows.iter().map(|w| w.kind).collect();
+    assert_eq!(got, vec!["session", "weekly"]);
 }
 
 // ---------- Claude 계정 ----------

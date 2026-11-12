@@ -170,7 +170,11 @@ fn parse_codex(body: &Value) -> Option<Vec<PlanWindow>> {
             let secs = w["limit_window_seconds"].as_u64()?;
             let reset = chrono::DateTime::from_timestamp(w["reset_at"].as_i64()?, 0)?;
             Some(PlanWindow {
-                kind: if secs <= 86_400 { "session" } else { "weekly" },
+                kind: match secs {
+                    ..=86_400 => "session",
+                    86_401..=604_800 => "weekly",
+                    _ => "monthly", // 무료 플랜은 30일 창 하나
+                },
                 used_pct: w["used_percent"].as_f64()?,
                 resets_at: reset.to_rfc3339(),
             })
@@ -321,6 +325,15 @@ pub fn agy_login() -> TokenRead {
         .map_or(TokenRead::Missing, |raw| agy_login_from_secret(&raw))
 }
 
+/// `agy --version` 출력(`1.5.1`)이 `AGY_MIN_VERSION` 이상인지. 못 읽으면 false.
+pub fn agy_version_ok(out: &str) -> bool {
+    let mut parts = out.trim().split('.').map(|p| p.parse::<u64>().ok());
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(Some(a)), Some(Some(b)), Some(Some(c))) => (a, b, c) >= AGY_MIN_VERSION,
+        _ => false,
+    }
+}
+
 /// 로그인 셸 PATH의 `agy`로 `/usage`. 버전을 먼저 본다(옛 버전은 사용량을 쓴다).
 pub fn agy_usage_cli() -> AgyRun {
     use ieum_local::ai::shell_output;
@@ -330,12 +343,7 @@ pub fn agy_usage_cli() -> AgyRun {
     ) else {
         return AgyRun::NotInstalled;
     };
-    let mut parts = v.trim().split('.').map(|p| p.parse::<u64>().ok());
-    let ver = (parts.next(), parts.next(), parts.next());
-    let (Some(Some(a)), Some(Some(b)), Some(Some(c))) = ver else {
-        return AgyRun::Failed;
-    };
-    if (a, b, c) < AGY_MIN_VERSION {
+    if !agy_version_ok(&v) {
         return AgyRun::Failed;
     }
     shell_output(

@@ -262,8 +262,8 @@ export interface UsageSummary {
 
 // plan_usage.rs(Claude)·sub_usage.rs(Codex·Antigravity) — 구독 연결 상태와 창별 사용 비율.
 export interface PlanWindow {
-  /** Claude: five_hour·seven_day·seven_day_opus. Codex·Antigravity: session(5시간)·weekly. */
-  kind: "five_hour" | "seven_day" | "seven_day_opus" | "session" | "weekly";
+  /** Claude: five_hour·seven_day·seven_day_opus. Codex·Antigravity: session(하루 이하)·weekly(7일 이하)·monthly(Codex 무료 30일). */
+  kind: "five_hour" | "seven_day" | "seven_day_opus" | "session" | "weekly" | "monthly";
   usedPct: number;
   resetsAt: string;
 }
