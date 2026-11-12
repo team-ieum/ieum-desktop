@@ -3,7 +3,7 @@
 //! 키는 `ApiKey`로만 들고 다닌다 — `Debug`가 가린다.
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 const SERVICE: &str = "com.ieum.desktop";
 const ACCOUNTS: [&str; 3] = ["anthropic", "openai", "gemini"];
@@ -94,28 +94,46 @@ impl KeyStore for ScopedKeys {
         self.inner.get(&self.name(account))
     }
     fn set(&self, account: &str, key: &str) -> Result<(), KeyError> {
+        let _g = write_lock();
         self.inner.set(&self.name(account), key)
     }
     fn delete(&self, account: &str) -> Result<(), KeyError> {
+        let _g = write_lock();
         self.inner.delete(&self.name(account))
     }
 }
 
-/// v0.1.0의 범위 없는 API 키를 이 계정으로 옮긴다(이미 있으면 덮지 않음). 옛 항목은 지운다.
-/// 옛 데이터 주인 계정에서만 부른다. 다시 불러도 안전하다.
-pub fn migrate_legacy_keys(keys: &dyn KeyStore, key16: &str) -> Result<(), KeyError> {
-    let scoped = format!(".{key16}");
+/// 옮기기의 "비었나 확인 → 쓰기"와 사용자의 키 저장·삭제가 끼어들지 않게 하는 프로세스 잠금.
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+fn write_lock() -> MutexGuard<'static, ()> {
+    WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// v0.1.0의 범위 없는 API 키를 이 계정 이름으로 복사한다(이미 있으면 덮지 않음). 옛 항목은 그대로.
+pub fn copy_legacy_keys(keys: &dyn KeyStore, key16: &str) -> Result<(), KeyError> {
+    let _g = write_lock();
     for name in ACCOUNTS {
         let Some(old) = keys.get(name)? else {
             continue;
         };
-        let new = format!("{name}{scoped}");
+        let new = format!("{name}.{key16}");
         if keys.get(&new)?.is_none() {
             keys.set(&new, &old)?;
         }
-        keys.delete(name)?;
     }
     Ok(())
+}
+
+/// 범위 없는 옛 API 키 항목을 지운다.
+pub fn delete_legacy_keys(keys: &dyn KeyStore) -> Result<(), KeyError> {
+    ACCOUNTS.iter().try_for_each(|name| keys.delete(name))
+}
+
+/// 복사 + 옛 항목 삭제. 옛 데이터 주인 계정에서만 부른다.
+pub fn migrate_legacy_keys(keys: &dyn KeyStore, key16: &str) -> Result<(), KeyError> {
+    copy_legacy_keys(keys, key16)?;
+    delete_legacy_keys(keys)
 }
 
 /// 허용 이름: `ACCOUNTS`, `SESSION_ACCOUNT`, `<ACCOUNTS 하나>.<16자 소문자 hex>`.

@@ -282,6 +282,68 @@ async fn local_commands_need_account() {
     assert_eq!(env.active.account_key().await, None);
 }
 
+/// 옛 키 옮기기가 끝난 뒤 범위 없는 옛 키가 다시 생겨도 주인이 아닌 B는 가져가지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn legacy_keys_never_go_to_second_account() {
+    let inner = Arc::new(FakeKeys::default());
+    inner.set("anthropic", "sk-a").unwrap();
+    let env = env_with(
+        inner.clone(),
+        Arc::new(|k| Arc::new(AiRunner::with_keys(k))),
+    );
+    let (a, b) = (acc("a@x.com"), acc("b@x.com"));
+    let (ka, kb) = (
+        account_key(&a.server_url, &a.email),
+        account_key(&b.server_url, &b.email),
+    );
+    env.active.activate(a).await.unwrap();
+    assert!(
+        wait_until(Duration::from_secs(5), || inner
+            .get(&format!("anthropic.{ka}"))
+            .unwrap()
+            .is_some())
+        .await
+    );
+    inner.set("anthropic", "sk-late").unwrap();
+    env.active.activate(b).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(inner.get(&format!("anthropic.{kb}")).unwrap(), None);
+}
+
+/// 옛 이름 삭제가 실패해 옛 키가 남아도, 표시가 있으면 다시 옮기지 않는다(사용자가 지운 키가 되살아나지 않게).
+#[tokio::test(flavor = "multi_thread")]
+async fn migrated_keys_are_not_moved_again() {
+    let inner = Arc::new(FakeKeys::default());
+    inner.set("openai", "sk-o").unwrap();
+    let env = env_with(
+        inner.clone(),
+        Arc::new(|k| Arc::new(AiRunner::with_keys(k))),
+    );
+    let a = acc("a@x.com");
+    let ka = account_key(&a.server_url, &a.email);
+    let scoped = format!("openai.{ka}");
+    env.active.activate(a.clone()).await.unwrap();
+    assert!(
+        wait_until(Duration::from_secs(5), || inner
+            .get(&scoped)
+            .unwrap()
+            .is_some())
+        .await
+    );
+    assert!(
+        account_root(&env.app_data, &ka)
+            .join("keys-migrated")
+            .exists()
+    );
+    // 삭제 실패 흉내: 옛 키가 남았고, 사용자는 계정 키를 지웠다.
+    inner.set("openai", "sk-o").unwrap();
+    inner.delete(&scoped).unwrap();
+    env.active.deactivate().await.unwrap();
+    env.active.activate(a).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(inner.get(&scoped).unwrap(), None);
+}
+
 /// 옛 키는 첫 계정(A)으로 옮겨지고, B의 AI 노드는 A의 키를 못 써 "키 없음"으로 실패한다.
 #[tokio::test(flavor = "multi_thread")]
 async fn activate_runs_ai_with_account_keys() {

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ieum_local::WatchTiming;
-use ieum_local::ai::keys::{ScopedKeys, migrate_legacy_keys};
+use ieum_local::ai::keys::{ScopedKeys, copy_legacy_keys, delete_legacy_keys};
 use ieum_local::ai::{AiRunner, KeyStore};
 
 use crate::account::{AccountId, account_key, account_root, claim_legacy};
@@ -16,6 +16,8 @@ use crate::supervisor::{Deps, Emit, Supervisor};
 use crate::web::validate_server_url;
 
 pub const NOT_SIGNED_IN: &str = "NOT_SIGNED_IN";
+/// 계정 폴더의 "옛 API 키를 이 계정으로 옮김" 표시.
+const KEYS_MIGRATED: &str = "keys-migrated";
 
 pub type AiFactory = Arc<dyn Fn(Arc<dyn KeyStore>) -> Arc<AiRunner> + Send + Sync>;
 
@@ -82,14 +84,29 @@ impl Active {
         // 옮기기 실패(표시 파일 손상 등)는 로그인을 막지 않는다 — 옛 데이터는 그대로, 계정은 빈 상태로.
         match claim_legacy(&b.app_data, &key) {
             // 키체인은 기다리지 않고 따로 돌린다 — setup의 block_on(메인 스레드)이 허용 창에 막히면 빈 화면.
-            // 주인 계정이면 활성화마다 다시 시도한다(옮긴 뒤엔 옛 항목이 없어 할 일 없음).
+            // 계정 이름으로 복사에 성공하면 표시를 남긴다 — 옛 항목 삭제가 실패해도 다시 옮기지 않아
+            // 사용자가 지운 키가 되살아나지 않는다. 복사가 실패하면 다음 활성화 때 다시 시도.
             Ok(true) => {
-                let (keys, key) = (b.keys.clone(), key.clone());
-                tauri::async_runtime::spawn_blocking(move || {
-                    if let Err(e) = migrate_legacy_keys(keys.as_ref(), &key) {
-                        eprintln!("[ieum] 옛 API 키를 옮기지 못했어요(그대로 둠): {e}");
-                    }
-                });
+                let marker = account_root(&b.app_data, &key).join(KEYS_MIGRATED);
+                if !marker.exists() {
+                    let (keys, key) = (b.keys.clone(), key.clone());
+                    tauri::async_runtime::spawn_blocking(move || {
+                        if let Err(e) = copy_legacy_keys(keys.as_ref(), &key) {
+                            eprintln!("[ieum] 옛 API 키를 옮기지 못했어요(그대로 둠): {e}");
+                            return;
+                        }
+                        let marked = marker
+                            .parent()
+                            .map_or(Ok(()), std::fs::create_dir_all)
+                            .and_then(|()| std::fs::write(&marker, ""));
+                        if let Err(e) = marked {
+                            eprintln!("[ieum] 키 옮기기 표시를 남기지 못했어요: {e}");
+                        }
+                        if let Err(e) = delete_legacy_keys(keys.as_ref()) {
+                            eprintln!("[ieum] 옛 API 키 항목을 지우지 못했어요: {e}");
+                        }
+                    });
+                }
             }
             Ok(false) => {}
             Err(e) => eprintln!("[ieum] 옛 데이터를 옮기지 못했어요(그대로 둠): {e}"),
