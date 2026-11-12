@@ -1,10 +1,10 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type WebWorkflowSummary } from "./api";
 import { AuthScreen } from "./auth/AuthScreen";
 import { t } from "./i18n";
 import { BUTTON, Editor, PRIMARY } from "./screens/Editor";
+import { Dashboard } from "./screens/Dashboard";
 import { History } from "./screens/History";
 import { RunView } from "./screens/RunView";
 import { Settings } from "./screens/Settings";
@@ -18,34 +18,15 @@ import { useSettings } from "./stores/settings";
 import { useWeb } from "./stores/web";
 import { useWorkflows } from "./stores/workflows";
 
-// 첫 실행 안내 배너 — 닫으면 다시 안 보인다(Rust 설정의 firstRunDone은 화면이 뜨기 전에 켜져 못 쓴다).
-const BANNER_KEY = "ieum.autostartBannerClosed";
-const bannerClosed = () => {
-  try {
-    return localStorage.getItem(BANNER_KEY) === "1";
-  } catch {
-    return false;
-  }
-};
-const closeBanner = () => {
-  try {
-    localStorage.setItem(BANNER_KEY, "1");
-  } catch {
-    // 저장소를 못 쓰면 이번 실행에서만 닫힌다.
-  }
-};
-
 export default function App() {
   const lang = useSettings((s) => s.lang);
   const loadSettings = useSettings((s) => s.load);
-  const [view, setView] = useState<View>({ page: "local" });
+  const [view, setView] = useState<View>({ page: "dashboard" });
   const account = useWeb((s) => s.account);
   const loadAccount = useWeb((s) => s.load);
   const expired = useWeb((s) => s.expired);
   const guard = useWeb((s) => s.guard);
   const [ready, setReady] = useState(false);
-  const autostart = useSettings((s) => s.settings?.autostart ?? false);
-  const [banner, setBanner] = useState(() => !bannerClosed());
   const [collapsed, setCollapsed] = useState(false);
   const [version, setVersion] = useState("");
   const local = useWorkflows((s) => s.list);
@@ -119,22 +100,6 @@ export default function App() {
           version={version}
         />
         <main className="flex min-w-0 flex-1 flex-col bg-neutral-50 text-neutral-800">
-          {banner && autostart && (
-            <div role="status" className="flex items-center gap-3 border-b border-main-light-blue bg-main-light-blue px-4 py-2 typo-body3_semibold text-main-deep-blue">
-              <span className="min-w-0 flex-1">{t("banner.autostart")}</span>
-              <button
-                type="button"
-                className="rounded-brand-sm p-1 hover:bg-white/60"
-                aria-label={t("banner.close")}
-                onClick={() => {
-                  closeBanner();
-                  setBanner(false);
-                }}
-              >
-                <X size={16} aria-hidden="true" />
-              </button>
-            </div>
-          )}
           {pending && (
             <div role="alert" className="flex items-center gap-3 border-b border-danger-300 bg-danger-100 px-4 py-2 typo-body3_semibold text-danger-700">
               <span className="min-w-0 flex-1">{t("common.unsavedLeave")}</span>
@@ -155,14 +120,13 @@ export default function App() {
           )}
           <div className="min-h-0 flex-1 overflow-y-auto">
             {view.page === "dashboard" ? (
-              // 내용은 Task 9.
-              <h1 className="p-6 typo-heading3_bold text-neutral-800">{t("dashboard.title")}</h1>
+              <Dashboard onOpenRun={(run) => setView({ page: "history", run })} />
             ) : view.page === "settings" ? (
               <Settings />
             ) : view.page === "web" ? (
               <Web />
             ) : view.page === "history" ? (
-              <History />
+              <History key={"run" in view ? view.run : ""} initialRun={"run" in view ? view.run : null} />
             ) : "editor" in view ? (
               <Editor
                 key={view.editor ?? "new"}

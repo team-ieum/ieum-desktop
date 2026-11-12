@@ -7,6 +7,7 @@ export type View =
   | { page: Page }
   | { page: "local"; editor: string | null }
   | { page: "local"; run: string }
+  | { page: "history"; run: string }
   | { page: "web"; workflow: string };
 
 export const NAV: { page: Page; label: Key; icon: LucideIcon }[] = [

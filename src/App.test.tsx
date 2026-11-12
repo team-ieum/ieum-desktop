@@ -26,6 +26,8 @@ beforeAll(() => {
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);
   vi.spyOn(api, "currentAccount").mockResolvedValue(ACCOUNT);
   vi.spyOn(api, "webListWorkflows").mockResolvedValue([]);
+  vi.spyOn(api, "dashboardSummary").mockRejectedValue({ code: "NETWORK" });
+  vi.spyOn(api, "dashboardExecutions").mockRejectedValue({ code: "NETWORK" });
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [], apiKeys: [] });
   vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "missing" });
 });
@@ -38,6 +40,7 @@ test("leaving_editor_with_unsaved_changes_asks_in_app", async () => {
   await act(async () => {
     render(<App />);
   });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "내 PC" })));
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "새 워크플로우" }));
   });
@@ -72,7 +75,8 @@ test("shell_shows_header_crumb_and_new_canvas_opens_editor", async () => {
   });
   // 위쪽 줄: 로고 글자·현재 위치·계정 첫 글자
   expect(screen.getByText("IEUM")).toBeTruthy();
-  expect(screen.getByTestId("crumb").textContent).toBe("내 PC");
+  // 첫 화면 = 대시보드
+  expect(screen.getByTestId("crumb").textContent).toBe("대시보드");
   expect(screen.getByLabelText(ACCOUNT.email).textContent).toBe("M");
   expect(await screen.findByText(/v0\.2\.0/)).toBeTruthy();
 

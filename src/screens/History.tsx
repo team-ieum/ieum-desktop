@@ -165,11 +165,12 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
   );
 }
 
-export function History() {
+/** `initialRun`이면 그 실행 상세로 연다(대시보드에서 들어올 때). */
+export function History({ initialRun = null }: { initialRun?: string | null }) {
   const { runs, error, load } = useRuns();
   const names = useWorkflows((s) => s.list);
   const loadWorkflows = useWorkflows((s) => s.load);
-  const [openId, setOpenId] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(initialRun);
 
   useEffect(() => {
     void load();

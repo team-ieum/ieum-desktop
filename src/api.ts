@@ -116,6 +116,8 @@ export interface RunSummary {
   finishedAt: string;
   fileOps: number;
   undone: boolean;
+  /** 폴더 감시·수동(Rust는 Task 4). 옛 기록은 없음. */
+  trigger?: "watch" | "manual" | null;
 }
 export interface Settings {
   language: "system" | "ko" | "en";
@@ -167,6 +169,30 @@ export interface WebWorkflowSummary {
   active: boolean;
   triggerType?: string | null;
   updatedAt?: string | null;
+}
+// web/dashboard.rs(Task 5)
+export interface WebDashboardSummary {
+  metrics: { todayRuns: number; percentageChange: number; averageDurationSeconds: number; successRate: number };
+  hourlyCounts: Record<string, number>;
+  workflowStats: { total: number; active: number; inactive: number; errored: number; running: number };
+}
+export interface WebDashboardExecution {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  status: string;
+  durationSeconds: number | null;
+  triggerType: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+export interface WebDashboardError {
+  executionId: string;
+  workflowId: string;
+  workflowName: string;
+  failedNodeId: string | null;
+  errorMessage: string | null;
+  startedAt: string | null;
 }
 export interface WebWorkflow extends Workflow {
   id: string;
@@ -243,6 +269,13 @@ export const api = {
   webWatchExecution: (workflowId: string, executionId: string) =>
     invoke<void>("web_watch_execution", { workflowId, executionId }),
   webUnwatchExecution: (executionId: string) => invoke<void>("web_unwatch_execution", { executionId }),
+  // 대시보드(Rust 명령은 Task 5).
+  dashboardSummary: () => invoke<WebDashboardSummary>("web_dashboard_summary"),
+  dashboardExecutions: (cursor: string | null) =>
+    invoke<Page<WebDashboardExecution>>("web_dashboard_executions", { cursor }),
+  dashboardErrors: (cursor: string | null) => invoke<Page<WebDashboardError>>("web_dashboard_errors", { cursor }),
+  /** 웹 워크플로우 화면을 기본 브라우저로(Rust 명령은 Task 5). */
+  openWebWorkflow: (id: string) => invoke<void>("open_web_workflow", { id }),
   /** 서버 주소 + `/main`을 기본 브라우저로. */
   openWebEditor: () => invoke<void>("open_web_editor"),
   /** 설치·사용 안내 문서를 기본 브라우저로(Rust 명령은 Task 5). */
