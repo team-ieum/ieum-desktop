@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use ieum_desktop_lib::commands::{KeyState, key_states, web_editor_url};
+use ieum_desktop_lib::commands::{KeyState, key_states, web_editor_url, web_workflow_url};
 use ieum_local::ai::KeyStore;
 use ieum_local::ai::keys::KeyError;
 
@@ -60,4 +60,25 @@ fn web_editor_url_only_for_allowed_servers() {
         "http://localhost:8080/main"
     );
     assert!(web_editor_url("https://evil.example").is_err());
+}
+
+#[test]
+fn web_workflow_url_rejects_non_uuid() {
+    const ID: &str = "abcdef01-1111-4111-8111-111111111111";
+    assert_eq!(
+        web_workflow_url("https://green.kiacms.co.kr", ID).unwrap(),
+        format!("https://green.kiacms.co.kr/workflow/{ID}")
+    );
+    for bad in [
+        "../x",
+        "",
+        "abcdef01111141118111111111111111",
+        &ID.to_uppercase(),
+    ] {
+        assert!(
+            web_workflow_url("https://green.kiacms.co.kr", bad).is_err(),
+            "{bad}"
+        );
+    }
+    assert!(web_workflow_url("https://evil.example", ID).is_err());
 }

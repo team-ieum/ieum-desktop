@@ -32,6 +32,14 @@
     "allow-web-execution-logs",
     "allow-web-watch-execution",
     "allow-web-unwatch-execution",
+    "allow-web-send-code",
+    "allow-web-verify-code",
+    "allow-web-register",
+    "allow-web-dashboard-summary",
+    "allow-web-dashboard-executions",
+    "allow-web-dashboard-errors",
+    "allow-open-help",
+    "allow-open-web-workflow",
     "dialog:allow-open"
   ]
 }

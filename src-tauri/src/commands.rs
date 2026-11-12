@@ -16,6 +16,7 @@ use crate::account::AccountId;
 use crate::active::{Active, NOT_SIGNED_IN};
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::supervisor::WorkflowEntry;
+use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
 use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
 use crate::web::workflows::{WebWorkflow, WebWorkflowSummary};
 use crate::web::{self, BeClient, Watches, WebAccount, WebError};
@@ -229,13 +230,25 @@ pub fn web_editor_url(server_url: &str) -> Result<String, String> {
     Ok(format!("{}/main", web::validate_server_url(server_url)?))
 }
 
-/// 기본 브라우저로 연다. 주소는 화면이 아니라 저장된 설정에서 만든다.
+/// 웹 워크플로우 화면 주소 — 허용된 서버 + `/workflow/{id}`. `id`는 UUID 정규형(소문자·하이픈)만.
+pub fn web_workflow_url(server_url: &str, id: &str) -> Result<String, String> {
+    let canonical = uuid::Uuid::parse_str(id).is_ok_and(|u| u.to_string() == id);
+    if !canonical {
+        return Err("잘못된 워크플로우 id예요.".into());
+    }
+    Ok(format!(
+        "{}/workflow/{id}",
+        web::validate_server_url(server_url)?
+    ))
+}
+
+const HELP_URL: &str = "https://github.com/team-ieum/ieum-desktop/blob/main/docs/INSTALL.md";
+
+/// 기본 브라우저로 연다. 주소는 화면이 아니라 고정값·저장된 설정에서 만든다.
 // ponytail: macOS `open`만(1단계는 macOS 전용) — 다른 OS를 내면 opener 플러그인으로.
-#[tauri::command]
-pub fn open_web_editor(active: State<'_, Active>) -> Result<(), String> {
-    let url = web_editor_url(&active.settings().get_settings()?.server_url)?;
+fn open_url(url: &str) -> Result<(), String> {
     let status = std::process::Command::new("/usr/bin/open")
-        .arg(&url)
+        .arg(url)
         .status()
         .map_err(|e| format!("브라우저를 열지 못했어요: {e}"))?;
     if status.success() {
@@ -243,6 +256,26 @@ pub fn open_web_editor(active: State<'_, Active>) -> Result<(), String> {
     } else {
         Err(format!("브라우저를 열지 못했어요: {status}"))
     }
+}
+
+#[tauri::command]
+pub fn open_web_editor(active: State<'_, Active>) -> Result<(), String> {
+    open_url(&web_editor_url(
+        &active.settings().get_settings()?.server_url,
+    )?)
+}
+
+#[tauri::command]
+pub fn open_web_workflow(active: State<'_, Active>, id: String) -> Result<(), String> {
+    open_url(&web_workflow_url(
+        &active.settings().get_settings()?.server_url,
+        &id,
+    )?)
+}
+
+#[tauri::command]
+pub fn open_help() -> Result<(), String> {
+    open_url(HELP_URL)
 }
 
 #[tauri::command]
@@ -351,6 +384,51 @@ pub async fn web_login(
 }
 
 #[tauri::command]
+pub async fn web_send_code(
+    active: State<'_, Active>,
+    keys: State<'_, Keys>,
+    email: String,
+) -> Result<(), WebError> {
+    be_client(&active, &keys)?.send_signup_code(&email).await
+}
+
+#[tauri::command]
+pub async fn web_verify_code(
+    active: State<'_, Active>,
+    keys: State<'_, Keys>,
+    email: String,
+    code: String,
+) -> Result<(), WebError> {
+    be_client(&active, &keys)?
+        .verify_signup_code(&email, &code)
+        .await
+}
+
+/// 가입하고 바로 로그인·활성화(`login_and_activate`).
+pub async fn register_and_activate(
+    active: &Active,
+    client: &BeClient,
+    email: &str,
+    password: &str,
+    name: &str,
+) -> Result<WebAccount, WebError> {
+    client.register(email, password, name).await?;
+    login_and_activate(active, client, email, password).await
+}
+
+#[tauri::command]
+pub async fn web_register(
+    active: State<'_, Active>,
+    keys: State<'_, Keys>,
+    email: String,
+    password: String,
+    name: String,
+) -> Result<WebAccount, WebError> {
+    let client = be_client(&active, &keys)?;
+    register_and_activate(&active, &client, &email, &password, &name).await
+}
+
+#[tauri::command]
 pub async fn web_logout(
     active: State<'_, Active>,
     keys: State<'_, Keys>,
@@ -411,6 +489,32 @@ pub async fn web_execution_logs(
     execution_id: String,
 ) -> Result<Vec<WebNodeLog>, WebError> {
     web::executions::logs(&be_client(&active, &keys)?, &workflow_id, &execution_id).await
+}
+
+#[tauri::command]
+pub async fn web_dashboard_summary(
+    active: State<'_, Active>,
+    keys: State<'_, Keys>,
+) -> Result<WebDashboardSummary, WebError> {
+    web::dashboard::summary(&be_client(&active, &keys)?).await
+}
+
+#[tauri::command]
+pub async fn web_dashboard_executions(
+    active: State<'_, Active>,
+    keys: State<'_, Keys>,
+    cursor: Option<String>,
+) -> Result<Page<WebDashboardExecution>, WebError> {
+    web::dashboard::executions(&be_client(&active, &keys)?, cursor).await
+}
+
+#[tauri::command]
+pub async fn web_dashboard_errors(
+    active: State<'_, Active>,
+    keys: State<'_, Keys>,
+    cursor: Option<String>,
+) -> Result<Page<WebDashboardError>, WebError> {
+    web::dashboard::errors(&be_client(&active, &keys)?, cursor).await
 }
 
 /// 받은 이벤트를 `web-exec-event`로 넘긴다(async — 구독 작업을 tokio 런타임에 띄운다).

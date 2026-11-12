@@ -228,6 +228,14 @@ pub fn run() {
             commands::web_execution_logs,
             commands::web_watch_execution,
             commands::web_unwatch_execution,
+            commands::web_send_code,
+            commands::web_verify_code,
+            commands::web_register,
+            commands::web_dashboard_summary,
+            commands::web_dashboard_executions,
+            commands::web_dashboard_errors,
+            commands::open_help,
+            commands::open_web_workflow,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

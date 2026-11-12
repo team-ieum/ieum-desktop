@@ -9,7 +9,8 @@ use std::time::Duration;
 use ieum_desktop_lib::web::client::STREAM_CONNECT;
 use ieum_desktop_lib::web::sse::{self, SseLimits};
 use ieum_desktop_lib::web::{
-    BeClient, SESSION_ACCOUNT, Session, WatchConfig, Watches, WebError, executions, workflows,
+    BeClient, SESSION_ACCOUNT, Session, WatchConfig, Watches, WebError, dashboard, executions,
+    workflows,
 };
 use ieum_local::ai::KeyStore;
 use ieum_local::ai::keys::KeyError;
@@ -642,4 +643,66 @@ async fn oauth_401_keeps_session() {
     assert!(keys.get(SESSION_ACCOUNT).unwrap().is_some());
     // 갱신도 하지 않는다.
     assert!(lines(&log).iter().all(|l| !l.contains("/auth/")));
+}
+
+#[tokio::test]
+async fn dashboard_summary_parses_and_ignores_unknown() {
+    // BE `WorkflowDashboardSummaryResponse` — hourlyCounts 키는 Map<Integer,Long>라 "0"~"23".
+    let (base, log) = serve(|_| {
+        ok(json!({
+            "metrics": {"todayRuns": 12, "percentageChange": 12.5, "averageDurationSeconds": 3.2,
+                        "successRate": 97.8, "newField": 1},
+            "hourlyCounts": {"0": 0, "9": 3, "23": 1},
+            "workflowStats": {"total": 5, "active": 3, "inactive": 2, "errored": 1, "running": 0},
+            "extra": "x"
+        }))
+    })
+    .await;
+    let (c, _) = client(&base);
+    let s = dashboard::summary(&c).await.unwrap();
+    assert_eq!(s.metrics.today_runs, 12);
+    assert_eq!(s.metrics.percentage_change, 12.5);
+    assert_eq!(s.metrics.success_rate, 97.8);
+    assert_eq!(s.hourly_counts["9"], 3);
+    assert_eq!(s.workflow_stats.total, 5);
+    assert_eq!(s.workflow_stats.errored, 1);
+    assert_eq!(lines(&log), vec!["GET /api/v1/workflows/dashboard/summary"]);
+    let v = serde_json::to_value(&s).unwrap();
+    assert_eq!(v["metrics"]["averageDurationSeconds"], 3.2);
+    assert_eq!(v["workflowStats"]["running"], 0);
+}
+
+#[tokio::test]
+async fn dashboard_executions_uses_cursor() {
+    let (base, log) = serve(|line| {
+        let item = if line.contains("/errors") {
+            json!({"executionId": EX, "workflowId": WF, "workflowName": "w", "failedNodeId": "n1",
+                   "failedNodeType": "AI", "errorMessage": "boom", "startedAt": "2026-11-10T01:00:00",
+                   "finishedAt": null})
+        } else {
+            json!({"id": EX, "workflowId": WF, "workflowName": "w", "status": "SUCCESS",
+                   "durationSeconds": 1.5, "triggerType": "MANUAL",
+                   "startedAt": "2026-11-10T01:00:00", "finishedAt": null, "more": 1})
+        };
+        ok(json!({"content": [item], "hasNext": false, "nextCursor": null}))
+    })
+    .await;
+    let (c, _) = client(&base);
+    let p = dashboard::executions(&c, Some("abc".into())).await.unwrap();
+    assert_eq!(p.content[0].workflow_name, "w");
+    assert_eq!(p.content[0].duration_seconds, Some(1.5));
+    assert_eq!(p.content[0].trigger_type.as_deref(), Some("MANUAL"));
+    let e = dashboard::errors(&c, None).await.unwrap();
+    assert_eq!(e.content[0].execution_id, EX);
+    assert_eq!(e.content[0].error_message.as_deref(), Some("boom"));
+    assert_eq!(
+        lines(&log),
+        vec![
+            "GET /api/v1/workflows/dashboard/executions?size=20&cursor=abc",
+            "GET /api/v1/workflows/dashboard/errors?size=20",
+        ]
+    );
+    let v = serde_json::to_value(&p.content[0]).unwrap();
+    assert_eq!(v["workflowId"], WF);
+    assert!(v.get("more").is_none());
 }

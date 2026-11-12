@@ -25,6 +25,14 @@ const COMMANDS: &[&str] = &[
     "web_execution_logs",
     "web_watch_execution",
     "web_unwatch_execution",
+    "web_send_code",
+    "web_verify_code",
+    "web_register",
+    "web_dashboard_summary",
+    "web_dashboard_executions",
+    "web_dashboard_errors",
+    "open_help",
+    "open_web_workflow",
 ];
 
 fn main() {
