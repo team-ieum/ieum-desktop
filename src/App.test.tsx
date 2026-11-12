@@ -130,3 +130,17 @@ test("gate_waits_for_account_before_rendering", async () => {
   await act(async () => resolve(null));
   expect(screen.getByRole("button", { name: "로그인" })).toBeTruthy();
 });
+
+test("recent_web_item_opens_that_workflow", async () => {
+  const id = "aaaaaaaa-0000-4000-8000-000000000001";
+  vi.mocked(api.webListWorkflows).mockResolvedValueOnce([{ id, name: "웹 흐름", active: true, updatedAt: "2026-11-12T00:00:00Z" }]);
+  const get = vi.spyOn(api, "webGetWorkflow").mockResolvedValue({ id, name: "웹 흐름", nodes: [], edges: [] });
+  vi.spyOn(api, "webListExecutions").mockResolvedValue({ content: [], hasNext: false, nextCursor: null });
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /웹 흐름/ })));
+  expect(get).toHaveBeenCalledWith(id);
+  expect(screen.getByTestId("crumb").textContent).toBe("웹 이음");
+  expect(screen.getByRole("heading", { name: "웹 흐름" })).toBeTruthy();
+});

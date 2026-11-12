@@ -124,7 +124,7 @@ export default function App() {
           onNavigate={navigate}
           onNewCanvas={newCanvas}
           recent={recentItems(local, web)}
-          onOpenRecent={(r) => (r.kind === "local" ? leave(() => openEditor(r.id)) : navigate("web"))}
+          onOpenRecent={(r) => leave(() => (r.kind === "local" ? openEditor(r.id) : setView({ page: "web", workflow: r.id })))}
           collapsed={collapsed}
           onToggleCollapse={() => setCollapsed((c) => !c)}
           version={version}
@@ -153,7 +153,7 @@ export default function App() {
               <Dashboard onOpenRun={(run) => setView({ page: "history", run })} />
 
             ) : view.page === "web" ? (
-              <Web />
+              <Web workflow={"workflow" in view ? view.workflow : undefined} onOpen={(id) => setView(id ? { page: "web", workflow: id } : { page: "web" })} />
             ) : view.page === "history" ? (
               <History key={"run" in view ? view.run : ""} initialRun={"run" in view ? view.run : null} />
             ) : "editor" in view ? (
@@ -167,7 +167,7 @@ export default function App() {
             ) : "run" in view ? (
               <RunView workflowId={view.run} onBack={toList} onEdit={openEditor} />
             ) : (
-              <WorkflowList onOpen={openEditor} onOpenRuns={openRuns} />
+              <WorkflowList onOpen={openEditor} />
             )}
           </div>
         </main>

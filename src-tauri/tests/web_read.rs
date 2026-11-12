@@ -193,6 +193,28 @@ async fn lists_workflows_from_api_response() {
 }
 
 #[tokio::test]
+async fn list_reads_services_and_node_count() {
+    let mut item = wf_item("aaaaaaaa-0000-4000-8000-000000000001", "카드");
+    item["services"] = json!(["GOOGLE_DRIVE", "DISCORD"]);
+    item["nodes"] = json!([{"id": "n1"}, {"id": "n2"}, {"id": "n3"}]);
+    let mut bare = wf_item("aaaaaaaa-0000-4000-8000-000000000002", "옛 응답");
+    bare.as_object_mut().unwrap().remove("services");
+    bare.as_object_mut().unwrap().remove("nodes");
+    let (base, _) = serve(move |_| ok(json!({"content": [item.clone(), bare.clone()], "hasNext": false})))
+        .await;
+    let (c, _) = client(&base);
+    let list = workflows::list(&c).await.unwrap();
+    assert_eq!(list[0].services.as_deref(), Some(&["GOOGLE_DRIVE".to_string(), "DISCORD".to_string()][..]));
+    assert_eq!(list[0].node_count, Some(3));
+    // 화면으로는 노드 배열 대신 개수만 간다.
+    let v = serde_json::to_value(&list[0]).unwrap();
+    assert_eq!(v["nodeCount"], 3);
+    assert!(v.get("nodes").is_none());
+    assert_eq!(list[1].services, None);
+    assert_eq!(list[1].node_count, None);
+}
+
+#[tokio::test]
 async fn list_skips_bad_item() {
     let (base, _) = serve(|_| {
         ok(json!({
