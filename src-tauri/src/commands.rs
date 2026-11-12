@@ -306,14 +306,27 @@ pub async fn login_and_activate(
     };
     if let Err(e) = active.activate(id).await {
         eprintln!("[ieum] 계정을 열지 못했어요: {e}");
+        // 반쯤 된 상태를 남기지 않는다 — 저장만 실패해 슬롯이 찼어도 비워야 같은 계정 재로그인이 다시 저장한다.
+        if let Err(e) = active.deactivate().await {
+            eprintln!("[ieum] 슬롯을 비우며 설정을 저장하지 못했어요: {e}");
+        }
+        if let Err(e) = client.logout().await {
+            eprintln!("[ieum] 세션을 지우지 못했어요: {}", e.code());
+        }
         return Err(WebError::Server("계정을 열지 못했어요".into()));
     }
     Ok(acc)
 }
 
-/// 명시적 로그아웃: 세션을 지우고(서버 실패여도) 감시를 멈춘다.
-pub async fn logout_and_deactivate(active: &Active, client: &BeClient) -> Result<(), WebError> {
-    let r = client.logout().await;
+/// 명시적 로그아웃: 세션을 지우고(서버 실패여도) 감시를 멈춘다. 클라이언트를 못 만들었어도 멈춘다.
+pub async fn logout_and_deactivate(
+    active: &Active,
+    client: Result<BeClient, WebError>,
+) -> Result<(), WebError> {
+    let r = match client {
+        Ok(c) => c.logout().await,
+        Err(e) => Err(e),
+    };
     active.deactivate().await.map_err(WebError::Server)?;
     r
 }
@@ -344,7 +357,7 @@ pub async fn web_logout(
     watches: State<'_, Watches>,
 ) -> Result<(), WebError> {
     watches.clear();
-    logout_and_deactivate(&active, &be_client(&active, &keys)?).await
+    logout_and_deactivate(&active, be_client(&active, &keys)).await
 }
 
 #[tauri::command]

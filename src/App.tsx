@@ -43,6 +43,7 @@ export default function App() {
   const loadAccount = useWeb((s) => s.load);
   const expired = useWeb((s) => s.expired);
   const guard = useWeb((s) => s.guard);
+  const [ready, setReady] = useState(false);
   const autostart = useSettings((s) => s.settings?.autostart ?? false);
   const [banner, setBanner] = useState(() => !bannerClosed());
   const [collapsed, setCollapsed] = useState(false);
@@ -53,7 +54,8 @@ export default function App() {
 
   useEffect(() => {
     void loadSettings();
-    void loadAccount();
+    // 계정 응답 전엔 아무것도 그리지 않는다 — 관문이 잠깐 깜빡이지 않게.
+    void loadAccount().finally(() => setReady(true));
     subscribeExecEvents();
     getVersion().then(setVersion, () => {});
   }, [loadSettings, loadAccount]);
@@ -90,6 +92,8 @@ export default function App() {
   });
 
   const navigate = (page: Page) => leave(() => setView({ page }));
+
+  if (!ready) return null;
 
   // 관문: 로그인 전·만료면 로그인 화면만(만료면 이메일을 채운다). 오프라인은 관문으로 보내지 않는다.
   if (gated)

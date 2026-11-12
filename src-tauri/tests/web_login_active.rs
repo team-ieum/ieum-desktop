@@ -11,7 +11,7 @@ use ieum_desktop_lib::active::{Active, BaseDeps};
 use ieum_desktop_lib::commands::{account_of, login_and_activate, logout_and_deactivate};
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::WatchState;
-use ieum_desktop_lib::web::BeClient;
+use ieum_desktop_lib::web::{BeClient, SESSION_ACCOUNT, WebError};
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::KeyError;
 use ieum_local::ai::{AiRunner, KeyStore};
@@ -124,7 +124,9 @@ async fn login_activates_and_logout_deactivates() {
     .unwrap();
     assert_eq!(sup.list_workflows().unwrap()[0].watch, WatchState::Watching);
 
-    logout_and_deactivate(&active, &client).await.unwrap();
+    logout_and_deactivate(&active, Ok(BeClient::new(&base, keys.clone()).unwrap()))
+        .await
+        .unwrap();
     assert_eq!(account_of(&active).await, None);
     assert_eq!(sup.list_workflows().unwrap()[0].watch, WatchState::Off);
     assert!(client.account().is_none());
@@ -144,4 +146,64 @@ async fn account_of_falls_back_to_saved() {
     settings.set_settings(&s).unwrap();
     let active = new_active(t.path(), &settings, Arc::new(FakeKeys::default()));
     assert_eq!(account_of(&active).await, Some(id));
+}
+
+/// 활성화(여기선 계정 저장)가 실패하면 세션도 슬롯도 남기지 않는다 — 같은 계정 재로그인이 저장까지 다시 한다.
+#[tokio::test(flavor = "multi_thread")]
+async fn activate_failure_clears_session_and_slot() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().canonicalize().unwrap();
+    fs::create_dir_all(root.join("trash")).unwrap();
+    let settings = Store::new(root.join("data"));
+    // settings.json 자리에 폴더 — 읽기·쓰기 모두 실패.
+    let blocker = root.join("data").join("settings.json");
+    fs::create_dir_all(&blocker).unwrap();
+    let keys = Arc::new(FakeKeys::default());
+    let active = new_active(&root, &settings, keys.clone());
+    let base = serve().await;
+    let client = BeClient::new(&base, keys.clone()).unwrap();
+
+    let err = login_and_activate(&active, &client, "a@x.com", "pw-secret-9")
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "SERVER");
+    assert!(keys.get(SESSION_ACCOUNT).unwrap().is_none());
+    assert!(client.account().is_none());
+    assert_eq!(active.current().await, None);
+    assert_eq!(active.sup().await.err().as_deref(), Some("NOT_SIGNED_IN"));
+
+    // 저장이 다시 되면 같은 계정 재로그인이 current_account를 남긴다.
+    fs::remove_dir(&blocker).unwrap();
+    login_and_activate(&active, &client, "a@x.com", "pw-secret-9")
+        .await
+        .unwrap();
+    let id = AccountId {
+        email: "a@x.com".into(),
+        server_url: base,
+    };
+    assert_eq!(settings.get_settings().unwrap().current_account, Some(id));
+}
+
+/// 클라이언트를 못 만들어도(서버 주소 설정 오류 등) 로그아웃은 감시를 멈춘다.
+#[tokio::test(flavor = "multi_thread")]
+async fn logout_deactivates_even_without_client() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().canonicalize().unwrap();
+    fs::create_dir_all(root.join("trash")).unwrap();
+    let settings = Store::new(root.join("data"));
+    let active = new_active(&root, &settings, Arc::new(FakeKeys::default()));
+    active
+        .activate(AccountId {
+            email: "a@x.com".into(),
+            server_url: "http://127.0.0.1:1".into(),
+        })
+        .await
+        .unwrap();
+
+    let err = logout_and_deactivate(&active, Err(WebError::Server("설정".into())))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "SERVER");
+    assert_eq!(active.current().await, None);
+    assert_eq!(settings.get_settings().unwrap().current_account, None);
 }

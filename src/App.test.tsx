@@ -113,3 +113,16 @@ test("auth_expired_goes_to_login", async () => {
   expect((screen.getByLabelText("이메일") as HTMLInputElement).value).toBe(ACCOUNT.email);
   expect(screen.getByText("로그인이 만료됐어요. 다시 로그인해 주세요.")).toBeTruthy();
 });
+
+test("gate_waits_for_account_before_rendering", async () => {
+  let resolve!: (a: null) => void;
+  vi.mocked(api.currentAccount).mockReturnValueOnce(new Promise((r) => (resolve = r)));
+  await act(async () => {
+    render(<App />);
+  });
+  // 계정 응답 전에는 관문도 셸도 그리지 않는다(깜빡임 없음).
+  expect(screen.queryByRole("button", { name: "로그인" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "대시보드" })).toBeNull();
+  await act(async () => resolve(null));
+  expect(screen.getByRole("button", { name: "로그인" })).toBeTruthy();
+});
