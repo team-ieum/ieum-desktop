@@ -173,6 +173,7 @@ async fn ask(
         model: model.map(String::from),
         schema: None,
         key_name: None,
+        config_dir: None,
     };
     let r = provider(kind, base, Some(KEY))
         .ask(req, &|c: &str| chunks.lock().unwrap().push(c.to_string()))
@@ -279,6 +280,7 @@ async fn missing_key_fails_with_message() {
             model: Some("m".into()),
             schema: None,
             key_name: None,
+            config_dir: None,
         };
         let err = provider(kind, &base, None)
             .ask(req, &|_: &str| {})
@@ -300,6 +302,7 @@ async fn keychain_error_is_not_missing_key() {
                 model: None,
                 schema: None,
                 key_name: None,
+                config_dir: None,
             },
             &|_: &str| {},
         )

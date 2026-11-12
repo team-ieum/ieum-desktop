@@ -1,13 +1,16 @@
 //! Claude 구독 사용량. 가짜 HTTP 서버와 가짜 토큰 출처만 쓴다(실제 키체인·Anthropic 금지).
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use ieum_desktop_lib::plan_usage::{
-    CACHE_TTL, PlanUsage, PlanUsageClient, TokenRead, TokenSource, token_from_security,
+    CACHE_TTL, ClaudeTokenFor, PlanUsage, PlanUsageClient, TokenRead, TokenSource,
+    claude_keychain_service, token_from_security,
 };
+use ieum_desktop_lib::sub_usage::SubscriptionUsage;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -217,6 +220,98 @@ async fn plan_usage_denied_not_asked_again() {
     assert_eq!(n_denied.load(Ordering::SeqCst), 1);
 }
 
+/// 계정(설정 폴더)마다 다른 토큰. `deny`인 폴더는 허용 창 거부.
+fn per_dir(deny: Option<PathBuf>) -> (ClaudeTokenFor, Arc<Mutex<Vec<Option<PathBuf>>>>) {
+    let seen: Arc<Mutex<Vec<Option<PathBuf>>>> = Arc::default();
+    let s = seen.clone();
+    let f: ClaudeTokenFor = Arc::new(move |d: Option<&Path>| {
+        s.lock().unwrap().push(d.map(Path::to_path_buf));
+        if d.is_some() && d.map(Path::to_path_buf) == deny {
+            return TokenRead::Denied;
+        }
+        TokenRead::Found(format!(
+            "{TOKEN}-{}",
+            d.map_or("system".into(), |d| d.display().to_string())
+        ))
+    });
+    (f, seen)
+}
+
+fn subs(url: &str, token: ClaudeTokenFor) -> SubscriptionUsage {
+    let home = std::env::temp_dir().join("ieum-no-home");
+    SubscriptionUsage::with(
+        url,
+        "http://127.0.0.1:1/x",
+        CACHE_TTL,
+        token,
+        Arc::new(|_: Option<&Path>| None),
+        home,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn usage_cache_is_per_account() {
+    let (url, log) = serve(|_| (200, sample().to_string())).await;
+    let (token, _) = per_dir(None);
+    let s = subs(&url, token);
+    let a = Some(PathBuf::from("/accts/a"));
+    let b = Some(PathBuf::from("/accts/b"));
+    assert_eq!(s.get("claude", a.clone()).await.unwrap().state, "ok");
+    assert_eq!(s.get("claude", b.clone()).await.unwrap().state, "ok");
+    assert_eq!(log.lock().unwrap().len(), 2);
+    s.get("claude", a.clone()).await.unwrap();
+    s.get("claude", b).await.unwrap();
+    assert_eq!(log.lock().unwrap().len(), 2);
+    // 계정마다 자기 토큰.
+    let heads: Vec<String> = log.lock().unwrap().iter().map(|r| r.head.clone()).collect();
+    assert!(heads[0].contains("/accts/a") && heads[1].contains("/accts/b"));
+    assert!(s.get("gemini", a).await.is_err());
+}
+
+#[tokio::test]
+async fn denied_account_not_asked_again_others_still_work() {
+    let (url, log) = serve(|_| (200, sample().to_string())).await;
+    let a = PathBuf::from("/accts/denied");
+    let (token, seen) = per_dir(Some(a.clone()));
+    let s = subs(&url, token);
+    for _ in 0..3 {
+        assert_eq!(
+            s.get("claude", Some(a.clone())).await.unwrap().state,
+            "not_logged_in"
+        );
+    }
+    let asked = |p: &Option<PathBuf>| seen.lock().unwrap().iter().filter(|x| *x == p).count();
+    assert_eq!(asked(&Some(a.clone())), 1);
+    // 확인(새로 읽기)도 거부한 계정은 다시 묻지 않는다.
+    assert_eq!(
+        s.refresh("claude", Some(a.clone())).await.unwrap().state,
+        "not_logged_in"
+    );
+    assert_eq!(asked(&Some(a)), 1);
+    assert_eq!(s.get("claude", None).await.unwrap().state, "ok");
+    assert_eq!(
+        s.get("claude", Some("/accts/ok".into()))
+            .await
+            .unwrap()
+            .state,
+        "ok"
+    );
+    assert_eq!(log.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn keychain_service_follows_config_dir() {
+    assert_eq!(claude_keychain_service(None), "Claude Code-credentials");
+    // 실측: 이 Mac에서 Orca가 만든 계정 폴더의 항목 이름과 같은 규칙(sha256 앞 8자).
+    assert_eq!(
+        claude_keychain_service(Some(Path::new(
+            "/Users/dobee/Library/Application Support/orca/claude-profiles/62c40c5b-4d1f-4a3c-87ab-222023a1470b/home"
+        ))),
+        "Claude Code-credentials-a1a82ba4"
+    );
+}
+
 #[test]
 fn security_exit_codes_map_to_token_read() {
     let ok = br#"{"claudeAiOauth":{"accessToken":"abc"}}"#;
@@ -244,7 +339,7 @@ fn security_exit_codes_map_to_token_read() {
 #[tokio::test]
 #[ignore]
 async fn plan_usage_live() {
-    let c = PlanUsageClient::new(Arc::new(ieum_desktop_lib::plan_usage::keychain_token)).unwrap();
-    let u = c.get().await;
+    let s = SubscriptionUsage::new().unwrap();
+    let u = s.get("claude", None).await.unwrap();
     println!("state={} windows={}", u.state, u.windows.len());
 }

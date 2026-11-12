@@ -388,7 +388,13 @@ impl AiProvider for CliProvider {
             line.push(' ');
             line.push_str(&sh_quote(&a));
         }
-        let mut child = Command::new(shell())
+        let mut cmd = Command::new(shell());
+        // 고른 구독 계정의 설정 폴더. 없으면 앱이 물려받은 값도 지워 이 Mac의 로그인으로.
+        match (&req.config_dir, self.kind) {
+            (Some(d), CliKind::Claude) => cmd.env("CLAUDE_CONFIG_DIR", d),
+            _ => cmd.env_remove("CLAUDE_CONFIG_DIR"),
+        };
+        let mut child = cmd
             .arg("-lc")
             .arg(&line)
             .current_dir(&self.cwd)

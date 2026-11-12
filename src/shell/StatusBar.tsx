@@ -93,7 +93,7 @@ export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSett
 
   useEffect(() => {
     const load = () => {
-      api.claudePlanUsage().then(setPlan, () => setPlan(UNAVAILABLE));
+      api.subscriptionUsage("claude", "system").then(setPlan, () => setPlan(UNAVAILABLE));
       api.usageSummary("today").then(setToday, () => setToday(null));
     };
     load();

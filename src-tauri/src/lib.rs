@@ -172,12 +172,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(active);
     app.manage(Keys(keys));
     app.manage(crate::web::Watches::default());
-    app.manage(crate::plan_usage::PlanUsageClient::new(Arc::new(
-        crate::plan_usage::keychain_token,
-    ))?);
-    app.manage(crate::sub_usage::CodexUsageClient::new(Arc::new(
-        crate::sub_usage::codex_auth_file,
-    ))?);
+    app.manage(crate::sub_usage::SubscriptionUsage::new()?);
     app.manage(crate::sub_usage::AntigravityUsageClient::new(
         Arc::new(crate::sub_usage::agy_login),
         Arc::new(crate::sub_usage::agy_usage_cli),
@@ -253,8 +248,10 @@ pub fn run() {
             commands::web_dashboard_errors,
             commands::open_help,
             commands::open_web_workflow,
-            commands::claude_plan_usage,
-            commands::codex_plan_usage,
+            commands::begin_cli_account,
+            commands::confirm_cli_account,
+            commands::cancel_cli_account,
+            commands::subscription_usage,
             commands::antigravity_plan_usage,
             commands::open_system_settings,
             commands::send_test_notification,

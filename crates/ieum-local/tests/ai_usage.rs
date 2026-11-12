@@ -81,6 +81,7 @@ async fn ask(kind: ApiKind, base: &str, model: Option<&str>) -> AiAnswer {
         model: model.map(String::from),
         schema: None,
         key_name: None,
+        config_dir: None,
     };
     ApiProvider::with(kind, base, Arc::new(Key))
         .ask(req, &|_: &str| {})

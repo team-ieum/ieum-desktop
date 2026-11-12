@@ -424,7 +424,7 @@ fn claude_account_email_read_from_config() {
 #[ignore]
 async fn sub_usage_live() {
     use ieum_desktop_lib::sub_usage;
-    let c = CodexUsageClient::new(Arc::new(sub_usage::codex_auth_file)).unwrap();
+    let c = CodexUsageClient::new(Arc::new(|| sub_usage::codex_auth_file(None))).unwrap();
     let u = c.get().await;
     println!(
         "codex state={} windows={} email={}",

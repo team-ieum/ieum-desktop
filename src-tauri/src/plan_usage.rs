@@ -1,6 +1,7 @@
 //! Claude 구독 사용량(창별 사용 비율·초기화 시각). Claude Code가 키체인에 둔 OAuth 토큰으로
 //! `api.anthropic.com`에만 묻는다. 토큰은 로그·오류·반환값 어디에도 넣지 않는다.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -74,9 +75,18 @@ impl PlanUsageClient {
 
     /// `ttl` 안에 다시 부르면 저장해 둔 결과(키체인·네트워크를 건드리지 않음). 키체인 거부는 계속 쓴다.
     pub async fn get(&self) -> PlanUsage {
+        self.load(false).await
+    }
+
+    /// 저장해 둔 결과를 건너뛰고 새로 읽는다(계정 추가 [확인]). 거부는 그대로 다시 묻지 않는다.
+    pub async fn refresh(&self) -> PlanUsage {
+        self.load(true).await
+    }
+
+    async fn load(&self, fresh: bool) -> PlanUsage {
         let mut cache = self.cache.lock().await;
         if let Some((at, u, sticky)) = cache.as_ref()
-            && (*sticky || at.elapsed() < self.ttl)
+            && (*sticky || (!fresh && at.elapsed() < self.ttl))
         {
             return u.clone();
         }
@@ -174,13 +184,30 @@ fn parse(body: &Value) -> Option<Vec<PlanWindow>> {
     Some(windows)
 }
 
-/// macOS 키체인 `Claude Code-credentials`의 `claudeAiOauth.accessToken`. 앱이 읽는 항목은 이것 하나.
-pub fn keychain_token() -> TokenRead {
+/// 설정 폴더(계정)별 토큰 읽기. None = 이 Mac의 기본 로그인.
+pub type ClaudeTokenFor = Arc<dyn Fn(Option<&Path>) -> TokenRead + Send + Sync>;
+
+/// claude가 토큰을 두는 키체인 서비스 이름. `CLAUDE_CONFIG_DIR`가 있으면
+/// `Claude Code-credentials-<sha256(폴더) 앞 8자>`(claude 2.1.322 바이너리의 규칙, 이 Mac 항목으로 실측).
+/// ponytail: claude는 폴더 경로를 NFC로 맞춰 해시한다 — 앱 데이터 경로가 ASCII라 그대로 쓴다.
+pub fn claude_keychain_service(config_dir: Option<&Path>) -> String {
+    use sha2::{Digest, Sha256};
+    match config_dir {
+        None => "Claude Code-credentials".into(),
+        Some(d) => {
+            let h = Sha256::digest(d.to_string_lossy().as_bytes());
+            format!("Claude Code-credentials-{}", &hex::encode(h)[..8])
+        }
+    }
+}
+
+/// 그 계정 키체인 항목의 `claudeAiOauth.accessToken`. 계정마다 항목 하나(허용 창도 계정마다 한 번).
+pub fn keychain_token(config_dir: Option<&Path>) -> TokenRead {
     match std::process::Command::new("/usr/bin/security")
         .args([
             "find-generic-password",
             "-s",
-            "Claude Code-credentials",
+            &claude_keychain_service(config_dir),
             "-w",
         ])
         .stderr(std::process::Stdio::null())

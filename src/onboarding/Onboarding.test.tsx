@@ -26,8 +26,7 @@ beforeAll(() => {
   vi.spyOn(api, "listCredentials").mockResolvedValue({ apiKeys: { anthropic: [], openai: [], gemini: [] }, claudeAccounts: [], codexAccounts: [], keychainError: null });
   vi.spyOn(api, "openSystemSettings").mockResolvedValue();
   vi.spyOn(api, "sendTestNotification").mockResolvedValue();
-  vi.spyOn(api, "claudePlanUsage").mockRejectedValue("no command");
-  vi.spyOn(api, "codexPlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "subscriptionUsage").mockRejectedValue("no command");
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
   vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
 });

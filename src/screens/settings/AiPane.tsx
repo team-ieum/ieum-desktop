@@ -14,8 +14,8 @@ export const PROVIDERS: { id: ApiProvider; name: string; url: string; mark: stri
 
 export type SubId = "claude" | "codex" | "antigravity";
 export const SUBS: { id: SubId; name: string; cmd: string; mark: string; color: string; load: () => Promise<PlanUsage> }[] = [
-  { id: "claude", name: "Claude", cmd: "claude", mark: "C", color: "#D97757", load: () => api.claudePlanUsage() },
-  { id: "codex", name: "Codex", cmd: "codex", mark: "C", color: "#111827", load: () => api.codexPlanUsage() },
+  { id: "claude", name: "Claude", cmd: "claude", mark: "C", color: "#D97757", load: () => api.subscriptionUsage("claude", "system") },
+  { id: "codex", name: "Codex", cmd: "codex", mark: "C", color: "#111827", load: () => api.subscriptionUsage("codex", "system") },
   { id: "antigravity", name: "Antigravity", cmd: "agy", mark: "A", color: "#34A853", load: () => api.antigravityPlanUsage() },
 ];
 

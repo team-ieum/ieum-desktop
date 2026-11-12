@@ -12,12 +12,12 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::account::AccountId;
 use crate::active::Active;
-use crate::credentials::{AccountCredentials, ApiKeyMeta, CredentialsView};
+use crate::credentials::{AccountCredentials, ApiKeyMeta, CliAccountBegin, CredentialsView};
 use crate::permissions;
-use crate::plan_usage::{PlanUsage, PlanUsageClient, claude_account_email};
+use crate::plan_usage::PlanUsage;
 use crate::pricing;
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
-use crate::sub_usage::{AntigravityUsageClient, CodexUsageClient};
+use crate::sub_usage::{AntigravityUsageClient, SubscriptionUsage};
 use crate::supervisor::WorkflowEntry;
 use crate::usage::{self, UsageSummary};
 use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
@@ -204,23 +204,48 @@ pub async fn delete_credential(
     with_credentials(&active, move |c| c.delete(&kind, &id)).await
 }
 
-/// Claude 구독 사용량 + 로그인 계정(`~/.claude.json`). 키체인 읽기는 `PlanUsageClient` 안에서 `spawn_blocking`.
+/// 구독 계정 추가 시작: 설정 폴더를 만들고 터미널에서 돌릴 로그인 명령을 준다. `kind` = `claude|codex`.
 #[tauri::command]
-pub async fn claude_plan_usage(client: State<'_, PlanUsageClient>) -> Result<PlanUsage, String> {
-    let mut u = client.get().await;
-    u.account_email = tauri::async_runtime::spawn_blocking(|| {
-        claude_account_email(&std::env::home_dir()?.join(".claude.json"))
-    })
-    .await
-    .ok()
-    .flatten();
-    Ok(u)
+pub async fn begin_cli_account(
+    active: State<'_, Active>,
+    kind: String,
+    label: String,
+) -> Result<CliAccountBegin, String> {
+    with_credentials(&active, move |c| c.begin_cli_account(&kind, &label)).await
 }
 
-/// Codex 구독 연결 상태(계정·사용량). 파일 읽기는 안에서 `spawn_blocking`.
+/// 로그인했는지 그 계정 폴더로 확인(키체인 허용 창이 여기서 뜰 수 있음). 이메일이 보이면 추가 완료.
 #[tauri::command]
-pub async fn codex_plan_usage(client: State<'_, CodexUsageClient>) -> Result<PlanUsage, String> {
-    Ok(client.get().await)
+pub async fn confirm_cli_account(
+    active: State<'_, Active>,
+    usage: State<'_, SubscriptionUsage>,
+    kind: String,
+    id: String,
+) -> Result<PlanUsage, String> {
+    let c = Arc::new(active.credentials().await?);
+    crate::credentials::confirm_cli_account(c, &usage, &kind, &id).await
+}
+
+#[tauri::command]
+pub async fn cancel_cli_account(
+    active: State<'_, Active>,
+    kind: String,
+    id: String,
+) -> Result<(), String> {
+    with_credentials(&active, move |c| c.cancel_cli_account(&kind, &id)).await
+}
+
+/// 구독 계정 하나의 연결 상태·사용량. 키체인·파일 읽기는 안에서 `spawn_blocking`.
+#[tauri::command]
+pub async fn subscription_usage(
+    active: State<'_, Active>,
+    usage: State<'_, SubscriptionUsage>,
+    kind: String,
+    id: String,
+) -> Result<PlanUsage, String> {
+    let k = kind.clone();
+    let dir = with_credentials(&active, move |c| c.cli_dir(&k, &id)).await?;
+    usage.get(&kind, dir).await
 }
 
 /// Antigravity 구독 연결 상태. 키체인 읽기·`agy` 실행은 안에서 `spawn_blocking`.

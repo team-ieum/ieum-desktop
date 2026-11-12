@@ -176,6 +176,13 @@ export interface CredentialsView {
   keychainError: string | null;
 }
 export type CredentialKind = ApiProvider | "claude" | "codex";
+/** 여러 계정을 넣을 수 있는 구독. 계정 id `system` = 이 Mac의 CLI 로그인. */
+export type SubKind = "claude" | "codex";
+/** 계정 추가: 터미널에 붙여 넣을 로그인 명령(경로는 큰따옴표). */
+export interface CliAccountBegin {
+  id: string;
+  command: string;
+}
 
 export const keyStates = (v: CredentialsView): KeychainStatus => {
   const state = (p: ApiProvider): KeyState => (v.apiKeys[p]?.length ? "stored" : v.keychainError ? "error" : "missing");
@@ -369,7 +376,12 @@ export const api = {
     listen<ExecPayload>("exec-event", (e) => cb(e.payload)),
   // Rust 명령은 다음 세션(Task 14·15) — 그 전엔 실패하고 화면은 빈 상태를 보인다.
   usageSummary: (range: UsageRange) => invoke<UsageSummary>("usage_summary", { range }),
-  claudePlanUsage: () => invoke<PlanUsage>("claude_plan_usage"),
-  codexPlanUsage: () => invoke<PlanUsage>("codex_plan_usage"),
+  /** 구독 계정 하나의 연결 상태·사용량(계정별 60초 캐시). */
+  subscriptionUsage: (kind: SubKind, id: string) => invoke<PlanUsage>("subscription_usage", { kind, id }),
+  /** 계정 폴더를 만들고 로그인 명령을 준다(확인 전엔 목록에 안 보임). */
+  beginCliAccount: (kind: SubKind, label: string) => invoke<CliAccountBegin>("begin_cli_account", { kind, label }),
+  /** 그 계정 폴더로 로그인을 확인 — 이메일이 보이면 목록에 추가, 아니면 `not_logged_in` 그대로. */
+  confirmCliAccount: (kind: SubKind, id: string) => invoke<PlanUsage>("confirm_cli_account", { kind, id }),
+  cancelCliAccount: (kind: SubKind, id: string) => invoke<void>("cancel_cli_account", { kind, id }),
   antigravityPlanUsage: () => invoke<PlanUsage>("antigravity_plan_usage"),
 };

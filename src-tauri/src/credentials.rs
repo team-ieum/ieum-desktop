@@ -9,6 +9,9 @@ use std::sync::{Arc, Mutex};
 use ieum_local::ai::{CredentialResolver, KeyStore};
 use serde::{Deserialize, Serialize};
 
+use crate::plan_usage::PlanUsage;
+use crate::sub_usage::SubscriptionUsage;
+
 pub use ieum_local::ai::CREDENTIAL_MISSING as MISSING;
 
 pub const API_PROVIDERS: [&str; 3] = ["anthropic", "openai", "gemini"];
@@ -45,6 +48,17 @@ pub struct Credentials {
     pub api_keys: BTreeMap<String, Vec<ApiKeyMeta>>,
     pub claude_accounts: Vec<CliAccountMeta>,
     pub codex_accounts: Vec<CliAccountMeta>,
+    /// 계정 추가 [확인] 전(로그인 대기) — 목록·노드 선택에 보이지 않는다.
+    pub pending_claude_accounts: Vec<CliAccountMeta>,
+    pub pending_codex_accounts: Vec<CliAccountMeta>,
+}
+
+/// `begin_cli_account` 응답: 터미널에 붙여 넣을 로그인 명령.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliAccountBegin {
+    pub id: String,
+    pub command: String,
 }
 
 /// `list_credentials` 응답. 키체인을 못 읽으면 옛 키는 빠지고 `keychain_error`에 까닭.
@@ -130,6 +144,33 @@ fn last4(key: &str) -> String {
         return String::new();
     }
     key.chars().skip(n - 4).collect()
+}
+
+fn cli_kind(k: &str) -> Result<&'static str, String> {
+    ["claude", "codex"]
+        .into_iter()
+        .find(|a| *a == k)
+        .ok_or_else(|| format!("알 수 없는 구독이에요: {k}"))
+}
+
+fn new_id() -> String {
+    uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
+}
+
+fn is_hex8(id: &str) -> bool {
+    id.len() == 8 && id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// (확정 목록, 대기 목록)
+fn accounts<'a>(
+    c: &'a mut Credentials,
+    kind: &str,
+) -> (&'a mut Vec<CliAccountMeta>, &'a mut Vec<CliAccountMeta>) {
+    if kind == "claude" {
+        (&mut c.claude_accounts, &mut c.pending_claude_accounts)
+    } else {
+        (&mut c.codex_accounts, &mut c.pending_codex_accounts)
+    }
 }
 
 fn api_provider(p: &str) -> Result<&'static str, String> {
@@ -263,7 +304,7 @@ impl AccountCredentials {
         self.edit(|c| {
             let list = c.api_keys.entry(provider.to_string()).or_default();
             let id = loop {
-                let id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+                let id = new_id();
                 if !list.iter().any(|m| m.id == id) {
                     break id;
                 }
@@ -307,23 +348,122 @@ impl AccountCredentials {
         })
     }
 
-    /// API 키는 vault 값도 지운다. `system` 계정은 지울 수 없다.
-    pub fn delete(&self, kind: &str, id: &str) -> Result<(), String> {
-        if id == SYSTEM_ID && matches!(kind, "claude" | "codex") {
-            return Err("이 Mac의 로그인은 지울 수 없어요.".into());
+    /// 계정 설정 폴더 `accounts/<계정 키>/<claude|codex>/<id>`. id는 8자 hex만(경로 밖으로 못 나가게).
+    fn account_dir(&self, kind: &str, id: &str) -> Result<PathBuf, String> {
+        if !is_hex8(id) {
+            return Err(MISSING.into());
         }
-        self.edit(|c| match kind {
-            "claude" => remove(&mut c.claude_accounts, id),
-            "codex" => remove(&mut c.codex_accounts, id),
-            p => {
-                let p = api_provider(p)?;
-                let list = c.api_keys.entry(p.into()).or_default();
-                find(list, id)?;
-                self.keys
-                    .delete(&self.vault_name(p, id))
-                    .map_err(|e| e.to_string())?;
-                remove(list, id)
+        Ok(self.root.join(kind).join(id))
+    }
+
+    /// 폴더를 만들고 대기 목록에 넣는다(아직 목록엔 안 보임). 명령의 경로는 큰따옴표로 감싼다.
+    pub fn begin_cli_account(&self, kind: &str, label: &str) -> Result<CliAccountBegin, String> {
+        let kind = cli_kind(kind)?;
+        let label = clean_label(label)?;
+        self.edit(|c| {
+            let (list, pending) = accounts(c, kind);
+            let id = loop {
+                let id = new_id();
+                if !list.iter().chain(pending.iter()).any(|m| m.id == id) {
+                    break id;
+                }
+            };
+            let dir = self.account_dir(kind, &id)?;
+            let shown = dir.display().to_string();
+            // 큰따옴표 안에서도 뜻이 바뀌는 글자가 있으면 붙여 넣을 명령을 만들지 않는다.
+            if shown.contains(['"', '$', '`', '\\', '\n']) {
+                return Err("계정 폴더 경로에 쓸 수 없는 글자가 있어요.".into());
             }
+            std::fs::create_dir_all(&dir).map_err(|e| format!("계정 폴더를 못 만들었어요: {e}"))?;
+            pending.push(CliAccountMeta {
+                id: id.clone(),
+                label,
+                is_default: false,
+                created_at: crate::store::now(),
+                email: None,
+            });
+            let command = match kind {
+                "claude" => format!("CLAUDE_CONFIG_DIR=\"{shown}\" claude"),
+                _ => format!("CODEX_HOME=\"{shown}\" codex login"),
+            };
+            Ok(CliAccountBegin { id, command })
+        })
+    }
+
+    /// 대기 중인 계정의 설정 폴더(파일만 읽는다).
+    pub fn pending_dir(&self, kind: &str, id: &str) -> Result<PathBuf, String> {
+        let kind = cli_kind(kind)?;
+        let mut c = self.read_file()?;
+        if !accounts(&mut c, kind).1.iter().any(|m| m.id == id) {
+            return Err(MISSING.into());
+        }
+        self.account_dir(kind, id)
+    }
+
+    /// 확정된 계정의 설정 폴더. `system` = None(CLI 기본 설정). 파일만 읽는다.
+    pub fn cli_dir(&self, kind: &str, id: &str) -> Result<Option<PathBuf>, String> {
+        let kind = cli_kind(kind)?;
+        if id == SYSTEM_ID {
+            return Ok(None);
+        }
+        let mut c = self.read_file()?;
+        let dir = self.account_dir(kind, id)?;
+        if !accounts(&mut c, kind).0.iter().any(|m| m.id == id) || !dir.is_dir() {
+            return Err(MISSING.into());
+        }
+        Ok(Some(dir))
+    }
+
+    /// 대기 → 목록(이메일과 함께).
+    fn finish_cli_account(&self, kind: &str, id: &str, email: String) -> Result<(), String> {
+        self.edit(|c| {
+            let (list, pending) = accounts(c, kind);
+            let i = pending
+                .iter()
+                .position(|m| m.id == id)
+                .ok_or_else(|| MISSING.to_string())?;
+            let mut m = pending.remove(i);
+            m.email = Some(email);
+            m.is_default = !list.iter().any(|m| m.is_default);
+            list.push(m);
+            Ok(())
+        })
+    }
+
+    /// 대기 중인 계정을 버리고 그 폴더를 지운다.
+    pub fn cancel_cli_account(&self, kind: &str, id: &str) -> Result<(), String> {
+        let kind = cli_kind(kind)?;
+        let dir = self.account_dir(kind, id)?;
+        self.edit(|c| {
+            let pending = accounts(c, kind).1;
+            let i = pending
+                .iter()
+                .position(|m| m.id == id)
+                .ok_or_else(|| MISSING.to_string())?;
+            pending.remove(i);
+            Ok(())
+        })?;
+        remove_dir(&dir)
+    }
+
+    /// API 키는 vault 값도, 구독 계정은 설정 폴더도 지운다. `system` 계정은 지울 수 없다.
+    pub fn delete(&self, kind: &str, id: &str) -> Result<(), String> {
+        if matches!(kind, "claude" | "codex") {
+            if id == SYSTEM_ID {
+                return Err("이 Mac의 로그인은 지울 수 없어요.".into());
+            }
+            let dir = self.account_dir(kind, id)?;
+            self.edit(|c| remove(accounts(c, kind).0, id))?;
+            return remove_dir(&dir);
+        }
+        let p = api_provider(kind)?;
+        self.edit(|c| {
+            let list = c.api_keys.entry(p.into()).or_default();
+            find(list, id)?;
+            self.keys
+                .delete(&self.vault_name(p, id))
+                .map_err(|e| e.to_string())?;
+            remove(list, id)
         })
     }
 }
@@ -355,12 +495,56 @@ impl CredentialResolver for AccountCredentials {
         }
     }
 
-    /// Task 1: `system`(CLI 기본 설정)만.
+    /// 고른 계정(비우면 기본 계정)의 설정 폴더. `system`이면 None. 없는 id는 `MISSING`.
     fn claude_config_dir(&self, credential: Option<&str>) -> Result<Option<PathBuf>, String> {
-        match credential {
-            None | Some(SYSTEM_ID) => Ok(None),
-            Some(_) => Err(MISSING.into()),
+        let id = match credential {
+            Some(id) => id.to_string(),
+            None => self
+                .read_file()?
+                .claude_accounts
+                .into_iter()
+                .find(|m| m.is_default)
+                .map_or(SYSTEM_ID.into(), |m| m.id),
+        };
+        self.cli_dir("claude", &id)
+    }
+}
+
+/// 계정 추가 [확인]: 그 폴더 기준으로 사용량·이메일을 새로 읽고(허용 창이 뜰 수 있음),
+/// 이메일이 보이면 목록에 넣는다. 아니면 대기 그대로(`not_logged_in` 등을 그대로 돌려준다).
+pub async fn confirm_cli_account(
+    c: Arc<AccountCredentials>,
+    usage: &SubscriptionUsage,
+    kind: &str,
+    id: &str,
+) -> Result<PlanUsage, String> {
+    let (k, i) = (kind.to_string(), id.to_string());
+    let c2 = c.clone();
+    let dir = blocking(move || c2.pending_dir(&k, &i)).await?;
+    let u = usage.refresh(kind, Some(dir)).await?;
+    if let Some(email) = u.account_email.clone() {
+        let (k, i) = (kind.to_string(), id.to_string());
+        // 목록 저장은 옛 키를 키체인에서 읽는다 — 메인 스레드 밖에서.
+        blocking(move || c.finish_cli_account(&k, &i, email)).await?;
+    }
+    Ok(u)
+}
+
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 없으면 그대로 둔다.
+fn remove_dir(dir: &Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(format!("계정 폴더를 지우지 못했어요: {e}"))
         }
+        _ => Ok(()),
     }
 }
 

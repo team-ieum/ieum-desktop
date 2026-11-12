@@ -25,8 +25,7 @@ beforeAll(() => {
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "currentAccount").mockResolvedValue(ACCOUNT);
   vi.spyOn(api, "webListWorkflows").mockResolvedValue([]);
-  vi.spyOn(api, "claudePlanUsage").mockRejectedValue("no command");
-  vi.spyOn(api, "codexPlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "subscriptionUsage").mockRejectedValue("no command");
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
   vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
 });
@@ -76,7 +75,9 @@ test("ai_providers_section_lists_six_cards", async () => {
 test("subscription_card_shows_login_hint_when_not_logged_in", async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-  vi.spyOn(api, "codexPlanUsage").mockResolvedValue({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null });
+  vi.spyOn(api, "subscriptionUsage").mockImplementation((k) =>
+    k === "codex" ? Promise.resolve({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null }) : Promise.reject("no command"),
+  );
   await renderShell();
   const codex = card("Codex (구독)");
   expect(codex.getByText("로그인 필요")).toBeTruthy();
@@ -87,7 +88,7 @@ test("subscription_card_shows_login_hint_when_not_logged_in", async () => {
 });
 
 test("subscription_card_shows_email_and_windows", async () => {
-  const load = vi.spyOn(api, "claudePlanUsage").mockResolvedValue({
+  const load = vi.spyOn(api, "subscriptionUsage").mockResolvedValue({
     state: "ok",
     windows: [
       { kind: "five_hour", usedPct: 34, resetsAt: inHours(58) },

@@ -1,11 +1,15 @@
 //! API 키 여러 개 + 노드마다 고르기. 키체인은 가짜, AI는 로컬 가짜 HTTP 서버.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use chrono::{DateTime, FixedOffset};
-use ieum_desktop_lib::credentials::{AccountCredentials, MISSING};
+use ieum_desktop_lib::credentials::{AccountCredentials, MISSING, confirm_cli_account};
+use ieum_desktop_lib::plan_usage::TokenRead;
 use ieum_desktop_lib::store::StoredRun;
+use ieum_desktop_lib::sub_usage::SubscriptionUsage;
 use ieum_desktop_lib::usage::summarize;
 use ieum_engine::{Node, NodeCtx, NodeError, NodeRunner};
 use ieum_local::ai::keys::KeyError;
@@ -374,4 +378,154 @@ async fn usage_records_credential_id() {
     let mut by = by;
     by.sort();
     assert_eq!(by, want);
+}
+
+// ---- 구독 계정(Claude·Codex) ----
+
+/// 계정 폴더 경로에 공백이 있게(`~/Library/Application Support/...` 흉내).
+fn setup_spaced() -> (TempDir, Arc<AccountCredentials>) {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().join("Application Support").join(K16);
+    let c = AccountCredentials::new(root, K16, Arc::new(FakeKeys::default()));
+    (t, Arc::new(c))
+}
+
+/// 토큰 읽기가 받은 설정 폴더를 남기는 사용량 클라이언트(네트워크 없음 — 토큰 없음).
+fn fake_usage(home: &std::path::Path) -> (SubscriptionUsage, Arc<Mutex<Vec<Option<PathBuf>>>>) {
+    let seen: Arc<Mutex<Vec<Option<PathBuf>>>> = Arc::default();
+    let s = seen.clone();
+    let u = SubscriptionUsage::with(
+        "http://127.0.0.1:1/api/oauth/usage",
+        "http://127.0.0.1:1/backend-api/wham/usage",
+        Duration::from_secs(60),
+        Arc::new(move |d: Option<&std::path::Path>| {
+            s.lock().unwrap().push(d.map(|d| d.to_path_buf()));
+            TokenRead::Missing
+        }),
+        Arc::new(|_: Option<&std::path::Path>| None),
+        home.to_path_buf(),
+    )
+    .unwrap();
+    (u, seen)
+}
+
+#[test]
+fn begin_account_command_quotes_path() {
+    let (t, c) = setup_spaced();
+    let b = c.begin_cli_account("claude", "회사").unwrap();
+    assert!(is_hex8(&b.id));
+    let dir = t
+        .path()
+        .join("Application Support")
+        .join(K16)
+        .join("claude")
+        .join(&b.id);
+    assert!(dir.is_dir());
+    assert_eq!(
+        b.command,
+        format!("CLAUDE_CONFIG_DIR=\"{}\" claude", dir.display())
+    );
+    // 그대로 붙여 넣어도 경로가 한 덩어리로 넘어간다.
+    let probe = b
+        .command
+        .replace(" claude", " sh -c 'printf %s \"$CLAUDE_CONFIG_DIR\"'");
+    let out = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&probe)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        dir.display().to_string()
+    );
+
+    let x = c.begin_cli_account("codex", "개인").unwrap();
+    let dir = t
+        .path()
+        .join("Application Support")
+        .join(K16)
+        .join("codex")
+        .join(&x.id);
+    assert_eq!(
+        x.command,
+        format!("CODEX_HOME=\"{}\" codex login", dir.display())
+    );
+    assert!(c.begin_cli_account("gemini", "x").is_err());
+
+    // 따옴표·$·백틱이 든 경로는 명령을 만들지 않는다.
+    let bad = AccountCredentials::new(t.path().join("a\"b"), K16, Arc::new(FakeKeys::default()));
+    assert!(bad.begin_cli_account("claude", "x").is_err());
+}
+
+#[tokio::test]
+async fn pending_account_hidden_until_confirmed() {
+    let (t, c) = setup_spaced();
+    let (usage, _) = fake_usage(t.path());
+    let b = c.begin_cli_account("claude", "회사").unwrap();
+    let ids = |c: &AccountCredentials| -> Vec<String> {
+        c.list().claude_accounts.into_iter().map(|a| a.id).collect()
+    };
+    assert_eq!(ids(&c), ["system"]);
+    // 노드에서도 고를 수 없다.
+    assert_eq!(c.claude_config_dir(Some(&b.id)).unwrap_err(), MISSING);
+    // 아직 로그인 전: 그대로 대기.
+    let u = confirm_cli_account(c.clone(), &usage, "claude", &b.id)
+        .await
+        .unwrap();
+    assert_eq!(u.state, "not_logged_in");
+    assert_eq!(ids(&c), ["system"]);
+    // 취소하면 폴더째 지운다.
+    let dir = c.pending_dir("claude", &b.id).unwrap();
+    c.cancel_cli_account("claude", &b.id).unwrap();
+    assert!(!dir.exists());
+    assert!(
+        confirm_cli_account(c.clone(), &usage, "claude", &b.id)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn confirm_reads_usage_in_account_dir() {
+    let (t, c) = setup_spaced();
+    let (usage, seen) = fake_usage(t.path());
+    let b = c.begin_cli_account("claude", "회사").unwrap();
+    let dir = c.pending_dir("claude", &b.id).unwrap();
+    // 로그인하면 claude가 설정 폴더에 계정을 적는다.
+    std::fs::write(
+        dir.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"work@corp.com"}}"#,
+    )
+    .unwrap();
+    let u = confirm_cli_account(c.clone(), &usage, "claude", &b.id)
+        .await
+        .unwrap();
+    assert_eq!(u.account_email.as_deref(), Some("work@corp.com"));
+    assert_eq!(seen.lock().unwrap().as_slice(), [Some(dir.clone())]);
+    let list = c.list().claude_accounts;
+    let a = list.iter().find(|a| a.id == b.id).unwrap();
+    assert_eq!(
+        (a.label.as_str(), a.email.as_deref(), a.is_default),
+        ("회사", Some("work@corp.com"), false)
+    );
+    // 고른 노드는 그 폴더로, 기본으로 바꾸면 비운 노드도 그 폴더로.
+    assert_eq!(c.claude_config_dir(Some(&b.id)).unwrap(), Some(dir.clone()));
+    assert_eq!(c.claude_config_dir(None).unwrap(), None);
+    c.set_default("claude", &b.id).unwrap();
+    assert_eq!(c.claude_config_dir(None).unwrap(), Some(dir.clone()));
+    assert_eq!(c.claude_config_dir(Some("system")).unwrap(), None);
+    // 지우면 메타와 폴더가 함께 사라지고, 고른 노드는 실패.
+    c.delete("claude", &b.id).unwrap();
+    assert!(!dir.exists());
+    assert_eq!(c.claude_config_dir(Some(&b.id)).unwrap_err(), MISSING);
+    assert_eq!(c.claude_config_dir(None).unwrap(), None);
+}
+
+#[test]
+fn delete_system_account_rejected() {
+    let (_t, c) = setup_spaced();
+    for kind in ["claude", "codex"] {
+        assert!(c.delete(kind, "system").is_err());
+        assert_eq!(c.list().claude_accounts[0].id, "system");
+    }
 }

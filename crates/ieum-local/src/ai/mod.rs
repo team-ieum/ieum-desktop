@@ -33,6 +33,8 @@ pub struct AiRequest {
     pub schema: Option<Value>,
     /// API 키 공급원이 읽을 키 저장소 이름(`CredentialResolver`가 고른 것). None이면 공급원 기본.
     pub key_name: Option<String>,
+    /// claude CLI에 줄 `CLAUDE_CONFIG_DIR`(고른 구독 계정). None이면 CLI 기본 설정.
+    pub config_dir: Option<PathBuf>,
 }
 
 /// 고른 키·계정을 찾지 못했을 때 노드 오류 문구. 다른 키로 대신하지 않는다.
@@ -143,27 +145,33 @@ impl AiRunner {
         }
     }
 
-    /// provider + `credential` → (키 저장소 이름, 기록할 키·계정 id). 못 찾으면 노드 실패.
+    /// provider + `credential` → (키 저장소 이름, claude 설정 폴더, 기록할 키·계정 id). 못 찾으면 노드 실패.
+    #[allow(clippy::type_complexity)]
     fn resolve(
         &self,
         provider_id: &str,
         credential: Option<&str>,
-    ) -> Result<(Option<String>, Option<String>), NodeError> {
+    ) -> Result<(Option<String>, Option<PathBuf>, Option<String>), NodeError> {
         let Some(r) = &self.resolver else {
-            return Ok((None, credential.map(str::to_string)));
+            return Ok((None, None, credential.map(str::to_string)));
         };
         if let Some(p) = provider_id.strip_prefix("api:") {
             let name = r.api_key_name(p, credential).map_err(fail)?;
             // `<공급자>.<계정 키>.<id>` — 옛 이름(`<공급자>.<계정 키>`)은 `default`.
             let id = name.splitn(3, '.').nth(2).unwrap_or("default").to_string();
-            return Ok((Some(name), Some(id)));
+            return Ok((Some(name), None, Some(id)));
         }
         if provider_id == CliKind::Claude.id() {
-            // ponytail: 계정별 설정 폴더를 CLI에 넘기는 건 Task 2 — 지금은 고른 계정이 있는지만 본다.
-            r.claude_config_dir(credential).map_err(fail)?;
-            return Ok((None, Some(credential.unwrap_or("system").to_string())));
+            let dir = r.claude_config_dir(credential).map_err(fail)?;
+            // 계정 폴더 이름 = 계정 id(`.../claude/<id>`), 없으면 이 Mac의 로그인.
+            let id = dir
+                .as_deref()
+                .and_then(|d| d.file_name()?.to_str())
+                .unwrap_or("system")
+                .to_string();
+            return Ok((None, dir, Some(id)));
         }
-        Ok((None, credential.map(str::to_string)))
+        Ok((None, None, credential.map(str::to_string)))
     }
 
     pub fn has_provider(&self, id: &str) -> bool {
@@ -345,7 +353,8 @@ impl AiRunner {
         let file = opt_str(cfg, "file")
             .map(|f| self.allowed_file(f))
             .transpose()?;
-        let (key_name, credential) = self.resolve(provider_id, opt_str(cfg, "credential"))?;
+        let (key_name, config_dir, credential) =
+            self.resolve(provider_id, opt_str(cfg, "credential"))?;
         let node_id = &ctx.node.id;
         let events = ctx.events;
         let chunk = |text: &str| {
@@ -370,6 +379,7 @@ impl AiRunner {
                 model: model.map(str::to_string),
                 schema: fields.as_deref().map(build_output_schema),
                 key_name,
+                config_dir,
             };
             let mut mismatch = String::new();
             for _ in 0..ATTEMPTS {

@@ -462,6 +462,7 @@ fn req(model: Option<&str>) -> AiRequest {
         model: model.map(String::from),
         schema: None,
         key_name: None,
+        config_dir: None,
     }
 }
 
@@ -763,6 +764,7 @@ async fn claude_cli_result_usage_parsed() {
                 model: Some("sonnet".into()),
                 schema: None,
                 key_name: None,
+                config_dir: None,
             },
             &|_: &str| {},
         )
@@ -794,6 +796,7 @@ async fn stdout_cap_kills_flooding_cli() {
                 model: None,
                 schema: None,
                 key_name: None,
+                config_dir: None,
             },
             &|_: &str| {},
         )
@@ -868,6 +871,7 @@ async fn timeout_kills_cli_process() {
                 model: None,
                 schema: None,
                 key_name: None,
+                config_dir: None,
             },
             &|_: &str| {},
         )
@@ -877,6 +881,43 @@ async fn timeout_kills_cli_process() {
     assert!(started.elapsed() < Duration::from_secs(30));
     let cwd = t.path().join("cwd");
     assert_gone(&[read_pid(&cwd, "cli.pid"), read_pid(&cwd, "child.pid")]).await;
+}
+
+/// `system`이면 CLI 기본 설정(None), 그 밖의 id는 `/accts/<id>`.
+struct DirResolver;
+
+impl ieum_local::ai::CredentialResolver for DirResolver {
+    fn api_key_name(&self, _: &str, _: Option<&str>) -> Result<String, String> {
+        Err("unused".into())
+    }
+    fn claude_config_dir(&self, credential: Option<&str>) -> Result<Option<PathBuf>, String> {
+        Ok(match credential {
+            None | Some("system") => None,
+            Some(id) => Some(PathBuf::from(format!("/tmp/ieum test accts/{id}"))),
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn claude_node_runs_with_account_config_dir() {
+    let (_t, provider) = fake_cli("fake_cli_env.sh", Duration::from_secs(30));
+    let runner = AiRunner::empty()
+        .with_provider("cli:claude", Arc::new(provider))
+        .with_resolver(Arc::new(DirResolver));
+    let out = run(
+        &runner,
+        json!({"provider": "cli:claude", "prompt": "p", "credential": "a1b2c3d4"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out["output"], "/tmp/ieum test accts/a1b2c3d4");
+    for cfg in [
+        json!({"provider": "cli:claude", "prompt": "p", "credential": "system"}),
+        json!({"provider": "cli:claude", "prompt": "p"}),
+    ] {
+        let out = run(&runner, cfg).await.unwrap();
+        assert_eq!(out["output"], "unset");
+    }
 }
 
 /// 이 PC의 claude 구독으로 한 번 실제 호출한다: `cargo test -p ieum-local --test ai_cli -- --ignored`

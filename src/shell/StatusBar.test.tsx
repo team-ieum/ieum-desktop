@@ -37,9 +37,16 @@ const OK: PlanUsage = {
   accountEmail: null,
 };
 
+/** 구독 종류마다 다른 답. */
+const subs = (claude: () => Promise<PlanUsage>, codex: () => Promise<PlanUsage>) =>
+  vi.spyOn(api, "subscriptionUsage").mockImplementation((k) => (k === "claude" ? claude() : codex()));
+
 test("status_bar_opens_usage_popover_not_settings", async () => {
-  vi.spyOn(api, "claudePlanUsage").mockResolvedValue(OK);
-  vi.spyOn(api, "codexPlanUsage").mockResolvedValue({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null });
+  const sub = subs(
+    async () => OK,
+    async () => ({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null }),
+  );
+  const codexCalls = () => sub.mock.calls.filter((c) => c[0] === "codex").length;
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
   vi.spyOn(api, "usageSummary").mockResolvedValue({ ...SUMMARY, bySource: [{ source: "openai", input: 10, output: 5, usd: 1.5 }] });
   const onSettings = vi.fn();
@@ -54,9 +61,9 @@ test("status_bar_opens_usage_popover_not_settings", async () => {
   expect(pop.getByText("이번 달 예상 $1.50")).toBeTruthy();
   expect(document.activeElement).toBe(pop.getByRole("button", { name: "새로 고침" }));
 
-  const calls = (api.codexPlanUsage as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+  const calls = codexCalls();
   await act(async () => fireEvent.click(pop.getByRole("button", { name: "새로 고침" })));
-  expect((api.codexPlanUsage as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(calls + 1);
+  expect(codexCalls()).toBe(calls + 1);
 
   // Esc·바깥 클릭으로 닫힌다.
   await act(async () => fireEvent.keyDown(document, { key: "Escape" }));
@@ -68,8 +75,10 @@ test("status_bar_opens_usage_popover_not_settings", async () => {
 });
 
 test("popover_links_open_usage_and_ai_settings", async () => {
-  vi.spyOn(api, "claudePlanUsage").mockResolvedValue(OK);
-  vi.spyOn(api, "codexPlanUsage").mockRejectedValue("no command");
+  subs(
+    async () => OK,
+    () => Promise.reject("no command"),
+  );
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
   vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
   const onUsage = vi.fn();
@@ -97,7 +106,7 @@ test("status_bar_shows_plan_and_today_cost", async () => {
     checkedAt: new Date().toISOString(),
     accountEmail: null,
   };
-  vi.spyOn(api, "claudePlanUsage").mockResolvedValue(plan);
+  vi.spyOn(api, "subscriptionUsage").mockResolvedValue(plan);
   const summary = vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
   await mount();
   expect(summary).toHaveBeenCalledWith("today");
@@ -106,7 +115,7 @@ test("status_bar_shows_plan_and_today_cost", async () => {
 });
 
 test("status_bar_hides_claude_when_not_logged_in", async () => {
-  vi.spyOn(api, "claudePlanUsage").mockResolvedValue({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null });
+  vi.spyOn(api, "subscriptionUsage").mockResolvedValue({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null });
   vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
   await mount();
   expect(screen.queryByText(/Claude/)).toBeNull();
@@ -114,7 +123,7 @@ test("status_bar_hides_claude_when_not_logged_in", async () => {
 });
 
 test("status_bar_unavailable_when_commands_fail", async () => {
-  vi.spyOn(api, "claudePlanUsage").mockRejectedValue("no command");
+  vi.spyOn(api, "subscriptionUsage").mockRejectedValue("no command");
   vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
   await mount();
   expect(screen.getByText("Claude 확인 불가")).toBeTruthy();
