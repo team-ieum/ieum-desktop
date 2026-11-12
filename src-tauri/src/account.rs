@@ -44,10 +44,15 @@ pub fn claim_legacy(app_data: &Path, key: &str) -> Result<bool, String> {
         matches!(r, Err(e) if e.kind() == ErrorKind::NotFound)
     };
     // 표시는 hard_link로 배타적으로 만든다 — 동시 호출이어도 주인은 하나.
+    let mut tries = 0;
     let owner = loop {
         match fs::read_to_string(&marker) {
             Ok(owner) => break owner,
             Err(e) if e.kind() == ErrorKind::NotFound => {
+                tries += 1;
+                if tries > 3 {
+                    return Err(format!("{}: 주인 표시를 만들지 못했어요.", marker.display()));
+                }
                 fs::create_dir_all(&accounts).map_err(|e| err(&accounts, e))?;
                 let tmp = accounts.join(format!(".{}.tmp", crate::store::new_id()));
                 let linked = fs::File::create(&tmp)
@@ -56,7 +61,19 @@ pub fn claim_legacy(app_data: &Path, key: &str) -> Result<bool, String> {
                 let _ = fs::remove_file(&tmp);
                 match linked {
                     Ok(()) => break key.to_string(),
-                    Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+                    // 깨진 링크 등 일반 파일이 아닌 표시는 다시 읽어도 NotFound라 끝낸다.
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => {
+                        match fs::symlink_metadata(&marker) {
+                            Ok(m) if m.is_file() => continue,
+                            Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                            _ => {
+                                return Err(format!(
+                                    "{}: 주인 표시가 일반 파일이 아니에요.",
+                                    marker.display()
+                                ));
+                            }
+                        }
+                    }
                     Err(e) => return Err(err(&marker, e)),
                 }
             }
@@ -80,7 +97,12 @@ pub fn claim_legacy(app_data: &Path, key: &str) -> Result<bool, String> {
             Err(e) if e.kind() == ErrorKind::NotFound => continue,
             Err(e) => return Err(err(&old, e)),
         }
-        let entries = fs::read_dir(&old).map_err(|e| err(&old, e))?;
+        // 같은 키의 동시 호출이 먼저 옮기거나 지운 것(NotFound)은 이미 옮겨진 것으로 본다.
+        let entries = match fs::read_dir(&old) {
+            Ok(e) => e,
+            Err(e) if e.kind() == ErrorKind::NotFound => continue,
+            Err(e) => return Err(err(&old, e)),
+        };
         let new = root.join(name);
         fs::create_dir_all(&new).map_err(|e| err(&new, e))?;
         let mut left = false;
@@ -89,13 +111,22 @@ pub fn claim_legacy(app_data: &Path, key: &str) -> Result<bool, String> {
             let dest = new.join(entry.file_name());
             // 목적지에 이미 있으면 덮어쓰지 않고 옛 자리에 남긴다.
             if !not_found(&fs::symlink_metadata(&dest)) {
-                left = true;
+                left |= !not_found(&fs::symlink_metadata(entry.path()));
                 continue;
             }
-            fs::rename(entry.path(), &dest).map_err(|e| err(&entry.path(), e))?;
+            // macOS는 같은 원본을 동시에 rename하면 NotFound 대신 EINVAL을 내기도 해서, 원본이 사라졌는지로 판단한다.
+            if let Err(e) = fs::rename(entry.path(), &dest)
+                && !not_found(&fs::symlink_metadata(entry.path()))
+            {
+                return Err(err(&entry.path(), e));
+            }
         }
         if !left {
-            fs::remove_dir(&old).map_err(|e| err(&old, e))?;
+            match fs::remove_dir(&old) {
+                Ok(()) => {}
+                Err(e) if e.kind() == ErrorKind::NotFound => {}
+                Err(e) => return Err(err(&old, e)),
+            }
         }
     }
     Ok(true)

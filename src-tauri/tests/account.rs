@@ -145,6 +145,50 @@ fn concurrent_claims_have_one_owner() {
     }
 }
 
+#[test]
+fn concurrent_same_key_claims_both_succeed() {
+    use std::sync::{Arc, Barrier};
+    for _ in 0..50 {
+        let t = tempfile::tempdir().unwrap();
+        let dir = Arc::new(t.path().to_path_buf());
+        fs::create_dir_all(dir.join("workflows")).unwrap();
+        for i in 0..50 {
+            fs::write(dir.join("workflows").join(format!("{i}.json")), "{}").unwrap();
+        }
+        let barrier = Arc::new(Barrier::new(2));
+        let handles: Vec<_> = (0..2)
+            .map(|_| {
+                let (dir, barrier) = (dir.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    claim_legacy(&dir, A)
+                })
+            })
+            .collect();
+        for h in handles {
+            assert_eq!(h.join().unwrap(), Ok(true));
+        }
+        let moved = fs::read_dir(account_root(&dir, A).join("workflows")).unwrap().count();
+        assert_eq!(moved, 50);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_marker_link_is_error_not_loop() {
+    let t = tempfile::tempdir().unwrap();
+    let dir = t.path().to_path_buf();
+    fs::create_dir_all(dir.join("accounts")).unwrap();
+    std::os::unix::fs::symlink("/nonexistent", dir.join("accounts").join(".legacy-owner"))
+        .unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(claim_legacy(&dir, A)).unwrap());
+    let r = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("2초 안에 끝나야 한다");
+    assert!(r.is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn symlinked_old_folder_is_left_alone() {
