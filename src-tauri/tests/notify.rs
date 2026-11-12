@@ -1,6 +1,11 @@
 //! 시스템 알림 규칙·문구·모아 보내기.
 
-use ieum_desktop_lib::notify::{Batcher, Lang, Notice, Prefs, Route, Target, route};
+use std::time::Duration;
+
+use ieum_desktop_lib::notify::{
+    BATCH_WINDOW, Batch, Batcher, Lang, Notice, Prefs, Route, Target, lang_from_apple_languages,
+    route, summarize,
+};
 use ieum_desktop_lib::store::RunTrigger;
 use ieum_desktop_lib::supervisor::{NoticeKind, RunNotice};
 
@@ -106,11 +111,11 @@ fn batcher_merges_within_window() {
         .collect();
     assert!(first[0]);
     assert!(first[1..].iter().all(|f| !f));
-    let n = b.take("wf", Lang::Ko).unwrap();
+    let n = flush(&mut b, "wf", Lang::Ko).unwrap();
     assert_eq!(n.title, "영수증 정리");
     assert_eq!(n.body, "19건 완료, 1건 실패");
     assert_eq!(n.target, Target::History);
-    assert_eq!(b.take("wf", Lang::Ko), None);
+    assert_eq!(b.take("wf"), None);
     // 다 가져간 뒤의 push는 다시 첫 push.
     assert!(b.push("wf", "영수증 정리", true));
 }
@@ -123,8 +128,8 @@ fn batcher_keeps_workflows_apart() {
     assert!(!b.push("a", "A", true));
     assert!(!b.push("b", "B", false));
     assert!(!b.push("a", "A", true));
-    assert_eq!(b.take("a", Lang::Ko).unwrap().body, "3건 완료");
-    let nb = b.take("b", Lang::Ko).unwrap();
+    assert_eq!(flush(&mut b, "a", Lang::Ko).unwrap().body, "3건 완료");
+    let nb = flush(&mut b, "b", Lang::Ko).unwrap();
     assert_eq!(
         (nb.title.as_str(), nb.body.as_str()),
         ("B", "1건 완료, 1건 실패")
@@ -150,8 +155,61 @@ fn english_copy() {
     for _ in 0..5 {
         b.push("wf", "W", true);
     }
-    assert_eq!(b.take("wf", Lang::En).unwrap().body, "5 done");
+    assert_eq!(flush(&mut b, "wf", Lang::En).unwrap().body, "5 done");
     b.push("wf", "W", true);
     b.push("wf", "W", false);
-    assert_eq!(b.take("wf", Lang::En).unwrap().body, "1 done, 1 failed");
+    assert_eq!(
+        flush(&mut b, "wf", Lang::En).unwrap().body,
+        "1 done, 1 failed"
+    );
+}
+
+/// 앱이 뒤에 있고 감시 끝 알림이 켜진 타이머 끝.
+fn flush(b: &mut Batcher, id: &str, lang: Lang) -> Option<Notice> {
+    summarize(b.take(id), false, true, lang)
+}
+
+fn batch(done: u32, failed: u32) -> Option<Batch> {
+    Some(Batch {
+        name: "W".into(),
+        done,
+        failed,
+    })
+}
+
+#[test]
+fn all_failed_omits_zero_done() {
+    let body = |lang| summarize(batch(0, 3), false, true, lang).unwrap().body;
+    assert_eq!(body(Lang::Ko), "3건 실패");
+    assert_eq!(body(Lang::En), "3 failed");
+}
+
+#[test]
+fn batch_dropped_when_focused_or_watch_end_off_at_timer_end() {
+    assert!(summarize(batch(2, 0), false, true, Lang::Ko).is_some());
+    assert_eq!(summarize(batch(2, 0), true, true, Lang::Ko), None);
+    assert_eq!(summarize(batch(2, 0), false, false, Lang::Ko), None);
+    assert_eq!(summarize(None, false, true, Lang::Ko), None);
+}
+
+#[test]
+fn batch_window_is_ten_seconds() {
+    assert_eq!(BATCH_WINDOW, Duration::from_secs(10));
+}
+
+#[test]
+fn system_lang_from_apple_languages() {
+    assert_eq!(
+        lang_from_apple_languages("(\n    \"ko-KR\",\n    \"en-KR\"\n)\n"),
+        Lang::Ko
+    );
+    assert_eq!(
+        lang_from_apple_languages("(\n    \"en-US\",\n    \"ko-KR\"\n)\n"),
+        Lang::En
+    );
+    assert_eq!(lang_from_apple_languages("(\n    ko\n)"), Lang::Ko);
+    assert_eq!(lang_from_apple_languages("(\n    \"ja-JP\"\n)"), Lang::En);
+    // 읽을 항목이 없으면 Ko.
+    assert_eq!(lang_from_apple_languages(""), Lang::Ko);
+    assert_eq!(lang_from_apple_languages("(\n)"), Lang::Ko);
 }

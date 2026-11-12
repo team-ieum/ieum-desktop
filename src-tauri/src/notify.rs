@@ -26,10 +26,37 @@ impl From<Language> for Lang {
     fn from(l: Language) -> Self {
         match l {
             Language::En => Lang::En,
-            // ponytail: 시스템 언어는 읽지 않고 ko — 새 의존성 없이 macOS 언어를 읽을 방법이 생기면 바꾼다.
-            Language::System | Language::Ko => Lang::Ko,
+            Language::Ko => Lang::Ko,
+            Language::System => system_lang(),
         }
     }
+}
+
+/// `defaults read -g AppleLanguages` 출력의 첫 언어가 ko면 Ko, 아니면 En. 읽을 항목이 없으면 Ko.
+pub fn lang_from_apple_languages(out: &str) -> Lang {
+    let first = out
+        .split(|c: char| c == ',' || c == '(' || c == ')' || c.is_whitespace())
+        .map(|s| s.trim_matches('"'))
+        .find(|s| !s.is_empty());
+    match first {
+        Some(l) if !l.to_ascii_lowercase().starts_with("ko") => Lang::En,
+        _ => Lang::Ko,
+    }
+}
+
+/// macOS 언어(처음 한 번 읽어 둔다). LANG 환경변수는 GUI 앱에서 믿을 수 없어 보지 않는다. 실패하면 Ko.
+fn system_lang() -> Lang {
+    static LANG: std::sync::OnceLock<Lang> = std::sync::OnceLock::new();
+    *LANG.get_or_init(|| {
+        std::process::Command::new("/usr/bin/defaults")
+            .args(["read", "-g", "AppleLanguages"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map_or(Lang::Ko, |o| {
+                lang_from_apple_languages(&String::from_utf8_lossy(&o.stdout))
+            })
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -139,20 +166,44 @@ impl Batcher {
         first
     }
 
-    pub fn take(&mut self, workflow_id: &str, lang: Lang) -> Option<Notice> {
-        let (title, done, failed) = self.0.remove(workflow_id)?;
-        let body = match (lang, failed) {
-            (Lang::Ko, 0) => format!("{done}건 완료"),
-            (Lang::Ko, _) => format!("{done}건 완료, {failed}건 실패"),
-            (Lang::En, 0) => format!("{done} done"),
-            (Lang::En, _) => format!("{done} done, {failed} failed"),
-        };
-        Some(Notice {
-            title,
-            body,
-            target: Target::History,
-        })
+    /// 모은 것을 꺼낸다(다음 push는 다시 첫 push).
+    pub fn take(&mut self, workflow_id: &str) -> Option<Batch> {
+        let (name, done, failed) = self.0.remove(workflow_id)?;
+        Some(Batch { name, done, failed })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Batch {
+    pub name: String,
+    pub done: u32,
+    pub failed: u32,
+}
+
+/// 모아 보내기 타이머 끝: 그사이 앱을 앞으로 가져왔거나 감시 끝 알림을 껐으면 버린다.
+pub fn summarize(
+    batch: Option<Batch>,
+    focused: bool,
+    watch_end: bool,
+    lang: Lang,
+) -> Option<Notice> {
+    let Batch { name, done, failed } = batch?;
+    if focused || !watch_end {
+        return None;
+    }
+    let body = match (lang, done, failed) {
+        (Lang::Ko, _, 0) => format!("{done}건 완료"),
+        (Lang::Ko, 0, _) => format!("{failed}건 실패"),
+        (Lang::Ko, _, _) => format!("{done}건 완료, {failed}건 실패"),
+        (Lang::En, _, 0) => format!("{done} done"),
+        (Lang::En, 0, _) => format!("{failed} failed"),
+        (Lang::En, _, _) => format!("{done} done, {failed} failed"),
+    };
+    Some(Notice {
+        title: name,
+        body,
+        target: Target::History,
+    })
 }
 
 /// 앱 상태로 둔다.
@@ -173,7 +224,13 @@ fn focused(app: &AppHandle) -> bool {
 /// supervisor의 `RunNotice`를 규칙대로 보내거나 모은다.
 pub fn on_run_notice(app: &AppHandle, n: &RunNotice) {
     let s = settings(app);
-    match route(n, &Prefs::from(&s), focused(app), s.language.into()) {
+    // 앞 여부(메인 루프를 기다림)는 감시 끝에만 쓴다 — 수동 알림은 기다리지 않게.
+    let watch_end = matches!(
+        (n.trigger, &n.kind),
+        (RunTrigger::Watch, NoticeKind::Finished { .. })
+    );
+    let front = watch_end && focused(app);
+    match route(n, &Prefs::from(&s), front, s.language.into()) {
         Route::Now(notice) => deliver(app, &notice),
         Route::Batch => {
             let Some(pending) = app.try_state::<Pending>() else {
@@ -189,16 +246,15 @@ pub fn on_run_notice(app: &AppHandle, n: &RunNotice) {
                 let (app, id) = (app.clone(), n.workflow_id.clone());
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(BATCH_WINDOW).await;
-                    let lang = settings(&app).language.into();
-                    let notice = app
+                    let batch = app
                         .state::<Pending>()
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .take(&id, lang);
-                    // 그사이 앱을 앞으로 가져왔으면 버린다.
-                    if let Some(notice) = notice
-                        && !focused(&app)
-                    {
+                        .take(&id);
+                    let s = settings(&app);
+                    let notice =
+                        summarize(batch, focused(&app), s.notify_watch_end, s.language.into());
+                    if let Some(notice) = notice {
                         deliver(&app, &notice);
                     }
                 });
