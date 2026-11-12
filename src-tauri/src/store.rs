@@ -76,7 +76,14 @@ pub enum Language {
 pub struct Settings {
     pub language: Language,
     pub autostart: bool,
+    /// 옛 설정 호환용으로만 남긴다(안 씀).
     pub first_run_done: bool,
+    /// 온보딩을 끝냈는가(기기 단위). 옛 설정엔 없어 false.
+    pub onboarding_done: bool,
+    /// 내 PC 실행 시스템 알림 토글. 옛 설정엔 없어 `Default`의 true.
+    pub notify_manual_start: bool,
+    pub notify_manual_end: bool,
+    pub notify_watch_end: bool,
     /// 이음 BE 주소. 바꾸면 세션을 지운다(`web::save_settings`).
     pub server_url: String,
     /// 로그인된(마지막 활성) 계정. 없으면 로그인 관문.
@@ -93,6 +100,10 @@ impl Default for Settings {
             language: Language::default(),
             autostart: false,
             first_run_done: false,
+            onboarding_done: false,
+            notify_manual_start: true,
+            notify_manual_end: true,
+            notify_watch_end: true,
             server_url: DEFAULT_SERVER_URL.into(),
             current_account: None,
             notifications_seen_at: String::new(),

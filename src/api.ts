@@ -129,7 +129,15 @@ export interface Settings {
   /** 로그인된(마지막 활성) 계정. 화면이 보내도 Rust가 저장값을 지킨다. */
   currentAccount?: AccountId | null;
   notificationsSeenAt?: string;
+  /** 온보딩을 끝냈는가(기기 단위). */
+  onboardingDone: boolean;
+  notifyManualStart: boolean;
+  notifyManualEnd: boolean;
+  notifyWatchEnd: boolean;
 }
+export type FolderKind = "downloads" | "desktop" | "documents";
+export type FolderAccess = "granted" | "denied" | "missing";
+export type SystemSettingsPane = "files" | "notifications" | "login_items";
 /** 계정 = 서버 + 이메일. */
 export interface AccountId {
   email: string;
@@ -310,6 +318,8 @@ export const api = {
   openWebEditor: () => invoke<void>("open_web_editor"),
   /** 설치·사용 안내 문서를 기본 브라우저로(Rust 명령은 Task 5). */
   openHelp: () => invoke<void>("open_help"),
+  folderAccess: (kind: FolderKind) => invoke<FolderAccess>("folder_access", { kind }),
+  openSystemSettings: (pane: SystemSettingsPane) => invoke<void>("open_system_settings", { pane }),
   onWebExecEvent: (cb: (p: WebExecPayload) => void): Promise<UnlistenFn> =>
     listen<WebExecPayload>("web-exec-event", (e) => cb(e.payload)),
   /** 폴더·파일 고르기(tauri-plugin-dialog, 권한 `dialog:allow-open`). 취소하면 null. */

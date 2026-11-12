@@ -8,7 +8,7 @@ import { AuthScreen } from "./AuthScreen";
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.2.0") }));
 
-const S = { language: "ko" as const, autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr" };
+const S = { language: "ko" as const, autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true };
 
 beforeAll(() => {
   setLang("ko");

@@ -8,7 +8,7 @@ import { useSettings } from "../stores/settings";
 import { NotificationsMenu, POLL_MS } from "./NotificationsMenu";
 
 const SEEN = "2026-11-12T10:00:00Z";
-const SETTINGS: Settings = { language: "ko", autostart: false, firstRunDone: true, serverUrl: "", notificationsSeenAt: SEEN };
+const SETTINGS: Settings = { language: "ko", autostart: false, firstRunDone: true, serverUrl: "", notificationsSeenAt: SEEN, onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true };
 const failed = (runId: string, at: string): RunSummary => ({
   runId,
   workflowId: "w1",

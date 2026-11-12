@@ -1,6 +1,7 @@
 pub mod account;
 pub mod active;
 pub mod commands;
+pub mod permissions;
 pub mod plan_usage;
 pub mod pricing;
 pub mod store;
@@ -17,7 +18,7 @@ use ieum_local::ai::{AiRunner, KeyStore, Keychain};
 use serde_json::json;
 use tauri::webview::NewWindowResponse;
 use tauri::{App, Emitter, Manager, Url, WebviewWindowBuilder, WindowEvent};
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_autostart::MacosLauncher;
 
 use crate::active::{Active, BaseDeps};
 use crate::commands::Keys;
@@ -26,27 +27,6 @@ use crate::supervisor::{AppEvent, Emit};
 
 /// 로그인 자동 시작 때 붙는 인자 — 창 없이 메뉴 막대로만 뜬다.
 const HIDDEN_ARG: &str = "--hidden";
-
-/// 첫 실행이면 자동 시작을 켜고 `first_run_done`을 남긴다.
-fn first_run(app: &App, store: &Store) {
-    let mut s = match store.get_settings() {
-        Ok(s) if !s.first_run_done => s,
-        Ok(_) => return,
-        Err(e) => return eprintln!("[ieum] 설정을 읽지 못했어요: {e}"),
-    };
-    // 개발 빌드 바이너리를 로그인 항목에 넣지 않는다.
-    if cfg!(debug_assertions) {
-        return eprintln!("[ieum] 개발 빌드라 첫 실행 자동 시작 등록을 건너뜀");
-    }
-    match app.autolaunch().enable() {
-        Ok(()) => s.autostart = true,
-        Err(e) => eprintln!("[ieum] 자동 시작을 켜지 못했어요: {e}"),
-    }
-    s.first_run_done = true;
-    if let Err(e) = store.set_settings(&s) {
-        eprintln!("[ieum] 설정을 저장하지 못했어요: {e}");
-    }
-}
 
 /// 새 버전이 있으면 받아 설치해 둔다(다음 실행부터 적용). 실패는 로그만 — 팝업 없음.
 /// 공개키가 자리표시자면 서명 확인에서 실패해 설치되지 않는다.
@@ -184,7 +164,6 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         crate::plan_usage::keychain_token,
     ))?);
     tray::create(app)?;
-    first_run(app, &store);
     check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
         tray::show_main(app.handle());
@@ -252,6 +231,8 @@ pub fn run() {
             commands::open_help,
             commands::open_web_workflow,
             commands::claude_plan_usage,
+            commands::folder_access,
+            commands::open_system_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

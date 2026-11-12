@@ -42,6 +42,8 @@
     "allow-open-help",
     "allow-open-web-workflow",
     "allow-claude-plan-usage",
+    "allow-folder-access",
+    "allow-open-system-settings",
     "dialog:allow-open"
   ]
 }

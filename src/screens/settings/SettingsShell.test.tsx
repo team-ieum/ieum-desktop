@@ -14,7 +14,7 @@ const ACCOUNT = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" 
 
 beforeAll(() => {
   setLang("ko");
-  vi.spyOn(api, "getSettings").mockResolvedValue({ language: "ko", autostart: false, firstRunDone: true, serverUrl: "" });
+  vi.spyOn(api, "getSettings").mockResolvedValue({ language: "ko", autostart: false, firstRunDone: true, serverUrl: "", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true });
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [{ id: "claude", path: "/usr/local/bin/claude", version: "2.1.0" }], apiKeys: [] });
   vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "stored" });
   vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
@@ -24,7 +24,7 @@ beforeAll(() => {
   vi.spyOn(api, "webListWorkflows").mockResolvedValue([]);
 });
 beforeEach(() => {
-  useSettings.setState({ settings: { language: "ko", autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr" } });
+  useSettings.setState({ settings: { language: "ko", autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true } });
   useWeb.setState({ account: ACCOUNT, expired: false, offline: false });
 });
 afterEach(cleanup);

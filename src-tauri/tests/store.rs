@@ -68,6 +68,31 @@ fn store_roundtrip_and_atomic_write() {
 }
 
 #[test]
+fn old_settings_get_onboarding_and_notify_defaults() {
+    let t = tempfile::tempdir().unwrap();
+    fs::write(
+        t.path().join("settings.json"),
+        r#"{"language":"system","autostart":true,"firstRunDone":true,"serverUrl":"https://green.kiacms.co.kr"}"#,
+    )
+    .unwrap();
+    let s = Store::new(t.path().to_path_buf()).get_settings().unwrap();
+    assert!(!s.onboarding_done);
+    assert!(s.notify_manual_start && s.notify_manual_end && s.notify_watch_end);
+    assert!(s.autostart);
+    let d = Settings::default();
+    assert!(d.notify_manual_start && d.notify_manual_end && d.notify_watch_end);
+    let v = serde_json::to_value(&d).unwrap();
+    for k in [
+        "onboardingDone",
+        "notifyManualStart",
+        "notifyManualEnd",
+        "notifyWatchEnd",
+    ] {
+        assert!(v.get(k).is_some(), "{k}");
+    }
+}
+
+#[test]
 fn old_run_without_trigger_reads_none() {
     let t = tempfile::tempdir().unwrap();
     let store = Store::new(t.path().to_path_buf());

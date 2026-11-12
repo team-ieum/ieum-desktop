@@ -35,6 +35,8 @@ const COMMANDS: &[&str] = &[
     "open_help",
     "open_web_workflow",
     "claude_plan_usage",
+    "folder_access",
+    "open_system_settings",
 ];
 
 fn main() {
