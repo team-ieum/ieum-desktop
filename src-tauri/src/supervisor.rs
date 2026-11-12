@@ -50,6 +50,8 @@ pub type Emit = Arc<dyn Fn(AppEvent) + Send + Sync>;
 
 pub struct Deps {
     pub store: Store,
+    /// 앱 데이터 폴더 전체 — 사용자 폴더 정책의 금지 폴더(계정 폴더만이 아니라).
+    pub app_data: PathBuf,
     /// 사용자 폴더 정책의 홈(운영 = 실제 홈).
     pub home: PathBuf,
     pub trash_dir: PathBuf,
@@ -110,6 +112,8 @@ struct Inner {
     watches: Mutex<HashMap<String, Watch>>,
     lanes: Mutex<HashMap<String, Lane>>,
     undo_lock: Mutex<()>,
+    /// `stop()` 뒤 취소됨 — 새 감시·실행을 받지 않고 재확인 루프가 끝난다.
+    stopped: CancellationToken,
 }
 
 #[derive(Clone)]
@@ -158,12 +162,16 @@ impl Supervisor {
             watches: Mutex::default(),
             lanes: Mutex::default(),
             undo_lock: Mutex::default(),
+            stopped: CancellationToken::new(),
         }));
         sup.sync();
-        let weak = Arc::downgrade(&sup.0);
+        let (weak, stopped) = (Arc::downgrade(&sup.0), sup.0.stopped.clone());
         sup.0.rt.spawn(async move {
             loop {
-                tokio::time::sleep(every).await;
+                tokio::select! {
+                    () = stopped.cancelled() => break,
+                    () = tokio::time::sleep(every) => {}
+                }
                 match weak.upgrade() {
                     Some(inner) => Supervisor(inner).recheck(),
                     None => break,
@@ -171,6 +179,19 @@ impl Supervisor {
             }
         });
         Ok(sup)
+    }
+
+    /// 감시를 모두 풀고 대기 실행을 버린다. 진행 중인 실행은 끝까지 돌아 기록을 남긴다.
+    /// 사본(`Clone`)이 남아 drop되지 않을 수 있어 명시적으로 부른다. 되돌릴 수 없다.
+    pub fn stop(&self) {
+        self.0.stopped.cancel();
+        lock(&self.0.watches).clear();
+        let ids: Vec<String> = lock(&self.0.lanes).keys().cloned().collect();
+        self.drop_queued(&ids);
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.0.stopped.is_cancelled()
     }
 
     pub fn store(&self) -> &Store {
@@ -211,7 +232,7 @@ impl Supervisor {
 
     /// 사용자 폴더 정책(`validate_user_folder`) — 홈·앱 데이터 폴더는 주입값.
     fn check_folder(&self, folder: &Path) -> Result<(), String> {
-        validate_user_folder(folder, &self.0.deps.home, self.store().root())
+        validate_user_folder(folder, &self.0.deps.home, &self.0.deps.app_data)
     }
 
     fn check_folders(&self, wf: &Workflow) -> Result<(), String> {
@@ -250,6 +271,10 @@ impl Supervisor {
     /// 오류 상태면 바로 다시 건다. 꺼지거나·지워지거나·폴더가 바뀐 워크플로우의 대기 실행은 버린다.
     pub fn sync(&self) {
         let mut watches = lock(&self.0.watches);
+        // stop()은 취소 뒤 이 잠금을 잡고 비우므로, 잠금 안에서 보면 멈춘 뒤 감시를 새로 걸지 않는다.
+        if self.is_stopped() {
+            return;
+        }
         // 목록을 잠금 안에서 읽어 동시 저장이 낡은 목록으로 감시를 지우지 않게.
         let list = match self.store().list_workflows() {
             Ok(l) => l,
@@ -386,6 +411,12 @@ impl Supervisor {
 
     fn push(&self, workflow_id: &str, job: Job) {
         let mut lanes = lock(&self.0.lanes);
+        if self.is_stopped() {
+            if let Some(reply) = job.reply {
+                let _ = reply.send(Err("계정이 바뀌거나 로그아웃되어 취소됐어요.".into()));
+            }
+            return;
+        }
         let lane = lanes.entry(workflow_id.to_string()).or_default();
         lane.jobs.push_back(job);
         while lane.jobs.len() > QUEUE_CAP {

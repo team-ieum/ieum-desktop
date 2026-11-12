@@ -1,4 +1,5 @@
 pub mod account;
+pub mod active;
 pub mod commands;
 pub mod store;
 pub mod supervisor;
@@ -9,15 +10,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ieum_local::WatchTiming;
-use ieum_local::ai::{AiRunner, Keychain};
+use ieum_local::ai::{AiRunner, KeyStore, Keychain};
 use serde_json::json;
 use tauri::webview::NewWindowResponse;
 use tauri::{App, Emitter, Manager, Url, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
+use crate::active::{Active, BaseDeps};
 use crate::commands::Keys;
 use crate::store::Store;
-use crate::supervisor::{AppEvent, Deps, Emit, Supervisor};
+use crate::supervisor::{AppEvent, Emit};
 
 /// 로그인 자동 시작 때 붙는 인자 — 창 없이 메뉴 막대로만 뜬다.
 const HIDDEN_ARG: &str = "--hidden";
@@ -110,7 +112,8 @@ fn create_main_window(app: &App) -> tauri::Result<()> {
 
 fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     create_main_window(app)?;
-    let store = Store::new(app.path().app_data_dir()?);
+    let app_data = app.path().app_data_dir()?;
+    let store = Store::new(app_data.clone());
     let handle = app.handle().clone();
     let emit: Emit = Arc::new(move |e| {
         let sent = match e {
@@ -139,18 +142,33 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let home = app.path().home_dir()?;
-    let deps = Deps {
-        store: store.clone(),
+    let keys: Arc<dyn KeyStore> = Arc::new(Keychain);
+    let active = Active::new(BaseDeps {
+        app_data,
+        settings: store.clone(),
         trash_dir: home.join(".Trash"),
         home,
-        ai: Arc::new(AiRunner::new()),
+        keys: keys.clone(),
         emit,
         timing: WatchTiming::default(),
         recheck: Duration::from_secs(30),
-    };
-    let sup = tauri::async_runtime::block_on(async { Supervisor::start(deps) })?;
-    app.manage(sup);
-    app.manage(Keys(Arc::new(Keychain)));
+        // ponytail: 키 저장소는 아직 안 씀 — Task 3에서 계정 범위 키로 `AiRunner::with_keys`.
+        ai_factory: Arc::new(|_keys| Arc::new(AiRunner::new())),
+    });
+    // 네트워크와 무관하게 마지막 계정을 바로 활성화(오프라인 첫 화면). 실패해도 앱은 뜬다(관문).
+    // block_on 안에서 키체인을 만지지 않는다 — activate는 파일만 다룬다.
+    match store.get_settings() {
+        Ok(s) => {
+            if let Some(id) = s.current_account
+                && let Err(e) = tauri::async_runtime::block_on(active.activate(id))
+            {
+                eprintln!("[ieum] 저장된 계정을 활성화하지 못했어요: {e}");
+            }
+        }
+        Err(e) => eprintln!("[ieum] 설정을 읽지 못했어요: {e}"),
+    }
+    app.manage(active);
+    app.manage(Keys(keys));
     app.manage(crate::web::Watches::default());
     tray::create(app)?;
     first_run(app, &store);

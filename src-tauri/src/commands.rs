@@ -11,8 +11,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::active::Active;
 use crate::store::{RunSummary, Settings, StoredRun, StoredWorkflow};
-use crate::supervisor::{Supervisor, WorkflowEntry};
+use crate::supervisor::WorkflowEntry;
 use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
 use crate::web::workflows::{WebWorkflow, WebWorkflowSummary};
 use crate::web::{self, BeClient, Watches, WebAccount, WebError};
@@ -37,53 +38,64 @@ pub struct Providers {
 }
 
 #[tauri::command]
-pub fn list_workflows(sup: State<'_, Supervisor>) -> Result<Vec<WorkflowEntry>, String> {
-    sup.list_workflows()
+pub async fn list_workflows(active: State<'_, Active>) -> Result<Vec<WorkflowEntry>, String> {
+    active.sup().await?.list_workflows()
 }
 
 #[tauri::command]
-pub fn save_workflow(
-    sup: State<'_, Supervisor>,
+pub async fn save_workflow(
+    active: State<'_, Active>,
     wf: StoredWorkflow,
 ) -> Result<StoredWorkflow, String> {
-    sup.save_workflow(wf)
+    active.sup().await?.save_workflow(wf)
 }
 
 #[tauri::command]
-pub fn delete_workflow(sup: State<'_, Supervisor>, id: String) -> Result<(), String> {
-    sup.delete_workflow(&id)
+pub async fn delete_workflow(active: State<'_, Active>, id: String) -> Result<(), String> {
+    active.sup().await?.delete_workflow(&id)
 }
 
 #[tauri::command]
-pub fn validate_workflow(sup: State<'_, Supervisor>, wf: Workflow) -> Vec<ValidationError> {
-    sup.validate(&wf)
+pub async fn validate_workflow(
+    active: State<'_, Active>,
+    wf: Workflow,
+) -> Result<Vec<ValidationError>, String> {
+    Ok(active.sup().await?.validate(&wf))
 }
 
 #[tauri::command]
 pub async fn run_now(
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     id: String,
     file_path: String,
 ) -> Result<String, String> {
-    sup.run_now(&id, &PathBuf::from(file_path)).await
+    active
+        .sup()
+        .await?
+        .run_now(&id, &PathBuf::from(file_path))
+        .await
 }
 
 #[tauri::command]
-pub fn list_runs(
-    sup: State<'_, Supervisor>,
+pub async fn list_runs(
+    active: State<'_, Active>,
     workflow_id: Option<String>,
 ) -> Result<Vec<RunSummary>, String> {
-    sup.store().list_runs(workflow_id.as_deref())
+    active
+        .sup()
+        .await?
+        .store()
+        .list_runs(workflow_id.as_deref())
 }
 
 #[tauri::command]
-pub fn get_run(sup: State<'_, Supervisor>, run_id: String) -> Result<StoredRun, String> {
-    sup.store().get_run(&run_id)
+pub async fn get_run(active: State<'_, Active>, run_id: String) -> Result<StoredRun, String> {
+    active.sup().await?.store().get_run(&run_id)
 }
 
 #[tauri::command]
-pub fn undo_run(sup: State<'_, Supervisor>, run_id: String) -> Result<UndoReport, String> {
-    sup.undo_run(&run_id)
+pub async fn undo_run(active: State<'_, Active>, run_id: String) -> Result<UndoReport, String> {
+    active.sup().await?.undo_run(&run_id)
 }
 
 /// 구독 CLI는 claude만(codex·gemini 보류).
@@ -200,8 +212,8 @@ pub fn web_editor_url(server_url: &str) -> Result<String, String> {
 /// 기본 브라우저로 연다. 주소는 화면이 아니라 저장된 설정에서 만든다.
 // ponytail: macOS `open`만(1단계는 macOS 전용) — 다른 OS를 내면 opener 플러그인으로.
 #[tauri::command]
-pub fn open_web_editor(sup: State<'_, Supervisor>) -> Result<(), String> {
-    let url = web_editor_url(&sup.store().get_settings()?.server_url)?;
+pub fn open_web_editor(active: State<'_, Active>) -> Result<(), String> {
+    let url = web_editor_url(&active.settings().get_settings()?.server_url)?;
     let status = std::process::Command::new("/usr/bin/open")
         .arg(&url)
         .status()
@@ -214,21 +226,21 @@ pub fn open_web_editor(sup: State<'_, Supervisor>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_settings(sup: State<'_, Supervisor>) -> Result<Settings, String> {
-    sup.store().get_settings()
+pub fn get_settings(active: State<'_, Active>) -> Result<Settings, String> {
+    active.settings().get_settings()
 }
 
 /// 자동 시작이 바뀌면 로그인 항목도 켜고 끈다. 서버 주소가 바뀌면 세션을 지우고 구독도 해제한다.
 #[tauri::command]
 pub async fn set_settings(
     app: AppHandle,
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
     watches: State<'_, Watches>,
     s: Settings,
 ) -> Result<(), String> {
     web::validate_server_url(&s.server_url)?;
-    let old = sup.store().get_settings()?;
+    let old = active.settings().get_settings()?;
     if s.autostart != old.autostart {
         let launch = app.autolaunch();
         let r = if s.autostart {
@@ -238,45 +250,45 @@ pub async fn set_settings(
         };
         r.map_err(|e| format!("자동 시작을 바꾸지 못했어요: {e}"))?;
     }
-    let saved = web::save_settings(sup.store(), keys.0.as_ref(), s)?;
+    let saved = web::save_settings(active.settings(), keys.0.as_ref(), s)?;
     if saved.server_url != old.server_url {
         watches.clear();
     }
     Ok(())
 }
 
-fn be_client(sup: &Supervisor, keys: &Keys) -> Result<BeClient, WebError> {
-    let s = sup.store().get_settings().map_err(WebError::Server)?;
+fn be_client(active: &Active, keys: &Keys) -> Result<BeClient, WebError> {
+    let s = active.settings().get_settings().map_err(WebError::Server)?;
     BeClient::new(&s.server_url, keys.0.clone())
 }
 
 /// 비밀번호는 BE로만 보내고 저장하지 않는다.
 #[tauri::command]
 pub async fn web_login(
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
     email: String,
     password: String,
 ) -> Result<WebAccount, WebError> {
-    be_client(&sup, &keys)?.login(&email, &password).await
+    be_client(&active, &keys)?.login(&email, &password).await
 }
 
 #[tauri::command]
 pub async fn web_logout(
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
     watches: State<'_, Watches>,
 ) -> Result<(), WebError> {
     watches.clear();
-    be_client(&sup, &keys)?.logout().await
+    be_client(&active, &keys)?.logout().await
 }
 
 #[tauri::command]
 pub async fn web_account(
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
 ) -> Result<Option<WebAccount>, WebError> {
-    let client = be_client(&sup, &keys)?;
+    let client = be_client(&active, &keys)?;
     tauri::async_runtime::spawn_blocking(move || client.account())
         .await
         .map_err(|e| WebError::Server(e.to_string()))
@@ -284,52 +296,52 @@ pub async fn web_account(
 
 #[tauri::command]
 pub async fn web_list_workflows(
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
 ) -> Result<Vec<WebWorkflowSummary>, WebError> {
-    web::workflows::list(&be_client(&sup, &keys)?).await
+    web::workflows::list(&be_client(&active, &keys)?).await
 }
 
 #[tauri::command]
 pub async fn web_get_workflow(
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
     id: String,
 ) -> Result<WebWorkflow, WebError> {
-    web::workflows::get(&be_client(&sup, &keys)?, &id).await
+    web::workflows::get(&be_client(&active, &keys)?, &id).await
 }
 
 #[tauri::command]
 pub async fn web_list_executions(
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
     workflow_id: String,
     cursor: Option<String>,
 ) -> Result<Page<WebExecution>, WebError> {
-    web::executions::list(&be_client(&sup, &keys)?, &workflow_id, cursor).await
+    web::executions::list(&be_client(&active, &keys)?, &workflow_id, cursor).await
 }
 
 #[tauri::command]
 pub async fn web_execution_logs(
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
     workflow_id: String,
     execution_id: String,
 ) -> Result<Vec<WebNodeLog>, WebError> {
-    web::executions::logs(&be_client(&sup, &keys)?, &workflow_id, &execution_id).await
+    web::executions::logs(&be_client(&active, &keys)?, &workflow_id, &execution_id).await
 }
 
 /// 받은 이벤트를 `web-exec-event`로 넘긴다(async — 구독 작업을 tokio 런타임에 띄운다).
 #[tauri::command]
 pub async fn web_watch_execution(
     app: AppHandle,
-    sup: State<'_, Supervisor>,
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
     watches: State<'_, Watches>,
     workflow_id: String,
     execution_id: String,
 ) -> Result<(), WebError> {
-    let client = Arc::new(be_client(&sup, &keys)?);
+    let client = Arc::new(be_client(&active, &keys)?);
     let emit: Emit = Arc::new(move |payload| {
         if let Err(e) = app.emit("web-exec-event", payload) {
             eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");

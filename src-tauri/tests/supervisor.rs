@@ -76,6 +76,7 @@ fn env_full(ai: FakeAi, recheck: Duration, repeat_window: Duration) -> Env {
     let ev = events.clone();
     let sup = Supervisor::start(Deps {
         store: store.clone(),
+        app_data: root.join("data"),
         home: root.clone(),
         trash_dir: root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", ai.clone())),
@@ -537,6 +538,7 @@ fn trigger(p: &Path) -> serde_json::Map<String, serde_json::Value> {
 fn restart(env: &Env) -> Supervisor {
     Supervisor::start(Deps {
         store: env.store.clone(),
+        app_data: env.root.join("data"),
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty()),
@@ -610,6 +612,7 @@ async fn run_finished_emitted_after_final_save() {
     let (store, s) = (env.store.clone(), seen.clone());
     let sup = Supervisor::start(Deps {
         store: env.store.clone(),
+        app_data: env.root.join("data"),
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", env.ai.clone())),
