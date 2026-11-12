@@ -11,7 +11,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use super::{AiError, AiProvider, AiRequest, ChunkFn, SYSTEM_INSTRUCTION};
+use super::{AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, SYSTEM_INSTRUCTION};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 /// 실패 메시지에 붙이는 stderr 끝부분(글자).
@@ -158,6 +158,10 @@ struct StreamState {
     error: Option<String>,
     /// codex `error`·`turn.failed` — 재연결 경고일 수 있어 답이 없거나 rc≠0일 때만 실패 이유로 쓴다.
     warnings: Vec<String>,
+    /// claude `result` 이벤트의 `usage`(Anthropic 모양).
+    usage: Option<Value>,
+    /// 요청한 모델(사용량 기록용). 비우면 CLI 기본 모델.
+    model: Option<String>,
 }
 
 impl StreamState {
@@ -167,6 +171,8 @@ impl StreamState {
             answer: None,
             error: None,
             warnings: Vec::new(),
+            usage: None,
+            model: None,
         }
     }
 
@@ -186,6 +192,9 @@ impl StreamState {
                 }
             }
             (CliKind::Claude, "result") => {
+                if v["usage"].is_object() {
+                    self.usage = Some(v["usage"].clone());
+                }
                 if v["is_error"] == true {
                     let msg = v["result"].as_str().or(v["subtype"].as_str());
                     self.error = Some(msg.unwrap_or("알 수 없는 오류").to_string());
@@ -213,13 +222,17 @@ impl StreamState {
         }
     }
 
-    fn finish(self, exited_ok: bool, stderr: &str) -> Result<String, AiError> {
+    fn finish(self, exited_ok: bool, stderr: &str) -> Result<AiAnswer, AiError> {
         let name = self.kind.program();
         if let Some(e) = self.error {
             return Err(AiError(format!("{name}: {e}")));
         }
+        let (kind, model) = (self.kind, self.model.as_deref());
+        let usage = self
+            .usage
+            .map(|u| AiUsage::from_anthropic(kind.id(), model, &u));
         match self.answer {
-            Some(a) if exited_ok => Ok(a),
+            Some(text) if exited_ok => Ok(AiAnswer { text, usage }),
             _ if !self.warnings.is_empty() => {
                 Err(AiError(format!("{name}: {}", self.warnings.join(" / "))))
             }
@@ -240,7 +253,7 @@ pub fn parse_stream<'a>(
     kind: CliKind,
     lines: impl IntoIterator<Item = &'a str>,
     chunk: &ChunkFn<'_>,
-) -> Result<String, AiError> {
+) -> Result<AiAnswer, AiError> {
     let mut st = StreamState::new(kind);
     for l in lines {
         st.feed(l, chunk);
@@ -346,7 +359,7 @@ impl CliProvider {
 
 #[async_trait]
 impl AiProvider for CliProvider {
-    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<String, AiError> {
+    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
         let name = self.kind.program();
         if let Some(m) = req.model.as_deref().filter(|m| !valid_model(m)) {
             return Err(AiError(format!(
@@ -386,7 +399,7 @@ impl AiProvider for CliProvider {
             child.stderr.take().expect("piped"),
         );
         let kind = self.kind;
-        let prompt = req.prompt;
+        let (prompt, model) = (req.prompt, req.model);
 
         let work = async {
             let write = async {
@@ -395,6 +408,7 @@ impl AiProvider for CliProvider {
             };
             let read = async {
                 let mut st = StreamState::new(kind);
+                st.model = model;
                 let mut out = BufReader::new(stdout.take(MAX_STDOUT));
                 let (mut buf, mut total) = (Vec::new(), 0u64);
                 // UTF-8이 아닌 줄도 끝까지 비운다(읽기를 멈추면 자식이 파이프에 막힌다).

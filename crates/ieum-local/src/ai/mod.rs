@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ieum_engine::{ExecEvent, NodeCtx, NodeError, NodeRunner};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::paths::AllowedRoots;
@@ -35,10 +36,53 @@ pub struct AiRequest {
 /// 텍스트 조각 콜백. 별칭으로 둔다 — `async_trait`이 `&str`의 생략 수명을 고정 수명으로 바꿔 버린다.
 pub type ChunkFn<'a> = dyn Fn(&str) + Send + Sync + 'a;
 
+/// 한 번(또는 재시도를 합친) AI 호출의 토큰. `input_tokens`는 캐시에서 읽거나 캐시에 쓴 토큰을 뺀 입력
+/// (Anthropic 뜻 — OpenAI·Gemini는 전체 입력에서 캐시 읽기를 빼서 맞춘다).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiUsage {
+    /// `anthropic`·`openai`·`gemini`·`cli:claude`
+    pub source: String,
+    pub model: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: Option<u64>,
+    pub cache_write_tokens: Option<u64>,
+}
+
+impl AiUsage {
+    /// Anthropic `usage` 객체 모양(API·claude CLI `result` 공통).
+    fn from_anthropic(source: &str, model: Option<&str>, u: &Value) -> Self {
+        AiUsage {
+            source: source.into(),
+            model: model.map(str::to_string),
+            input_tokens: u["input_tokens"].as_u64().unwrap_or(0),
+            output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
+            cache_read_tokens: u["cache_read_input_tokens"].as_u64(),
+            cache_write_tokens: u["cache_creation_input_tokens"].as_u64(),
+        }
+    }
+
+    fn add(&mut self, o: &AiUsage) {
+        let sum = |a: Option<u64>, b: Option<u64>| a.zip(b).map(|(a, b)| a + b).or(a).or(b);
+        self.input_tokens += o.input_tokens;
+        self.output_tokens += o.output_tokens;
+        self.cache_read_tokens = sum(self.cache_read_tokens, o.cache_read_tokens);
+        self.cache_write_tokens = sum(self.cache_write_tokens, o.cache_write_tokens);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AiAnswer {
+    pub text: String,
+    /// 공급원이 사용량을 알려 주지 않으면 None.
+    pub usage: Option<AiUsage>,
+}
+
 #[async_trait]
 pub trait AiProvider: Send + Sync {
-    /// 텍스트 조각은 `chunk`로 흘리고 최종 텍스트를 돌려준다.
-    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<String, AiError>;
+    /// 텍스트 조각은 `chunk`로 흘리고 최종 텍스트(+사용량)를 돌려준다.
+    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError>;
 }
 
 /// 모델 응답 모양이 틀렸을 때 다시 묻는 횟수를 포함한 총 시도 수(스펙 §4.1: 1회 재시도).
@@ -212,6 +256,27 @@ async fn build_prompt(
 #[async_trait]
 impl NodeRunner for AiRunner {
     async fn run(&self, ctx: NodeCtx<'_>) -> Result<Map<String, Value>, NodeError> {
+        self.run_metered(ctx).await.0
+    }
+
+    /// 사용량 = 이 노드에서 부른 모든 시도의 합(답 모양이 틀려 실패해도 쓴 만큼은 남긴다).
+    async fn run_metered(
+        &self,
+        ctx: NodeCtx<'_>,
+    ) -> (Result<Map<String, Value>, NodeError>, Option<Value>) {
+        let used: std::sync::Mutex<Option<AiUsage>> = Default::default();
+        let r = self.run_inner(ctx, &used).await;
+        let usage = used.into_inner().unwrap_or_else(|e| e.into_inner());
+        (r, usage.and_then(|u| serde_json::to_value(u).ok()))
+    }
+}
+
+impl AiRunner {
+    async fn run_inner(
+        &self,
+        ctx: NodeCtx<'_>,
+        used: &std::sync::Mutex<Option<AiUsage>>,
+    ) -> Result<Map<String, Value>, NodeError> {
         let cfg = &ctx.config;
         let fields = validate_output_fields(cfg.get("outputFields")).map_err(fail)?;
         let provider_id = cfg.get("provider").and_then(Value::as_str).unwrap_or("");
@@ -252,10 +317,17 @@ impl NodeRunner for AiRunner {
             };
             let mut mismatch = String::new();
             for _ in 0..ATTEMPTS {
-                let text = provider
+                let AiAnswer { text, usage } = provider
                     .ask(req.clone(), &chunk)
                     .await
                     .map_err(|e| fail(e.0))?;
+                if let Some(u) = usage {
+                    let mut g = used.lock().unwrap_or_else(|e| e.into_inner());
+                    match g.as_mut() {
+                        Some(t) => t.add(&u),
+                        None => *g = Some(u),
+                    }
+                }
                 let Some(fields) = &fields else {
                     let mut out = Map::new();
                     out.insert("output".into(), Value::String(text));

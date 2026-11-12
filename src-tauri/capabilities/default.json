@@ -14,6 +14,7 @@
     "allow-run-now",
     "allow-list-runs",
     "allow-get-run",
+    "allow-usage-summary",
     "allow-undo-run",
     "allow-detect-providers",
     "allow-set-api-key",

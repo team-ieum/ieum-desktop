@@ -14,8 +14,10 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::account::AccountId;
 use crate::active::{Active, NOT_SIGNED_IN};
+use crate::pricing;
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::supervisor::WorkflowEntry;
+use crate::usage::{self, UsageSummary};
 use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
 use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
 use crate::web::workflows::{WebWorkflow, WebWorkflowSummary};
@@ -89,6 +91,19 @@ pub async fn list_runs(
         .await?
         .store()
         .list_runs(workflow_id.as_deref())
+}
+
+/// 활성 계정의 AI 사용량 요약. `range` = `today`·`week`·`month`(로컬 시각대).
+#[tauri::command]
+pub async fn usage_summary(
+    active: State<'_, Active>,
+    range: String,
+) -> Result<UsageSummary, String> {
+    let sup = active.sup().await?;
+    let now = chrono::Local::now();
+    let from = usage::range_start(&range, now)?;
+    let runs = sup.store().all_runs()?;
+    Ok(usage::summarize(&runs, from, now, pricing::table()))
 }
 
 #[tauri::command]

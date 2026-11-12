@@ -16,7 +16,7 @@ use ieum_desktop_lib::supervisor::{AppEvent, WatchState};
 use ieum_engine::{RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::KeyError;
-use ieum_local::ai::{AiError, AiProvider, AiRequest, AiRunner, ChunkFn, KeyStore};
+use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn, KeyStore};
 use serde_json::json;
 use std::future::Future;
 use tempfile::TempDir;
@@ -29,11 +29,14 @@ struct FakeAi {
 
 #[async_trait]
 impl AiProvider for FakeAi {
-    async fn ask(&self, _req: AiRequest, _chunk: &ChunkFn<'_>) -> Result<String, AiError> {
+    async fn ask(&self, _req: AiRequest, _chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
         if let Some(g) = &self.gate {
             g.acquire().await.unwrap().forget();
         }
-        Ok(r#"{"folder": "sorted"}"#.into())
+        Ok(AiAnswer {
+            text: r#"{"folder": "sorted"}"#.into(),
+            usage: None,
+        })
     }
 }
 

@@ -1,9 +1,11 @@
 pub mod account;
 pub mod active;
 pub mod commands;
+pub mod pricing;
 pub mod store;
 pub mod supervisor;
 mod tray;
+pub mod usage;
 pub mod web;
 
 use std::sync::Arc;
@@ -210,6 +212,7 @@ pub fn run() {
             commands::run_now,
             commands::list_runs,
             commands::get_run,
+            commands::usage_summary,
             commands::undo_run,
             commands::detect_providers,
             commands::set_api_key,

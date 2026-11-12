@@ -10,7 +10,7 @@ use reqwest::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use super::keys::{ApiKey, KeyStore, Keychain};
-use super::{AiError, AiProvider, AiRequest, ChunkFn, SYSTEM_INSTRUCTION};
+use super::{AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, SYSTEM_INSTRUCTION};
 
 pub const API_TIMEOUT: Duration = Duration::from_secs(300);
 /// 응답 본문 전체 상한.
@@ -107,6 +107,8 @@ impl ApiKind {
                 let mut body = json!({
                     "model": model,
                     "stream": true,
+                    // 마지막 조각(choices 빈 목록)에 usage가 온다.
+                    "stream_options": {"include_usage": true},
                     "messages": [
                         {"role": "system", "content": SYSTEM_INSTRUCTION},
                         {"role": "user", "content": req.prompt},
@@ -217,7 +219,7 @@ impl ApiProvider {
         model: &str,
         key: &ApiKey,
         chunk: &ChunkFn<'_>,
-    ) -> Result<String, AiError> {
+    ) -> Result<AiAnswer, AiError> {
         let name = self.kind.name();
         let (url, body) = self.kind.request(&self.base_url, model, req);
         let value = match self.kind {
@@ -285,13 +287,13 @@ impl ApiProvider {
             scanned = buf.len();
         }
         st.line(String::from_utf8_lossy(&buf).trim_end(), key, chunk)?;
-        st.finish()
+        st.finish(model)
     }
 }
 
 #[async_trait]
 impl AiProvider for ApiProvider {
-    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<String, AiError> {
+    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
         let name = self.kind.name();
         let model = req
             .model
@@ -362,6 +364,9 @@ struct Stream {
     text: String,
     /// 끝 표시(message_stop·[DONE]·finishReason)를 봤는지 — 없으면 중간에 끊긴 것.
     done: bool,
+    /// 지금까지 본 사용량 칸. 뒤에 온 값이 덮는다(Anthropic message_start → message_delta,
+    /// Gemini는 조각마다 누적값, OpenAI는 마지막 조각 하나).
+    usage: Map<String, Value>,
 }
 
 impl Stream {
@@ -370,6 +375,15 @@ impl Stream {
             kind,
             text: String::new(),
             done: false,
+            usage: Map::new(),
+        }
+    }
+
+    fn take_usage(&mut self, u: &Value) {
+        for (k, v) in u.as_object().into_iter().flatten() {
+            if !v.is_null() {
+                self.usage.insert(k.clone(), v.clone());
+            }
         }
     }
 
@@ -403,17 +417,22 @@ impl Stream {
                 Some("content_block_delta") if v["delta"]["type"] == "text_delta" => {
                     self.push(v["delta"]["text"].as_str().unwrap_or(""), chunk)
                 }
-                Some("message_delta") => match v["delta"]["stop_reason"].as_str() {
-                    Some("max_tokens" | "model_context_window_exceeded") => {
-                        return Err(self.cut());
+                Some("message_start") => self.take_usage(&v["message"]["usage"]),
+                Some("message_delta") => {
+                    self.take_usage(&v["usage"]);
+                    match v["delta"]["stop_reason"].as_str() {
+                        Some("max_tokens" | "model_context_window_exceeded") => {
+                            return Err(self.cut());
+                        }
+                        Some("refusal") => return Err(self.refused()),
+                        _ => {}
                     }
-                    Some("refusal") => return Err(self.refused()),
-                    _ => {}
-                },
+                }
                 Some("message_stop") => self.done = true,
                 _ => {}
             },
             ApiKind::OpenAi => {
+                self.take_usage(&v["usage"]);
                 for c in v["choices"].as_array().into_iter().flatten() {
                     if c["delta"]["refusal"].is_string() {
                         return Err(self.refused());
@@ -430,6 +449,7 @@ impl Stream {
                 if v["promptFeedback"]["blockReason"].is_string() {
                     return Err(self.refused());
                 }
+                self.take_usage(&v["usageMetadata"]);
                 for c in v["candidates"].as_array().into_iter().flatten() {
                     for p in c["content"]["parts"].as_array().into_iter().flatten() {
                         self.push(p["text"].as_str().unwrap_or(""), chunk);
@@ -458,13 +478,49 @@ impl Stream {
         AiError(format!("{}: AI가 요청을 거절했어요.", self.kind.name()))
     }
 
-    fn finish(self) -> Result<String, AiError> {
+    fn finish(self, model: &str) -> Result<AiAnswer, AiError> {
         if !self.done {
             return Err(AiError(format!(
                 "{} 응답이 중간에 끊겼어요.",
                 self.kind.name()
             )));
         }
-        Ok(self.text)
+        let usage = (!self.usage.is_empty()).then(|| self.parse_usage(model));
+        Ok(AiAnswer {
+            text: self.text,
+            usage,
+        })
+    }
+
+    /// 공급원별 사용량 칸 → `AiUsage`. 입력은 캐시 읽기를 뺀 값으로 맞춘다.
+    fn parse_usage(&self, model: &str) -> AiUsage {
+        let u = &self.usage;
+        let n = |k: &str| u.get(k).and_then(Value::as_u64);
+        let source = self.kind.account();
+        let (prompt, cached, output) = match self.kind {
+            ApiKind::Anthropic => {
+                return AiUsage::from_anthropic(source, Some(model), &Value::Object(u.clone()));
+            }
+            ApiKind::OpenAi => (
+                n("prompt_tokens"),
+                u.get("prompt_tokens_details")
+                    .and_then(|d| d["cached_tokens"].as_u64()),
+                n("completion_tokens").unwrap_or(0),
+            ),
+            // 생각 토큰은 출력 요금으로 매긴다.
+            ApiKind::Gemini => (
+                n("promptTokenCount"),
+                n("cachedContentTokenCount"),
+                n("candidatesTokenCount").unwrap_or(0) + n("thoughtsTokenCount").unwrap_or(0),
+            ),
+        };
+        AiUsage {
+            source: source.into(),
+            model: Some(model.into()),
+            input_tokens: prompt.unwrap_or(0).saturating_sub(cached.unwrap_or(0)),
+            output_tokens: output,
+            cache_read_tokens: cached,
+            cache_write_tokens: None,
+        }
     }
 }

@@ -11,7 +11,7 @@ use ieum_desktop_lib::store::{RunTrigger, Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{AppEvent, Deps, QUEUE_CAP, Supervisor, WatchState};
 use ieum_engine::{ExecEvent, NodeStatus, RunStatus, Workflow};
 use ieum_local::WatchTiming;
-use ieum_local::ai::{AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
+use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
@@ -29,7 +29,7 @@ struct FakeAi {
 
 #[async_trait]
 impl AiProvider for FakeAi {
-    async fn ask(&self, req: AiRequest, _chunk: &ChunkFn<'_>) -> Result<String, AiError> {
+    async fn ask(&self, req: AiRequest, _chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.prompts.lock().unwrap().push(req.prompt);
         let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
@@ -40,7 +40,10 @@ impl AiProvider for FakeAi {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         self.active.fetch_sub(1, Ordering::SeqCst);
-        Ok(r#"{"folder": "sorted"}"#.into())
+        Ok(AiAnswer {
+            text: r#"{"folder": "sorted"}"#.into(),
+            usage: None,
+        })
     }
 }
 

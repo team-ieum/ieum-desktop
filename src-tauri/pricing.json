@@ -1,0 +1,22 @@
+{
+  "asOf": "2026-11-12",
+  "models": {
+    "claude-haiku-5-5": { "input": 0.10, "output": 0.50, "cacheRead": 0.01, "cacheWrite": 0.125 },
+    "claude-sonnet-5-5": { "input": 2.0, "output": 10.0, "cacheRead": 0.10, "cacheWrite": 2.50 },
+    "claude-opus-5-5": { "input": 4.0, "output": 20.0, "cacheRead": 0.20, "cacheWrite": 5.0 },
+    "claude-fable-5-2": { "input": 8.0, "output": 40.0, "cacheRead": 0.20, "cacheWrite": 10.0 },
+    "gpt-6-astra": { "input": 10.0, "output": 50.0, "cacheRead": 1.0 },
+    "gpt-6.1-sol": { "input": 2.0, "output": 10.0, "cacheRead": 0.10 },
+    "gpt-6.1-terra": { "input": 1.0, "output": 5.0, "cacheRead": 0.05 },
+    "gpt-6-sol": { "input": 2.0, "output": 10.0, "cacheRead": 0.20 },
+    "gpt-6-luna": { "input": 0.10, "output": 0.50, "cacheRead": 0.01 },
+    "gpt-5.6-sol": { "input": 4.0, "output": 20.0, "cacheRead": 0.40 },
+    "gpt-5.6-terra": { "input": 2.0, "output": 12.0, "cacheRead": 0.20 },
+    "gpt-5.6-luna": { "input": 0.20, "output": 1.20, "cacheRead": 0.02 },
+    "gemini-4-carbon": { "input": 2.0, "output": 10.0, "cacheRead": 0.10 },
+    "gemini-4-argon": { "input": 2.0, "output": 10.0, "cacheRead": 0.10 },
+    "gemini-3.8-flash": { "input": 0.75, "output": 3.75, "cacheRead": 0.075 },
+    "gemini-3.6-flash": { "input": 0.75, "output": 3.75, "cacheRead": 0.075 },
+    "gemini-3.5-flash-lite": { "input": 0.30, "output": 2.50, "cacheRead": 0.03 }
+  }
+}

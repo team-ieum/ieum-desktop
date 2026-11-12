@@ -175,7 +175,8 @@ async fn ask(
     };
     let r = provider(kind, base, Some(KEY))
         .ask(req, &|c: &str| chunks.lock().unwrap().push(c.to_string()))
-        .await;
+        .await
+        .map(|a| a.text);
     (chunks.into_inner().unwrap(), r)
 }
 

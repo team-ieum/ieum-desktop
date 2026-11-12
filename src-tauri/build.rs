@@ -7,6 +7,7 @@ const COMMANDS: &[&str] = &[
     "run_now",
     "list_runs",
     "get_run",
+    "usage_summary",
     "undo_run",
     "detect_providers",
     "set_api_key",

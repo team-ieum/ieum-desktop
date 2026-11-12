@@ -231,10 +231,15 @@ impl Store {
         Ok(())
     }
 
+    /// 모든 실행 기록(순서 없음). 깨진 파일은 건너뛴다.
+    pub fn all_runs(&self) -> Result<Vec<StoredRun>, String> {
+        read_all(&self.root.join("runs"))
+    }
+
     /// 최근 실행부터.
     // ponytail: 매번 기록 파일을 전부 읽는다 — 기록이 수천 개가 되면 요약 색인 파일
     pub fn list_runs(&self, workflow_id: Option<&str>) -> Result<Vec<RunSummary>, String> {
-        let runs: Vec<StoredRun> = read_all(&self.root.join("runs"))?;
+        let runs = self.all_runs()?;
         let mut list: Vec<RunSummary> = runs
             .into_iter()
             .filter(|r| workflow_id.is_none_or(|w| r.workflow_id == w))
