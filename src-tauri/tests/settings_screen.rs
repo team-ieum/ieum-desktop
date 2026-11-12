@@ -1,19 +1,22 @@
-//! 설정 화면용 명령 — 키체인 저장 여부(값 없이)와 "웹에서 수정하기" 주소.
+//! 설정 화면용 명령 — 키 목록(값 없이)과 "웹에서 수정하기" 주소.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use ieum_desktop_lib::commands::{KeyState, key_states, web_editor_url, web_workflow_url};
+use ieum_desktop_lib::commands::{web_editor_url, web_workflow_url};
+use ieum_desktop_lib::credentials::AccountCredentials;
 use ieum_local::ai::KeyStore;
 use ieum_local::ai::keys::KeyError;
 
-/// `openai`만 키체인 접근 오류.
+const K16: &str = "aaaaaaaaaaaaaaaa";
+
+/// `openai.*`만 키체인 접근 오류.
 #[derive(Default)]
 struct FakeKeys(Mutex<HashMap<String, String>>);
 
 impl KeyStore for FakeKeys {
     fn get(&self, account: &str) -> Result<Option<String>, KeyError> {
-        if account == "openai" {
+        if account.starts_with("openai") {
             return Err(KeyError("잠김".into()));
         }
         Ok(self.0.lock().unwrap().get(account).cloned())
@@ -30,23 +33,21 @@ impl KeyStore for FakeKeys {
 
 #[test]
 fn keychain_status_reports_presence_without_values() {
-    let keys = FakeKeys::default();
-    keys.set("anthropic", "sk-secret-123").unwrap();
+    let t = tempfile::tempdir().unwrap();
+    let keys = Arc::new(FakeKeys::default());
+    keys.set(&format!("anthropic.{K16}"), "sk-secret-123")
+        .unwrap();
     keys.set("ieum-session", "{\"accessToken\":\"tok-secret\"}")
         .unwrap();
 
-    let s = key_states(&keys);
-    assert_eq!(s["anthropic"], KeyState::Stored);
-    assert_eq!(s["openai"], KeyState::Error);
-    assert_eq!(s["gemini"], KeyState::Missing);
-    assert_eq!(s["ieum-session"], KeyState::Stored);
+    let v = AccountCredentials::new(t.path().to_path_buf(), K16, keys).list();
+    assert_eq!(v.api_keys["anthropic"].len(), 1);
+    assert!(v.api_keys["openai"].is_empty());
+    assert!(v.api_keys["gemini"].is_empty());
+    assert_eq!(v.keychain_error.as_deref(), Some("잠김"));
 
-    let json = serde_json::to_string(&s).unwrap();
-    assert_eq!(
-        json,
-        r#"{"anthropic":"stored","gemini":"missing","ieum-session":"stored","openai":"error"}"#
-    );
-    assert!(!json.contains("secret"));
+    let json = serde_json::to_string(&v).unwrap();
+    assert!(!json.contains("secret"), "{json}");
 }
 
 #[test]

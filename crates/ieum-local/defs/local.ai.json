@@ -35,6 +35,13 @@
       ]
     },
     {
+      "key": "credential",
+      "title": "키·계정",
+      "type": "string",
+      "ref": false,
+      "description": "비우면 그 공급원의 기본 키·계정을 써요."
+    },
+    {
       "key": "model",
       "title": "모델",
       "type": "string",

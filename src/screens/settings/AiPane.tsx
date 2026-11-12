@@ -232,7 +232,12 @@ export function ApiKeyCard({ p, state, usage, refresh }: { p: (typeof PROVIDERS)
   const save = () => {
     const key = draft.trim();
     setDraft("");
-    void run(api.setApiKey(p.id, key));
+    void run(api.addApiKey(p.id, t("settings.keyDefaultLabel"), key).then(() => {}));
+  };
+  // ponytail: 키 목록 화면은 Task 3 — 그 전까지 [삭제]는 기본 키를 지운다.
+  const removeDefault = async () => {
+    const d = (await api.listCredentials()).apiKeys[p.id]?.find((k) => k.isDefault);
+    if (d) await api.deleteCredential(p.id, d.id);
   };
   return (
     <Card
@@ -275,7 +280,7 @@ export function ApiKeyCard({ p, state, usage, refresh }: { p: (typeof PROVIDERS)
           {t("common.save")}
         </button>
         {state === "stored" && (
-          <button type="button" className={GHOST} onClick={() => void run(api.deleteApiKey(p.id))}>
+          <button type="button" className={GHOST} onClick={() => void run(removeDefault())}>
             {t("common.delete")}
           </button>
         )}

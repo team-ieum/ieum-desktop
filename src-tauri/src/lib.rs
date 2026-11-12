@@ -1,6 +1,7 @@
 pub mod account;
 pub mod active;
 pub mod commands;
+pub mod credentials;
 pub mod notify;
 pub mod permissions;
 pub mod plan_usage;
@@ -226,9 +227,11 @@ pub fn run() {
             commands::usage_summary,
             commands::undo_run,
             commands::detect_providers,
-            commands::set_api_key,
-            commands::delete_api_key,
-            commands::keychain_status,
+            commands::list_credentials,
+            commands::add_api_key,
+            commands::rename_credential,
+            commands::set_default_credential,
+            commands::delete_credential,
             commands::open_web_editor,
             commands::get_settings,
             commands::set_settings,

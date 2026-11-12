@@ -461,6 +461,7 @@ fn req(model: Option<&str>) -> AiRequest {
         prompt: "p".into(),
         model: model.map(String::from),
         schema: None,
+        key_name: None,
     }
 }
 
@@ -761,6 +762,7 @@ async fn claude_cli_result_usage_parsed() {
                 prompt: "p".into(),
                 model: Some("sonnet".into()),
                 schema: None,
+                key_name: None,
             },
             &|_: &str| {},
         )
@@ -776,6 +778,7 @@ async fn claude_cli_result_usage_parsed() {
             output_tokens: 3,
             cache_read_tokens: Some(100),
             cache_write_tokens: Some(5),
+            credential: None,
         })
     );
 }
@@ -790,6 +793,7 @@ async fn stdout_cap_kills_flooding_cli() {
                 prompt: "p".into(),
                 model: None,
                 schema: None,
+                key_name: None,
             },
             &|_: &str| {},
         )
@@ -863,6 +867,7 @@ async fn timeout_kills_cli_process() {
                 prompt: "p".into(),
                 model: None,
                 schema: None,
+                key_name: None,
             },
             &|_: &str| {},
         )

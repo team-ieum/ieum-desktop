@@ -305,7 +305,7 @@ impl AiProvider for ApiProvider {
         }
         let key = self
             .keys
-            .get(self.kind.account())
+            .get(req.key_name.as_deref().unwrap_or(self.kind.account()))
             .map_err(|e| AiError(format!("키체인에서 {name} API 키를 읽지 못했어요: {e}")))?
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty())
@@ -528,6 +528,7 @@ impl Stream {
             output_tokens: output,
             cache_read_tokens: cached,
             cache_write_tokens: written,
+            credential: None,
         }
     }
 }

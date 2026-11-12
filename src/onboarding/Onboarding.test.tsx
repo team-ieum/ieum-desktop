@@ -23,7 +23,7 @@ beforeAll(() => {
   vi.spyOn(api, "dashboardSummary").mockRejectedValue({ code: "NETWORK" });
   vi.spyOn(api, "dashboardExecutions").mockRejectedValue({ code: "NETWORK" });
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [], apiKeys: [] });
-  vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "missing" });
+  vi.spyOn(api, "listCredentials").mockResolvedValue({ apiKeys: { anthropic: [], openai: [], gemini: [] }, claudeAccounts: [], codexAccounts: [], keychainError: null });
   vi.spyOn(api, "openSystemSettings").mockResolvedValue();
   vi.spyOn(api, "sendTestNotification").mockResolvedValue();
   vi.spyOn(api, "claudePlanUsage").mockRejectedValue("no command");

@@ -128,7 +128,7 @@ fn check_id(id: &str) -> Result<(), String> {
 }
 
 /// 임시 파일에 쓰고 rename — 쓰다 죽어도 이전 파일이 남는다.
-fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
     let dir = path.parent().ok_or("저장 경로가 잘못됐어요.")?;
     fs::create_dir_all(dir).map_err(err)?;

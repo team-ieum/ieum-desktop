@@ -11,6 +11,7 @@ const SUMMARY: UsageSummary = {
   totalOutput: 500,
   unpricedCalls: 0,
   bySource: [],
+  byCredential: [],
   byWorkflow: [],
   byDay: [],
   asOf: "2026-11-01",

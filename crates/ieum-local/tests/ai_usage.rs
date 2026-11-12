@@ -80,6 +80,7 @@ async fn ask(kind: ApiKind, base: &str, model: Option<&str>) -> AiAnswer {
         prompt: "p".into(),
         model: model.map(String::from),
         schema: None,
+        key_name: None,
     };
     ApiProvider::with(kind, base, Arc::new(Key))
         .ask(req, &|_: &str| {})
@@ -112,6 +113,7 @@ async fn anthropic_stream_usage_parsed() {
             output_tokens: 15,
             cache_read_tokens: Some(7),
             cache_write_tokens: Some(3),
+            credential: None,
         })
     );
 }
@@ -144,6 +146,7 @@ async fn openai_stream_requests_and_parses_usage() {
             output_tokens: 5,
             cache_read_tokens: Some(4),
             cache_write_tokens: None,
+            credential: None,
         })
     );
 }
@@ -195,6 +198,7 @@ async fn gemini_usage_metadata_parsed() {
             output_tokens: 10,
             cache_read_tokens: Some(10),
             cache_write_tokens: None,
+            credential: None,
         })
     );
 }
@@ -224,6 +228,7 @@ fn usage(input: u64, output: u64) -> AiUsage {
         output_tokens: output,
         cache_read_tokens: None,
         cache_write_tokens: None,
+        credential: None,
     }
 }
 

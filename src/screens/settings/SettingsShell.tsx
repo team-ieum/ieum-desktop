@@ -1,6 +1,6 @@
 import { ArrowLeft, Bot, CircleUserRound, Search, ShieldCheck, SlidersHorizontal, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, type KeychainStatus, type Providers, type UsageSummary } from "../../api";
+import { api, keyStates, type KeychainStatus, type Providers, type UsageSummary } from "../../api";
 import { t, type Key } from "../../i18n";
 import { useWeb } from "../../stores/web";
 import { AccountPane, serverHost } from "./AccountPane";
@@ -37,7 +37,7 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
 
   const refresh = useCallback(() => {
     api.detectProviders().then(setProviders, (e) => setLoadError(String(e)));
-    api.keychainStatus().then(setKeychain, (e) => setLoadError(String(e)));
+    api.listCredentials().then((v) => setKeychain(keyStates(v)), (e) => setLoadError(String(e)));
     api.usageSummary("month").then(setUsage, () => setUsage(null));
   }, []);
   useEffect(refresh, [refresh]);

@@ -11,6 +11,7 @@ use ieum_local::ai::keys::{ScopedKeys, copy_legacy_keys, delete_legacy_keys};
 use ieum_local::ai::{AiRunner, KeyStore};
 
 use crate::account::{AccountId, account_key, account_root, claim_legacy};
+use crate::credentials::AccountCredentials;
 use crate::store::Store;
 use crate::supervisor::{Deps, Emit, Supervisor};
 use crate::web::validate_server_url;
@@ -118,7 +119,10 @@ impl Active {
                 app_data: b.app_data.clone(),
                 home: b.home.clone(),
                 trash_dir: b.trash_dir.clone(),
-                ai: (b.ai_factory)(Arc::new(ScopedKeys::new(b.keys.clone(), &key))),
+                ai: Arc::new(
+                    (b.ai_factory)(Arc::new(ScopedKeys::new(b.keys.clone(), &key)))
+                        .with_resolver(Arc::new(self.credentials_of(&key))),
+                ),
                 emit: b.emit.clone(),
                 timing: b.timing,
                 recheck: b.recheck,
@@ -177,6 +181,20 @@ impl Active {
             .current
             .as_ref()
             .map(|a| a.id.clone())
+    }
+
+    fn credentials_of(&self, key: &str) -> AccountCredentials {
+        let b = &self.base;
+        AccountCredentials::new(account_root(&b.app_data, key), key, b.keys.clone())
+    }
+
+    /// 활성 계정의 키·계정 목록. 로그인 전이면 `NOT_SIGNED_IN`.
+    pub async fn credentials(&self) -> Result<AccountCredentials, String> {
+        let key = self
+            .account_key()
+            .await
+            .ok_or_else(|| NOT_SIGNED_IN.to_string())?;
+        Ok(self.credentials_of(&key))
     }
 
     pub async fn account_key(&self) -> Option<String> {

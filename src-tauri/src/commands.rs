@@ -1,19 +1,18 @@
 //! 화면이 부르는 Tauri 명령 — 로직은 `store`·`supervisor`에 두고 여기는 얇게 감싼다.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use ieum_engine::{ValidationError, Workflow};
 use ieum_local::UndoReport;
-use ieum_local::ai::keys::ScopedKeys;
-use ieum_local::ai::{ApiKind, KeyStore, detect_clis};
+use ieum_local::ai::{KeyStore, detect_clis};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::account::AccountId;
-use crate::active::{Active, NOT_SIGNED_IN};
+use crate::active::Active;
+use crate::credentials::{AccountCredentials, ApiKeyMeta, CredentialsView};
 use crate::permissions;
 use crate::plan_usage::{PlanUsage, PlanUsageClient, claude_account_email};
 use crate::pricing;
@@ -119,128 +118,90 @@ pub async fn undo_run(active: State<'_, Active>, run_id: String) -> Result<UndoR
     active.sup().await?.undo_run(&run_id)
 }
 
-/// 활성 계정 범위의 키 저장소. 로그인 전이면 `NOT_SIGNED_IN`.
-async fn account_keys(active: &Active, keys: &Keys) -> Result<Arc<dyn KeyStore>, String> {
-    let key16 = active
-        .account_key()
-        .await
-        .ok_or_else(|| NOT_SIGNED_IN.to_string())?;
-    Ok(Arc::new(ScopedKeys::new(keys.0.clone(), &key16)))
-}
-
 /// 구독 CLI는 claude만(codex·gemini 보류).
 #[tauri::command]
-pub async fn detect_providers(
-    active: State<'_, Active>,
-    keys: State<'_, Keys>,
-) -> Result<Providers, String> {
-    let keys = account_keys(&active, &keys).await?;
-    tauri::async_runtime::spawn_blocking(move || Providers {
-        clis: detect_clis()
-            .into_iter()
-            .filter(|c| c.id == "cli:claude")
-            .map(|c| CliInfo {
-                id: c.id.to_string(),
-                path: c.path,
-                version: c.version,
-            })
-            .collect(),
-        api_keys: [ApiKind::Anthropic, ApiKind::OpenAi, ApiKind::Gemini]
-            .into_iter()
-            .map(ApiKind::account)
-            .filter(|a| match keys.get(a) {
-                Ok(k) => k.is_some(),
-                Err(e) => {
-                    eprintln!("[ieum] 키를 확인하지 못했어요: {a}: {e}");
-                    false
-                }
-            })
-            .map(String::from)
-            .collect(),
+pub async fn detect_providers(active: State<'_, Active>) -> Result<Providers, String> {
+    with_credentials(&active, |c| {
+        let view = c.list();
+        if let Some(e) = &view.keychain_error {
+            eprintln!("[ieum] 키를 확인하지 못했어요: {e}");
+        }
+        Ok(Providers {
+            clis: detect_clis()
+                .into_iter()
+                .filter(|c| c.id == "cli:claude")
+                .map(|c| CliInfo {
+                    id: c.id.to_string(),
+                    path: c.path,
+                    version: c.version,
+                })
+                .collect(),
+            api_keys: view
+                .api_keys
+                .into_iter()
+                .filter(|(_, list)| !list.is_empty())
+                .map(|(p, _)| p)
+                .collect(),
+        })
     })
     .await
-    .map_err(|e| e.to_string())
-}
-
-/// API 키 계정만(같은 키체인 서비스의 `ieum-session`은 화면이 건드리지 못하게).
-fn api_account(provider: &str) -> Result<&'static str, String> {
-    [ApiKind::Anthropic, ApiKind::OpenAi, ApiKind::Gemini]
-        .into_iter()
-        .map(ApiKind::account)
-        .find(|a| *a == provider)
-        .ok_or_else(|| format!("알 수 없는 공급원이에요: {provider}"))
 }
 
 // 키체인을 만지는 명령은 async + spawn_blocking — 동기 명령은 메인 스레드에서 돌아
 // 키체인 허용 창을 기다리는 동안 화면이 굳는다(tests/commands_off_main.rs).
+async fn with_credentials<T: Send + 'static>(
+    active: &Active,
+    f: impl FnOnce(AccountCredentials) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let c = active.credentials().await?;
+    tauri::async_runtime::spawn_blocking(move || f(c))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// API 키·구독 계정 목록. 키 값은 담지 않는다(끝 4자만).
 #[tauri::command]
-pub async fn set_api_key(
+pub async fn list_credentials(active: State<'_, Active>) -> Result<CredentialsView, String> {
+    with_credentials(&active, |c| Ok(c.list())).await
+}
+
+#[tauri::command]
+pub async fn add_api_key(
     active: State<'_, Active>,
-    keys: State<'_, Keys>,
     provider: String,
+    label: String,
     key: String,
+) -> Result<ApiKeyMeta, String> {
+    with_credentials(&active, move |c| c.add_api_key(&provider, &label, &key)).await
+}
+
+/// `kind` = `anthropic|openai|gemini|claude|codex`.
+#[tauri::command]
+pub async fn rename_credential(
+    active: State<'_, Active>,
+    kind: String,
+    id: String,
+    label: String,
 ) -> Result<(), String> {
-    let account = api_account(&provider)?;
-    let keys = account_keys(&active, &keys).await?;
-    tauri::async_runtime::spawn_blocking(move || keys.set(account, &key))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+    with_credentials(&active, move |c| c.rename(&kind, &id, &label)).await
 }
 
 #[tauri::command]
-pub async fn delete_api_key(
+pub async fn set_default_credential(
     active: State<'_, Active>,
-    keys: State<'_, Keys>,
-    provider: String,
+    kind: String,
+    id: String,
 ) -> Result<(), String> {
-    let account = api_account(&provider)?;
-    let keys = account_keys(&active, &keys).await?;
-    tauri::async_runtime::spawn_blocking(move || keys.delete(account))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
-}
-
-/// 키체인 계정의 저장 여부. 값은 담지 않는다.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum KeyState {
-    Stored,
-    Missing,
-    /// 키체인 접근 오류
-    Error,
-}
-
-/// API 키 3개와 이음 세션(`ieum-session`)의 저장 여부.
-pub fn key_states(keys: &dyn KeyStore) -> BTreeMap<&'static str, KeyState> {
-    [ApiKind::Anthropic, ApiKind::OpenAi, ApiKind::Gemini]
-        .into_iter()
-        .map(ApiKind::account)
-        .chain([web::SESSION_ACCOUNT])
-        .map(|a| {
-            let state = match keys.get(a) {
-                Ok(Some(_)) => KeyState::Stored,
-                Ok(None) => KeyState::Missing,
-                Err(e) => {
-                    eprintln!("[ieum] 키체인을 확인하지 못했어요: {a}: {e}");
-                    KeyState::Error
-                }
-            };
-            (a, state)
-        })
-        .collect()
+    with_credentials(&active, move |c| c.set_default(&kind, &id)).await
 }
 
 #[tauri::command]
-pub async fn keychain_status(
+pub async fn delete_credential(
     active: State<'_, Active>,
-    keys: State<'_, Keys>,
-) -> Result<BTreeMap<&'static str, KeyState>, String> {
-    let keys = account_keys(&active, &keys).await?;
-    tauri::async_runtime::spawn_blocking(move || key_states(keys.as_ref()))
-        .await
-        .map_err(|e| e.to_string())
+    kind: String,
+    id: String,
+) -> Result<(), String> {
+    with_credentials(&active, move |c| c.delete(&kind, &id)).await
 }
 
 /// Claude 구독 사용량 + 로그인 계정(`~/.claude.json`). 키체인 읽기는 `PlanUsageClient` 안에서 `spawn_blocking`.

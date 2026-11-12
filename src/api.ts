@@ -150,9 +150,37 @@ export interface Providers {
   apiKeys: string[];
 }
 export type ApiProvider = "anthropic" | "openai" | "gemini";
-/** 키체인 계정별 저장 여부 — 값은 오지 않는다. */
+/** 공급원별 키 저장 여부 — `listCredentials`에서 만든다. */
 export type KeyState = "stored" | "missing" | "error";
-export type KeychainStatus = Record<ApiProvider | "ieum-session", KeyState>;
+export type KeychainStatus = Record<ApiProvider, KeyState>;
+
+// credentials.rs — 키 값은 오지 않는다(끝 4자만).
+export interface ApiKeyMeta {
+  id: string;
+  label: string;
+  isDefault: boolean;
+  createdAt: string;
+  last4: string;
+}
+export interface CliAccountMeta {
+  id: string;
+  label: string;
+  isDefault: boolean;
+  createdAt: string;
+  email: string | null;
+}
+export interface CredentialsView {
+  apiKeys: Record<ApiProvider, ApiKeyMeta[]>;
+  claudeAccounts: CliAccountMeta[];
+  codexAccounts: CliAccountMeta[];
+  keychainError: string | null;
+}
+export type CredentialKind = ApiProvider | "claude" | "codex";
+
+export const keyStates = (v: CredentialsView): KeychainStatus => {
+  const state = (p: ApiProvider): KeyState => (v.apiKeys[p]?.length ? "stored" : v.keychainError ? "error" : "missing");
+  return { anthropic: state("anthropic"), openai: state("openai"), gemini: state("gemini") };
+};
 
 // web/* — 오류는 `{code, message?}`.
 export interface WebError {
@@ -255,6 +283,8 @@ export interface UsageSummary {
   totalOutput: number;
   unpricedCalls: number;
   bySource: { source: string; input: number; output: number; usd: number | null }[];
+  /** 공급원 + 키·계정 id. 옛 기록은 API `default`, 구독 `system`. */
+  byCredential: { source: string; credential: string; input: number; output: number; usd: number | null }[];
   byWorkflow: { workflowId: string; input: number; output: number; usd: number | null }[];
   byDay: { date: string; usd: number; input: number; output: number }[];
   asOf: string;
@@ -288,9 +318,12 @@ export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (s: Settings) => invoke<void>("set_settings", { s }),
   detectProviders: () => invoke<Providers>("detect_providers"),
-  keychainStatus: () => invoke<KeychainStatus>("keychain_status"),
-  setApiKey: (provider: ApiProvider, key: string) => invoke<void>("set_api_key", { provider, key }),
-  deleteApiKey: (provider: ApiProvider) => invoke<void>("delete_api_key", { provider }),
+  listCredentials: () => invoke<CredentialsView>("list_credentials"),
+  /** 첫 키면 기본. */
+  addApiKey: (provider: ApiProvider, label: string, key: string) => invoke<ApiKeyMeta>("add_api_key", { provider, label, key }),
+  renameCredential: (kind: CredentialKind, id: string, label: string) => invoke<void>("rename_credential", { kind, id, label }),
+  setDefaultCredential: (kind: CredentialKind, id: string) => invoke<void>("set_default_credential", { kind, id }),
+  deleteCredential: (kind: CredentialKind, id: string) => invoke<void>("delete_credential", { kind, id }),
   webLogin: (email: string, password: string) => invoke<WebAccount>("web_login", { email, password }),
   webLogout: () => invoke<void>("web_logout"),
   webAccount: () => invoke<WebAccount | null>("web_account"),

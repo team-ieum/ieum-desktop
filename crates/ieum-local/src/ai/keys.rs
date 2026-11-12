@@ -1,5 +1,5 @@
 //! API 키 저장 — macOS 키체인(`keyring`). 서비스 `com.ieum.desktop`, 계정 `vault` 항목 하나에
-//! JSON `{ "<이름>": "<값>" }`로 모은다. 이름 = `<anthropic|openai|gemini>.<계정 키>`·`ieum-session`
+//! JSON `{ "<이름>": "<값>" }`로 모은다. 이름 = `<anthropic|openai|gemini>.<계정 키>[.<키 id>]`·`ieum-session`
 //! (범위 없는 이름은 v0.1.0 옛 키 — 옮기기 전용). 이름마다 따로였던 옛 항목은 첫 읽기 때 `vault`로 옮긴다.
 //! 키는 `ApiKey`로만 들고 다닌다 — `Debug`가 가린다.
 
@@ -261,8 +261,10 @@ impl ScopedKeys {
         }
     }
 
+    /// 이 계정의 전체 이름(`anthropic.<계정 키>[.<키 id>]`)은 그대로 — 다른 계정 이름은 뒤에 계정 키가 붙어 거부된다.
     fn name(&self, account: &str) -> String {
-        if account == SESSION_ACCOUNT {
+        let own = account.split('.').nth(1) == Some(self.key16.as_str());
+        if account == SESSION_ACCOUNT || own {
             account.to_string()
         } else {
             format!("{account}.{}", self.key16)
@@ -317,14 +319,24 @@ pub fn migrate_legacy_keys(keys: &dyn KeyStore, key16: &str) -> Result<(), KeyEr
     delete_legacy_keys(keys)
 }
 
-/// 허용 이름: `ACCOUNTS`, `SESSION_ACCOUNT`, `<ACCOUNTS 하나>.<16자 소문자 hex>`.
+/// 허용 이름: `ACCOUNTS`, `SESSION_ACCOUNT`, `<ACCOUNTS 하나>.<16자 소문자 hex>`,
+/// `<ACCOUNTS 하나>.<16자 소문자 hex>.<8자 소문자 hex>`(키 여러 개).
 fn valid_name(name: &str) -> bool {
     if ACCOUNTS.contains(&name) || name == SESSION_ACCOUNT {
         return true;
     }
-    name.split_once('.').is_some_and(|(acc, key)| {
-        ACCOUNTS.contains(&acc)
-            && key.len() == 16
-            && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
-    })
+    let hex = |s: &str, n: usize| {
+        s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    };
+    let mut parts = name.split('.');
+    let (Some(acc), Some(key)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    ACCOUNTS.contains(&acc)
+        && hex(key, 16)
+        && match (parts.next(), parts.next()) {
+            (None, _) => true,
+            (Some(id), None) => hex(id, 8),
+            _ => false,
+        }
 }

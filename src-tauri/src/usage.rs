@@ -19,6 +19,17 @@ pub struct SourceUsage {
     pub usd: Option<f64>,
 }
 
+/// 공급원 + 키·계정 id 묶음.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialUsage {
+    pub source: String,
+    pub credential: String,
+    pub input: u64,
+    pub output: u64,
+    pub usd: Option<f64>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowUsage {
@@ -48,6 +59,8 @@ pub struct UsageSummary {
     /// 값을 못 매긴 호출 수(구독 CLI·표에 없는 모델).
     pub unpriced_calls: u64,
     pub by_source: Vec<SourceUsage>,
+    /// 옛 기록(키·계정 id 없음)은 API면 `default`, 구독이면 `system`.
+    pub by_credential: Vec<CredentialUsage>,
     /// 예상 금액 큰 순.
     pub by_workflow: Vec<WorkflowUsage>,
     /// 날짜 순, 사용량 있는 날만.
@@ -84,8 +97,9 @@ pub fn summarize<Tz: TimeZone>(
         as_of: table.as_of.clone(),
         ..Default::default()
     };
-    let (mut src, mut wf, mut day) = (
+    let (mut src, mut cred, mut wf, mut day) = (
         BTreeMap::<String, Acc>::new(),
+        BTreeMap::<(String, String), Acc>::new(),
         BTreeMap::<String, Acc>::new(),
         BTreeMap::<String, Acc>::new(),
     );
@@ -112,6 +126,17 @@ pub fn summarize<Tz: TimeZone>(
             s.total_usd += usd.unwrap_or(0.0);
             s.total_input += input;
             s.total_output += output;
+            let id = u.credential.unwrap_or_else(|| {
+                let legacy = if u.source.starts_with("cli:") {
+                    "system"
+                } else {
+                    "default"
+                };
+                legacy.into()
+            });
+            cred.entry((u.source.clone(), id))
+                .or_default()
+                .add(input, output, usd);
             src.entry(u.source).or_default().add(input, output, usd);
             wf.entry(r.workflow_id.clone())
                 .or_default()
@@ -123,6 +148,16 @@ pub fn summarize<Tz: TimeZone>(
         .into_iter()
         .map(|(source, a)| SourceUsage {
             source,
+            input: a.input,
+            output: a.output,
+            usd: a.usd,
+        })
+        .collect();
+    s.by_credential = cred
+        .into_iter()
+        .map(|((source, credential), a)| CredentialUsage {
+            source,
+            credential,
             input: a.input,
             output: a.output,
             usd: a.usd,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type KeychainStatus } from "../api";
+import { api, keyStates, type KeychainStatus } from "../api";
 import symbol from "../assets/symbol.png";
 import { t, type Key } from "../i18n";
 import { BUTTON, PRIMARY } from "../screens/Editor";
@@ -19,7 +19,7 @@ function AiStep() {
   const { plans, refresh: refreshPlan } = usePlans();
   const [keychain, setKeychain] = useState<KeychainStatus | null>(null);
   const refresh = useCallback(() => {
-    api.keychainStatus().then(setKeychain, () => {});
+    api.listCredentials().then((v) => setKeychain(keyStates(v)), () => {});
   }, []);
   useEffect(refresh, [refresh]);
   return (

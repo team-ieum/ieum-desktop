@@ -26,6 +26,7 @@ fn usage(source: &str, model: &str, input: u64, output: u64) -> AiUsage {
         output_tokens: output,
         cache_read_tokens: None,
         cache_write_tokens: None,
+        credential: None,
     }
 }
 

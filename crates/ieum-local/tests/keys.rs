@@ -105,11 +105,53 @@ fn entry_rejects_unknown_scoped_names() {
         "anthropic.AAAAAAAAAAAAAAAA",
         "ieum-session.aaaaaaaaaaaaaaaa",
         "anthropic.",
+        "anthropic.aaaaaaaaaaaaaaaa.0123abcd9",
+        "anthropic.aaaaaaaaaaaaaaaa.0123ABCD",
+        "anthropic.aaaaaaaaaaaaaaaa.",
+        "anthropic.aaaaaaaaaaaaaaaa.default",
+        "ieum-session.aaaaaaaaaaaaaaaa.0123abcd",
     ] {
         assert!(vault.get(name).is_err(), "{name}");
         assert!(vault.set(name, "k").is_err(), "{name}");
         assert!(vault.delete(name).is_err(), "{name}");
     }
+    // 키 여러 개: `<공급자>.<계정 키>.<키 id 8자 hex>`.
+    vault
+        .set("anthropic.aaaaaaaaaaaaaaaa.0123abcd", "sk-1")
+        .unwrap();
+    assert_eq!(
+        vault
+            .get("anthropic.aaaaaaaaaaaaaaaa.0123abcd")
+            .unwrap()
+            .as_deref(),
+        Some("sk-1")
+    );
+}
+
+#[test]
+fn scoped_keys_pass_own_full_names() {
+    let inner = Arc::new(FakeKeys::default());
+    let a = ScopedKeys::new(inner.clone(), A);
+    a.set("anthropic.aaaaaaaaaaaaaaaa.0123abcd", "sk-a1")
+        .unwrap();
+    assert_eq!(
+        inner
+            .get("anthropic.aaaaaaaaaaaaaaaa.0123abcd")
+            .unwrap()
+            .as_deref(),
+        Some("sk-a1")
+    );
+    // 다른 계정 이름은 그대로 통과시키지 않는다.
+    a.get("anthropic.bbbbbbbbbbbbbbbb.0123abcd").unwrap();
+    assert!(
+        !inner
+            .0
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|k| k.starts_with("anthropic.bbbb"))
+    );
+    assert_eq!(a.get("anthropic.bbbbbbbbbbbbbbbb.0123abcd").unwrap(), None);
 }
 
 /// 원시 키체인 가짜: 항목 맵 + 읽기 횟수 + 다음 N번 읽기/vault 쓰기 실패.

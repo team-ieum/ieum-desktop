@@ -11,6 +11,7 @@ const SUMMARY: UsageSummary = {
   totalOutput: 23_000,
   unpricedCalls: 0,
   bySource: [{ source: "anthropic", input: 100_000, output: 23_000, usd: 1.85 }],
+  byCredential: [{ source: "anthropic", credential: "default", input: 100_000, output: 23_000, usd: 1.85 }],
   byWorkflow: [{ workflowId: "w1", input: 100_000, output: 23_000, usd: 1.85 }],
   byDay: [],
   asOf: "2026-11-01",

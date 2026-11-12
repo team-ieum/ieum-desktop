@@ -11,12 +11,14 @@ import { SettingsShell } from "./SettingsShell";
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.2.0") }));
 
 const ACCOUNT = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" };
+const OPENAI_KEY = { id: "0123abcd", label: "기본", isDefault: true, createdAt: "", last4: "1234" };
+const creds = (openai: (typeof OPENAI_KEY)[]) => ({ apiKeys: { anthropic: [], openai, gemini: [] }, claudeAccounts: [], codexAccounts: [], keychainError: null });
 
 beforeAll(() => {
   setLang("ko");
   vi.spyOn(api, "getSettings").mockResolvedValue({ language: "ko", autostart: false, firstRunDone: true, serverUrl: "", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true });
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [{ id: "claude", path: "/usr/local/bin/claude", version: "2.1.0" }], apiKeys: [] });
-  vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "stored" });
+  vi.spyOn(api, "listCredentials").mockResolvedValue(creds([]));
   vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
   vi.spyOn(api, "onOpenTarget").mockResolvedValue(() => {});
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
@@ -108,10 +110,10 @@ test("subscription_card_shows_email_and_windows", async () => {
 
 test("api_key_card_save_and_delete", async () => {
   let finish = () => {};
-  const setKey = vi.spyOn(api, "setApiKey").mockReturnValue(new Promise<void>((r) => (finish = r)));
-  const del = vi.spyOn(api, "deleteApiKey").mockResolvedValue();
-  const keychain = vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "stored", gemini: "missing", "ieum-session": "stored" });
-  onTestFinished(() => void keychain.mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "stored" }));
+  const setKey = vi.spyOn(api, "addApiKey").mockReturnValue(new Promise((r) => (finish = () => r(OPENAI_KEY))));
+  const del = vi.spyOn(api, "deleteCredential").mockResolvedValue();
+  const keychain = vi.spyOn(api, "listCredentials").mockResolvedValue(creds([OPENAI_KEY]));
+  onTestFinished(() => void keychain.mockResolvedValue(creds([])));
   await renderShell();
 
   const anthropic = card("Anthropic API");
@@ -120,7 +122,7 @@ test("api_key_card_save_and_delete", async () => {
   const key = anthropic.getByLabelText("Anthropic API 키") as HTMLInputElement;
   await act(async () => fireEvent.change(key, { target: { value: "sk-secret" } }));
   await act(async () => fireEvent.click(anthropic.getByRole("button", { name: "저장" })));
-  expect(setKey).toHaveBeenCalledWith("anthropic", "sk-secret");
+  expect(setKey).toHaveBeenCalledWith("anthropic", "기본", "sk-secret");
   // 저장이 끝나기 전에 이미 비어 있다 — 키를 상태에 남기지 않는다.
   expect(key.value).toBe("");
   await act(async () => finish());
@@ -128,7 +130,7 @@ test("api_key_card_save_and_delete", async () => {
   const openai = card("OpenAI API");
   expect(openai.getByText("키체인에 저장됨")).toBeTruthy();
   await act(async () => fireEvent.click(openai.getByRole("button", { name: "삭제" })));
-  expect(del).toHaveBeenCalledWith("openai");
+  expect(del).toHaveBeenCalledWith("openai", "0123abcd");
 });
 
 test("settings_search_matches_section_desc_and_button", async () => {
