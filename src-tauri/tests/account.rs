@@ -15,7 +15,10 @@ fn account_key_is_stable_and_case_insensitive() {
     let a = account_key("https://green.kiacms.co.kr", "Me@X.com");
     assert_eq!(a, account_key("https://green.kiacms.co.kr", "me@x.com"));
     assert_eq!(a.len(), 16);
-    assert!(a.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    assert!(
+        a.chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    );
     assert_ne!(a, account_key("http://localhost:8080", "me@x.com"));
     assert_eq!(
         account_key("https://green.kiacms.co.kr", "me@x.com"),
@@ -141,7 +144,12 @@ fn concurrent_claims_have_one_owner() {
         assert_eq!(winners.len(), 1, "{results:?}");
         let loser = results.iter().find(|(_, won)| !won).unwrap().0;
         assert!(!account_root(&dir, loser).join("workflows").exists());
-        assert!(account_root(&dir, winners[0].0).join("workflows").join(WF).exists());
+        assert!(
+            account_root(&dir, winners[0].0)
+                .join("workflows")
+                .join(WF)
+                .exists()
+        );
     }
 }
 
@@ -168,7 +176,9 @@ fn concurrent_same_key_claims_both_succeed() {
         for h in handles {
             assert_eq!(h.join().unwrap(), Ok(true));
         }
-        let moved = fs::read_dir(account_root(&dir, A).join("workflows")).unwrap().count();
+        let moved = fs::read_dir(account_root(&dir, A).join("workflows"))
+            .unwrap()
+            .count();
         assert_eq!(moved, 50);
     }
 }
@@ -179,8 +189,7 @@ fn dangling_marker_link_is_error_not_loop() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path().to_path_buf();
     fs::create_dir_all(dir.join("accounts")).unwrap();
-    std::os::unix::fs::symlink("/nonexistent", dir.join("accounts").join(".legacy-owner"))
-        .unwrap();
+    std::os::unix::fs::symlink("/nonexistent", dir.join("accounts").join(".legacy-owner")).unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || tx.send(claim_legacy(&dir, A)).unwrap());
     let r = rx

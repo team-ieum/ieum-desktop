@@ -58,7 +58,7 @@ impl ApiKind {
         }
     }
 
-    fn official_url(self) -> &'static str {
+    pub(super) fn official_url(self) -> &'static str {
         match self {
             ApiKind::Anthropic => "https://api.anthropic.com",
             ApiKind::OpenAi => "https://api.openai.com",

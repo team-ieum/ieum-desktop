@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ieum_local::WatchTiming;
+use ieum_local::ai::keys::{ScopedKeys, migrate_legacy_keys};
 use ieum_local::ai::{AiRunner, KeyStore};
 
 use crate::account::{AccountId, account_key, account_root, claim_legacy};
@@ -25,7 +26,7 @@ pub struct BaseDeps {
     pub settings: Store,
     pub home: PathBuf,
     pub trash_dir: PathBuf,
-    /// 키 저장소(운영 = 키체인). Task 3에서 계정 범위로 감싼다.
+    /// 키 저장소(운영 = 키체인). 계정마다 `ScopedKeys`로 감싸 AI 러너에 준다.
     pub keys: Arc<dyn KeyStore>,
     pub emit: Emit,
     pub timing: WatchTiming,
@@ -66,7 +67,7 @@ impl Active {
     }
 
     /// 같은 계정이 이미 활성이면 그대로 둔다(만료 뒤 재로그인). 다른 계정이면 그 감시를 멈추고 바꾼다.
-    /// 네트워크·키체인을 쓰지 않는다. tokio 런타임 안에서 부른다.
+    /// 네트워크를 쓰지 않고 키체인을 기다리지 않는다(옛 키 옮기기는 따로 돈다). tokio 런타임 안에서 부른다.
     pub async fn activate(&self, mut id: AccountId) -> Result<(), String> {
         id.server_url = validate_server_url(&id.server_url)?;
         let key = account_key(&id.server_url, &id.email);
@@ -77,11 +78,22 @@ impl Active {
         if let Some(old) = slot.current.take() {
             old.sup.stop();
         }
-        // 옮기기 실패(표시 파일 손상 등)는 로그인을 막지 않는다 — 옛 데이터는 그대로, 계정은 빈 상태로.
-        if let Err(e) = claim_legacy(&self.base.app_data, &key) {
-            eprintln!("[ieum] 옛 데이터를 옮기지 못했어요(그대로 둠): {e}");
-        }
         let b = &self.base;
+        // 옮기기 실패(표시 파일 손상 등)는 로그인을 막지 않는다 — 옛 데이터는 그대로, 계정은 빈 상태로.
+        match claim_legacy(&b.app_data, &key) {
+            // 키체인은 기다리지 않고 따로 돌린다 — setup의 block_on(메인 스레드)이 허용 창에 막히면 빈 화면.
+            // 주인 계정이면 활성화마다 다시 시도한다(옮긴 뒤엔 옛 항목이 없어 할 일 없음).
+            Ok(true) => {
+                let (keys, key) = (b.keys.clone(), key.clone());
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(e) = migrate_legacy_keys(keys.as_ref(), &key) {
+                        eprintln!("[ieum] 옛 API 키를 옮기지 못했어요(그대로 둠): {e}");
+                    }
+                });
+            }
+            Ok(false) => {}
+            Err(e) => eprintln!("[ieum] 옛 데이터를 옮기지 못했어요(그대로 둠): {e}"),
+        }
         let first_open = !slot.opened.contains(&key);
         let started = Supervisor::start_with(
             Deps {
@@ -89,7 +101,7 @@ impl Active {
                 app_data: b.app_data.clone(),
                 home: b.home.clone(),
                 trash_dir: b.trash_dir.clone(),
-                ai: (b.ai_factory)(b.keys.clone()),
+                ai: (b.ai_factory)(Arc::new(ScopedKeys::new(b.keys.clone(), &key))),
                 emit: b.emit.clone(),
                 timing: b.timing,
                 recheck: b.recheck,

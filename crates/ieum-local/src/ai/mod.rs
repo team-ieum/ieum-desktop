@@ -90,10 +90,18 @@ impl AiRunner {
 
     /// 구독 CLI(claude만 — `cli:codex`는 보류, `CliKind::Codex` 주석) + API 키 공급원 셋.
     pub fn new() -> Self {
+        Self::with_keys(Arc::new(Keychain))
+    }
+
+    /// `new()`와 같은 공급원, 키 저장소만 주입(계정 범위 키).
+    pub fn with_keys(keys: Arc<dyn KeyStore>) -> Self {
         let k = CliKind::Claude;
         let mut r = Self::empty().with_provider(k.id(), Arc::new(CliProvider::new(k)));
         for k in [ApiKind::Anthropic, ApiKind::OpenAi, ApiKind::Gemini] {
-            r = r.with_provider(k.id(), Arc::new(ApiProvider::new(k)));
+            r = r.with_provider(
+                k.id(),
+                Arc::new(ApiProvider::with(k, k.official_url(), keys.clone())),
+            );
         }
         r
     }

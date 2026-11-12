@@ -40,9 +40,8 @@ pub fn claim_legacy(app_data: &Path, key: &str) -> Result<bool, String> {
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let accounts = app_data.join("accounts");
     let marker = accounts.join(".legacy-owner");
-    let not_found = |r: &std::io::Result<fs::Metadata>| {
-        matches!(r, Err(e) if e.kind() == ErrorKind::NotFound)
-    };
+    let not_found =
+        |r: &std::io::Result<fs::Metadata>| matches!(r, Err(e) if e.kind() == ErrorKind::NotFound);
     // 표시는 hard_link로 배타적으로 만든다 — 동시 호출이어도 주인은 하나.
     let mut tries = 0;
     let owner = loop {
@@ -51,7 +50,10 @@ pub fn claim_legacy(app_data: &Path, key: &str) -> Result<bool, String> {
             Err(e) if e.kind() == ErrorKind::NotFound => {
                 tries += 1;
                 if tries > 3 {
-                    return Err(format!("{}: 주인 표시를 만들지 못했어요.", marker.display()));
+                    return Err(format!(
+                        "{}: 주인 표시를 만들지 못했어요.",
+                        marker.display()
+                    ));
                 }
                 fs::create_dir_all(&accounts).map_err(|e| err(&accounts, e))?;
                 let tmp = accounts.join(format!(".{}.tmp", crate::store::new_id()));
@@ -82,7 +84,10 @@ pub fn claim_legacy(app_data: &Path, key: &str) -> Result<bool, String> {
     };
     let owner = owner.trim();
     if !is_valid_key(owner) {
-        return Err(format!("{}: 내용이 잘못됐어요: {owner:?}", marker.display()));
+        return Err(format!(
+            "{}: 내용이 잘못됐어요: {owner:?}",
+            marker.display()
+        ));
     }
     if owner != key {
         return Ok(false);

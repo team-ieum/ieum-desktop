@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use ieum_desktop_lib::account::{AccountId, account_key, account_root};
-use ieum_desktop_lib::active::{Active, BaseDeps};
+use ieum_desktop_lib::active::{Active, AiFactory, BaseDeps};
 use ieum_desktop_lib::commands::save_screen_settings;
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{AppEvent, WatchState};
@@ -90,6 +90,16 @@ fn env() -> Env {
 }
 
 fn env_gated(gate: Option<Arc<Semaphore>>) -> Env {
+    env_with(
+        Arc::new(FakeKeys::default()),
+        Arc::new(move |_keys| {
+            let ai = FakeAi { gate: gate.clone() };
+            Arc::new(AiRunner::empty().with_provider("fake", Arc::new(ai)))
+        }),
+    )
+}
+
+fn env_with(keys: Arc<FakeKeys>, ai_factory: AiFactory) -> Env {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().canonicalize().unwrap();
     fs::create_dir_all(root.join("trash")).unwrap();
@@ -104,7 +114,7 @@ fn env_gated(gate: Option<Arc<Semaphore>>) -> Env {
         settings: settings.clone(),
         home: root.clone(),
         trash_dir: root.join("trash"),
-        keys: Arc::new(FakeKeys::default()),
+        keys,
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),
@@ -112,10 +122,9 @@ fn env_gated(gate: Option<Arc<Semaphore>>) -> Env {
             recent_window: Duration::from_secs(10),
         },
         recheck: Duration::from_secs(30),
-        ai_factory: Arc::new(move |_keys| {
+        ai_factory: Arc::new(move |keys| {
             counter.fetch_add(1, Ordering::SeqCst);
-            let ai = FakeAi { gate: gate.clone() };
-            Arc::new(AiRunner::empty().with_provider("fake", Arc::new(ai)))
+            ai_factory(keys)
         }),
     });
     Env {
@@ -271,6 +280,74 @@ async fn local_commands_need_account() {
     );
     assert_eq!(env.active.current().await, None);
     assert_eq!(env.active.account_key().await, None);
+}
+
+/// 옛 키는 첫 계정(A)으로 옮겨지고, B의 AI 노드는 A의 키를 못 써 "키 없음"으로 실패한다.
+#[tokio::test(flavor = "multi_thread")]
+async fn activate_runs_ai_with_account_keys() {
+    let inner = Arc::new(FakeKeys::default());
+    inner.set("anthropic", "sk-a").unwrap();
+    let given: Arc<Mutex<Vec<Arc<dyn KeyStore>>>> = Arc::default();
+    let g = given.clone();
+    let env = env_with(
+        inner.clone(),
+        Arc::new(move |keys| {
+            g.lock().unwrap().push(keys.clone());
+            Arc::new(AiRunner::with_keys(keys))
+        }),
+    );
+    let (a, b) = (acc("a@x.com"), acc("b@x.com"));
+    let ka = account_key(&a.server_url, &a.email);
+
+    env.active.activate(a.clone()).await.unwrap();
+    assert!(
+        wait_until(Duration::from_secs(5), || inner
+            .get(&format!("anthropic.{ka}"))
+            .unwrap()
+            .is_some())
+        .await
+    );
+    assert_eq!(inner.get("anthropic").unwrap(), None);
+    assert_eq!(
+        given.lock().unwrap()[0]
+            .get("anthropic")
+            .unwrap()
+            .as_deref(),
+        Some("sk-a")
+    );
+
+    env.active.activate(b.clone()).await.unwrap();
+    assert_eq!(given.lock().unwrap()[1].get("anthropic").unwrap(), None);
+    let inbox = env.dir("in");
+    let wf: Workflow = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": inbox}},
+            {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "api:anthropic", "prompt": "분류"}}
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "a"}]
+    }))
+    .unwrap();
+    env.active
+        .sup()
+        .await
+        .unwrap()
+        .save_workflow(stored(wf))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let store = env.account_store(&b);
+    let finished = || {
+        store
+            .list_runs(None)
+            .unwrap()
+            .first()
+            .is_some_and(|r| !r.finished_at.is_empty())
+    };
+    assert!(wait_until(Duration::from_secs(5), finished).await);
+    let run = store.list_runs(None).unwrap()[0].clone();
+    assert_eq!(run.status, RunStatus::Failed);
+    let detail = serde_json::to_string(&store.get_run(&run.run_id).unwrap()).unwrap();
+    assert!(detail.contains("API 키가 없어요"), "{detail}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

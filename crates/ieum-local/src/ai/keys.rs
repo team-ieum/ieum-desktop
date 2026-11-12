@@ -1,7 +1,9 @@
-//! API 키 저장 — macOS 키체인(`keyring`). 서비스 `com.ieum.desktop`, 계정 = `anthropic`|`openai`|`gemini`.
+//! API 키 저장 — macOS 키체인(`keyring`). 서비스 `com.ieum.desktop`, 계정 = `<anthropic|openai|gemini>.<계정 키>`
+//! (범위 없는 이름은 v0.1.0 옛 키 — 옮기기 전용).
 //! 키는 `ApiKey`로만 들고 다닌다 — `Debug`가 가린다.
 
 use std::fmt;
+use std::sync::Arc;
 
 const SERVICE: &str = "com.ieum.desktop";
 const ACCOUNTS: [&str; 3] = ["anthropic", "openai", "gemini"];
@@ -64,8 +66,72 @@ impl KeyStore for Keychain {
 #[error("{0}")]
 pub struct KeyError(pub String);
 
+/// 계정 하나의 키만 보는 저장소. `anthropic` → `anthropic.<계정 키>`. 세션은 한 번에 하나라 범위 없이 통과.
+pub struct ScopedKeys {
+    inner: Arc<dyn KeyStore>,
+    key16: String,
+}
+
+impl ScopedKeys {
+    pub fn new(inner: Arc<dyn KeyStore>, key16: &str) -> Self {
+        ScopedKeys {
+            inner,
+            key16: key16.to_string(),
+        }
+    }
+
+    fn name(&self, account: &str) -> String {
+        if account == SESSION_ACCOUNT {
+            account.to_string()
+        } else {
+            format!("{account}.{}", self.key16)
+        }
+    }
+}
+
+impl KeyStore for ScopedKeys {
+    fn get(&self, account: &str) -> Result<Option<String>, KeyError> {
+        self.inner.get(&self.name(account))
+    }
+    fn set(&self, account: &str, key: &str) -> Result<(), KeyError> {
+        self.inner.set(&self.name(account), key)
+    }
+    fn delete(&self, account: &str) -> Result<(), KeyError> {
+        self.inner.delete(&self.name(account))
+    }
+}
+
+/// v0.1.0의 범위 없는 API 키를 이 계정으로 옮긴다(이미 있으면 덮지 않음). 옛 항목은 지운다.
+/// 옛 데이터 주인 계정에서만 부른다. 다시 불러도 안전하다.
+pub fn migrate_legacy_keys(keys: &dyn KeyStore, key16: &str) -> Result<(), KeyError> {
+    let scoped = format!(".{key16}");
+    for name in ACCOUNTS {
+        let Some(old) = keys.get(name)? else {
+            continue;
+        };
+        let new = format!("{name}{scoped}");
+        if keys.get(&new)?.is_none() {
+            keys.set(&new, &old)?;
+        }
+        keys.delete(name)?;
+    }
+    Ok(())
+}
+
+/// 허용 이름: `ACCOUNTS`, `SESSION_ACCOUNT`, `<ACCOUNTS 하나>.<16자 소문자 hex>`.
+fn valid_name(name: &str) -> bool {
+    if ACCOUNTS.contains(&name) || name == SESSION_ACCOUNT {
+        return true;
+    }
+    name.split_once('.').is_some_and(|(acc, key)| {
+        ACCOUNTS.contains(&acc)
+            && key.len() == 16
+            && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
 fn entry(provider: &str) -> Result<keyring::Entry, KeyError> {
-    if !ACCOUNTS.contains(&provider) && provider != SESSION_ACCOUNT {
+    if !valid_name(provider) {
         return Err(KeyError(format!("알 수 없는 공급원이에요: {provider}")));
     }
     keyring::Entry::new(SERVICE, provider).map_err(|e| KeyError(format!("키체인 오류: {e}")))

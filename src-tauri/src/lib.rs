@@ -152,8 +152,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         emit,
         timing: WatchTiming::default(),
         recheck: Duration::from_secs(30),
-        // ponytail: 키 저장소는 아직 안 씀 — Task 3에서 계정 범위 키로 `AiRunner::with_keys`.
-        ai_factory: Arc::new(|_keys| Arc::new(AiRunner::new())),
+        ai_factory: Arc::new(|keys| Arc::new(AiRunner::with_keys(keys))),
     });
     // 네트워크와 무관하게 마지막 계정을 바로 활성화(오프라인 첫 화면). 실패해도 앱은 뜬다(관문).
     // block_on 안에서 키체인을 만지지 않는다 — activate는 파일만 다룬다.

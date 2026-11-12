@@ -6,12 +6,13 @@ use std::sync::Arc;
 
 use ieum_engine::{ValidationError, Workflow};
 use ieum_local::UndoReport;
+use ieum_local::ai::keys::ScopedKeys;
 use ieum_local::ai::{ApiKind, KeyStore, detect_clis};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 
-use crate::active::Active;
+use crate::active::{Active, NOT_SIGNED_IN};
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::supervisor::WorkflowEntry;
 use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
@@ -98,10 +99,22 @@ pub async fn undo_run(active: State<'_, Active>, run_id: String) -> Result<UndoR
     active.sup().await?.undo_run(&run_id)
 }
 
+/// 활성 계정 범위의 키 저장소. 로그인 전이면 `NOT_SIGNED_IN`.
+async fn account_keys(active: &Active, keys: &Keys) -> Result<Arc<dyn KeyStore>, String> {
+    let key16 = active
+        .account_key()
+        .await
+        .ok_or_else(|| NOT_SIGNED_IN.to_string())?;
+    Ok(Arc::new(ScopedKeys::new(keys.0.clone(), &key16)))
+}
+
 /// 구독 CLI는 claude만(codex·gemini 보류).
 #[tauri::command]
-pub async fn detect_providers(keys: State<'_, Keys>) -> Result<Providers, String> {
-    let keys = keys.0.clone();
+pub async fn detect_providers(
+    active: State<'_, Active>,
+    keys: State<'_, Keys>,
+) -> Result<Providers, String> {
+    let keys = account_keys(&active, &keys).await?;
     tauri::async_runtime::spawn_blocking(move || Providers {
         clis: detect_clis()
             .into_iter()
@@ -142,12 +155,13 @@ fn api_account(provider: &str) -> Result<&'static str, String> {
 // 키체인 허용 창을 기다리는 동안 화면이 굳는다(tests/commands_off_main.rs).
 #[tauri::command]
 pub async fn set_api_key(
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
     provider: String,
     key: String,
 ) -> Result<(), String> {
     let account = api_account(&provider)?;
-    let keys = keys.0.clone();
+    let keys = account_keys(&active, &keys).await?;
     tauri::async_runtime::spawn_blocking(move || keys.set(account, &key))
         .await
         .map_err(|e| e.to_string())?
@@ -155,9 +169,13 @@ pub async fn set_api_key(
 }
 
 #[tauri::command]
-pub async fn delete_api_key(keys: State<'_, Keys>, provider: String) -> Result<(), String> {
+pub async fn delete_api_key(
+    active: State<'_, Active>,
+    keys: State<'_, Keys>,
+    provider: String,
+) -> Result<(), String> {
     let account = api_account(&provider)?;
-    let keys = keys.0.clone();
+    let keys = account_keys(&active, &keys).await?;
     tauri::async_runtime::spawn_blocking(move || keys.delete(account))
         .await
         .map_err(|e| e.to_string())?
@@ -196,9 +214,10 @@ pub fn key_states(keys: &dyn KeyStore) -> BTreeMap<&'static str, KeyState> {
 
 #[tauri::command]
 pub async fn keychain_status(
+    active: State<'_, Active>,
     keys: State<'_, Keys>,
 ) -> Result<BTreeMap<&'static str, KeyState>, String> {
-    let keys = keys.0.clone();
+    let keys = account_keys(&active, &keys).await?;
     tauri::async_runtime::spawn_blocking(move || key_states(keys.as_ref()))
         .await
         .map_err(|e| e.to_string())
