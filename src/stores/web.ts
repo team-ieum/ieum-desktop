@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { api, type WebAccount, type WebError, type WebExecPayload, type WebNodeLog } from "../api";
+import { api, type AccountId, type WebError, type WebExecPayload, type WebNodeLog } from "../api";
 import { tDyn } from "../i18n";
 import type { NodeRunStatus } from "./runs";
 
@@ -88,7 +88,7 @@ export function webStatuses(logs: WebNodeLog[], live: WebLive): Record<string, N
   return merged;
 }
 
-const isWebError =(e: unknown): e is WebError => typeof e === "object" && e !== null && "code" in e;
+const isWebError = (e: unknown): e is WebError => typeof e === "object" && e !== null && "code" in e;
 
 /** `web_*` 오류(`{code, message?}`)는 사전 문구로, 그 밖(서버 주소 검증 등)은 Rust 문구 그대로. */
 export function webErrorText(e: unknown): string {
@@ -98,45 +98,56 @@ export function webErrorText(e: unknown): string {
 }
 
 interface WebState {
-  account: WebAccount | null;
-  /** 로그인 만료로 나왔다 — 설정의 계정 칸에 알린다. */
+  account: AccountId | null;
+  /** 로그인 만료(`AUTH_EXPIRED`) — 관문을 띄우지만 계정·감시는 그대로. */
   expired: boolean;
+  /** 서버에 안 닿는다(`NETWORK`·`SERVER`) — 관문으로 보내지 않는다. */
+  offline: boolean;
   load: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  /** `web_*` 호출을 감싼다 — `AUTH_EXPIRED`면 로그아웃 상태로(App이 로그인 화면으로 보낸다). */
+  /** `web_*` 호출을 감싼다 — 실패는 `expireIf`, 성공하면 온라인. */
   guard: <T>(p: Promise<T>) => Promise<T>;
-  /** 오류가 `AUTH_EXPIRED`면 로그아웃 상태로. */
   expireIf: (e: unknown) => void;
 }
 
 export const useWeb = create<WebState>((set, get) => ({
   account: null,
   expired: false,
+  offline: false,
   load: async () => {
     try {
-      set({ account: await api.webAccount() });
+      set({ account: await api.currentAccount() });
     } catch (e) {
-      console.error("[ieum] 이음 계정을 읽지 못했어요", e);
+      console.error("[ieum] 계정을 읽지 못했어요", e);
       set({ account: null });
     }
   },
   login: async (email, password) => {
-    set({ account: await api.webLogin(email, password), expired: false });
+    const a = await api.webLogin(email, password);
+    set({ account: { email: a.email, serverUrl: a.serverUrl }, expired: false, offline: false });
   },
   logout: async () => {
     try {
       await api.webLogout();
     } finally {
-      await get().load();
+      set({ account: null, expired: false });
     }
   },
   guard: (p) =>
-    p.catch((e: unknown) => {
-      get().expireIf(e);
-      throw e;
-    }),
+    p.then(
+      (v) => {
+        if (get().offline) set({ offline: false });
+        return v;
+      },
+      (e: unknown) => {
+        get().expireIf(e);
+        throw e;
+      },
+    ),
   expireIf: (e) => {
-    if (isWebError(e) && e.code === "AUTH_EXPIRED") set({ account: null, expired: true });
+    if (!isWebError(e)) return;
+    if (e.code === "AUTH_EXPIRED") set({ expired: true });
+    else if (e.code === "NETWORK" || e.code === "SERVER") set({ offline: true });
   },
 }));

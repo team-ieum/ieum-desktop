@@ -12,6 +12,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::account::AccountId;
 use crate::active::{Active, NOT_SIGNED_IN};
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::supervisor::WorkflowEntry;
@@ -291,6 +292,40 @@ fn be_client(active: &Active, keys: &Keys) -> Result<BeClient, WebError> {
     BeClient::new(&s.server_url, keys.0.clone())
 }
 
+/// 로그인하고 그 계정을 활성화한다. 활성화가 실패하면 로그인도 실패(문구에 경로·비밀 없음).
+pub async fn login_and_activate(
+    active: &Active,
+    client: &BeClient,
+    email: &str,
+    password: &str,
+) -> Result<WebAccount, WebError> {
+    let acc = client.login(email, password).await?;
+    let id = AccountId {
+        email: acc.email.clone(),
+        server_url: acc.server_url.clone(),
+    };
+    if let Err(e) = active.activate(id).await {
+        eprintln!("[ieum] 계정을 열지 못했어요: {e}");
+        return Err(WebError::Server("계정을 열지 못했어요".into()));
+    }
+    Ok(acc)
+}
+
+/// 명시적 로그아웃: 세션을 지우고(서버 실패여도) 감시를 멈춘다.
+pub async fn logout_and_deactivate(active: &Active, client: &BeClient) -> Result<(), WebError> {
+    let r = client.logout().await;
+    active.deactivate().await.map_err(WebError::Server)?;
+    r
+}
+
+/// 관문 판단용 — 활성 슬롯, 없으면 저장된 계정. 네트워크·키체인 안 씀.
+pub async fn account_of(active: &Active) -> Option<AccountId> {
+    match active.current().await {
+        Some(id) => Some(id),
+        None => active.settings().get_settings().ok()?.current_account,
+    }
+}
+
 /// 비밀번호는 BE로만 보내고 저장하지 않는다.
 #[tauri::command]
 pub async fn web_login(
@@ -299,7 +334,7 @@ pub async fn web_login(
     email: String,
     password: String,
 ) -> Result<WebAccount, WebError> {
-    be_client(&active, &keys)?.login(&email, &password).await
+    login_and_activate(&active, &be_client(&active, &keys)?, &email, &password).await
 }
 
 #[tauri::command]
@@ -309,7 +344,12 @@ pub async fn web_logout(
     watches: State<'_, Watches>,
 ) -> Result<(), WebError> {
     watches.clear();
-    be_client(&active, &keys)?.logout().await
+    logout_and_deactivate(&active, &be_client(&active, &keys)?).await
+}
+
+#[tauri::command]
+pub async fn current_account(active: State<'_, Active>) -> Result<Option<AccountId>, String> {
+    Ok(account_of(&active).await)
 }
 
 #[tauri::command]

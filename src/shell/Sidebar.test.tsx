@@ -57,3 +57,14 @@ test("recent_mixes_local_and_web_by_time", () => {
   expect(within(items[0]).getByText("내 PC")).toBeTruthy();
   expect(within(items[1]).getByText("웹")).toBeTruthy();
 });
+
+test("recent_shows_only_five_with_status_text", () => {
+  const recent = recentItems(
+    ["a", "b", "c", "d", "e", "f"].map((id, i) => local(id, `2026-11-0${i + 1}T00:00:00Z`)),
+    [],
+  );
+  expect(recent.map((r) => r.id)).toEqual(["f", "e", "d", "c", "b"]);
+  render(<Sidebar {...props} recent={recent} />);
+  expect(screen.getAllByRole("button", { name: /^local / })).toHaveLength(5);
+  expect(screen.getAllByText(/^(활성|일시정지|오류)$/)).toHaveLength(5);
+});

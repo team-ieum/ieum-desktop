@@ -122,6 +122,14 @@ export interface Settings {
   autostart: boolean;
   firstRunDone: boolean;
   serverUrl: string;
+  /** 로그인된(마지막 활성) 계정. 화면이 보내도 Rust가 저장값을 지킨다. */
+  currentAccount?: AccountId | null;
+  notificationsSeenAt?: string;
+}
+/** 계정 = 서버 + 이메일. */
+export interface AccountId {
+  email: string;
+  serverUrl: string;
 }
 
 // commands.rs
@@ -136,7 +144,16 @@ export type KeychainStatus = Record<ApiProvider | "ieum-session", KeyState>;
 
 // web/* — 오류는 `{code, message?}`.
 export interface WebError {
-  code: "AUTH_FAILED" | "AUTH_LOCKED" | "AUTH_EXPIRED" | "EXTERNAL_EXPIRED" | "NETWORK" | "SERVER";
+  code:
+    | "AUTH_FAILED"
+    | "AUTH_LOCKED"
+    | "AUTH_EXPIRED"
+    | "EXTERNAL_EXPIRED"
+    | "NETWORK"
+    | "SERVER"
+    | "EMAIL_TAKEN"
+    | "CODE_INVALID"
+    | "BAD_INPUT";
   message?: string;
 }
 export interface WebAccount {
@@ -210,6 +227,13 @@ export const api = {
   webLogin: (email: string, password: string) => invoke<WebAccount>("web_login", { email, password }),
   webLogout: () => invoke<void>("web_logout"),
   webAccount: () => invoke<WebAccount | null>("web_account"),
+  /** 관문 판단용 활성(없으면 저장된) 계정 — 네트워크 안 씀. */
+  currentAccount: () => invoke<AccountId | null>("current_account"),
+  // 가입(Rust 명령은 Task 5).
+  sendCode: (email: string) => invoke<void>("web_send_code", { email }),
+  verifyCode: (email: string, code: string) => invoke<void>("web_verify_code", { email, code }),
+  register: (email: string, password: string, name: string) =>
+    invoke<WebAccount>("web_register", { email, password, name }),
   webListWorkflows: () => invoke<WebWorkflowSummary[]>("web_list_workflows"),
   webGetWorkflow: (id: string) => invoke<WebWorkflow>("web_get_workflow", { id }),
   webListExecutions: (workflowId: string, cursor: string | null) =>

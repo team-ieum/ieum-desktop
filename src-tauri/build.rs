@@ -18,6 +18,7 @@ const COMMANDS: &[&str] = &[
     "web_login",
     "web_logout",
     "web_account",
+    "current_account",
     "web_list_workflows",
     "web_get_workflow",
     "web_list_executions",

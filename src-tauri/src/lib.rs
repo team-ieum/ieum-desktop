@@ -221,6 +221,7 @@ pub fn run() {
             commands::web_login,
             commands::web_logout,
             commands::web_account,
+            commands::current_account,
             commands::web_list_workflows,
             commands::web_get_workflow,
             commands::web_list_executions,

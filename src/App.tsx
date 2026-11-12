@@ -2,6 +2,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type WebWorkflowSummary } from "./api";
+import { AuthScreen } from "./auth/AuthScreen";
 import { t } from "./i18n";
 import { BUTTON, Editor, PRIMARY } from "./screens/Editor";
 import { History } from "./screens/History";
@@ -40,6 +41,8 @@ export default function App() {
   const [view, setView] = useState<View>({ page: "local" });
   const account = useWeb((s) => s.account);
   const loadAccount = useWeb((s) => s.load);
+  const expired = useWeb((s) => s.expired);
+  const guard = useWeb((s) => s.guard);
   const autostart = useSettings((s) => s.settings?.autostart ?? false);
   const [banner, setBanner] = useState(() => !bannerClosed());
   const [collapsed, setCollapsed] = useState(false);
@@ -51,21 +54,18 @@ export default function App() {
   useEffect(() => {
     void loadSettings();
     void loadAccount();
-    void loadLocal();
     subscribeExecEvents();
     getVersion().then(setVersion, () => {});
-  }, [loadSettings, loadAccount, loadLocal]);
+  }, [loadSettings, loadAccount]);
 
-  // 최근 작업의 웹 몫 — 못 불러오면 내 PC만.
+  // 관문을 지나면(로그인한 계정의) 최근 작업을 읽는다. 웹 몫은 못 불러오면 내 PC만 —
+  // 만료면 guard가 관문으로, 오프라인이면 그대로.
+  const gated = account === null || expired;
   useEffect(() => {
-    if (!account) return setWeb([]);
-    api.webListWorkflows().then(setWeb, () => setWeb([]));
-  }, [account]);
-
-  // 로그아웃·로그인 만료(`AUTH_EXPIRED`)면 설정의 계정 칸(로그인 화면)으로 — 관문은 Task 7.
-  useEffect(() => {
-    if (!account && view.page === "web") setView({ page: "settings" });
-  }, [account, view.page]);
+    if (gated) return setWeb([]);
+    void loadLocal();
+    guard(api.webListWorkflows()).then(setWeb, () => setWeb([]));
+  }, [gated, guard, loadLocal]);
 
   const toList = () => setView({ page: "local" });
   const openEditor = (id: string | null) => setView({ page: "local", editor: id });
@@ -80,7 +80,7 @@ export default function App() {
   // ⌘N = 새 캔버스
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+      if (!gated && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
         e.preventDefault();
         newCanvas();
       }
@@ -90,6 +90,14 @@ export default function App() {
   });
 
   const navigate = (page: Page) => leave(() => setView({ page }));
+
+  // 관문: 로그인 전·만료면 로그인 화면만(만료면 이메일을 채운다). 오프라인은 관문으로 보내지 않는다.
+  if (gated)
+    return (
+      <div key={lang} className="h-full">
+        <AuthScreen key={account?.email ?? ""} initialEmail={account?.email} />
+      </div>
+    );
 
   return (
     // 언어가 바뀌면 화면 전체를 다시 그린다.

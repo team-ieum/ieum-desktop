@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import App from "./App";
 import { api } from "./api";
+import { useWeb } from "./stores/web";
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.2.0") }));
 
@@ -23,12 +24,15 @@ beforeAll(() => {
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);
-  vi.spyOn(api, "webAccount").mockResolvedValue(ACCOUNT);
+  vi.spyOn(api, "currentAccount").mockResolvedValue(ACCOUNT);
   vi.spyOn(api, "webListWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [], apiKeys: [] });
   vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "missing" });
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useWeb.setState({ expired: false, offline: false });
+});
 
 test("leaving_editor_with_unsaved_changes_asks_in_app", async () => {
   await act(async () => {
@@ -78,4 +82,34 @@ test("shell_shows_header_crumb_and_new_canvas_opens_editor", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "대시보드" })));
   expect(screen.getByTestId("crumb").textContent).toBe("대시보드");
   expect(screen.getByRole("heading", { name: "대시보드" })).toBeTruthy();
+});
+
+test("gate_shows_auth_when_no_account", async () => {
+  vi.mocked(api.currentAccount).mockResolvedValueOnce(null);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByRole("button", { name: "로그인" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "대시보드" })).toBeNull();
+});
+
+test("offline_start_opens_app_without_gate", async () => {
+  vi.mocked(api.webListWorkflows).mockRejectedValueOnce({ code: "NETWORK" });
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByRole("button", { name: "대시보드" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "로그인" })).toBeNull();
+  expect(useWeb.getState().offline).toBe(true);
+});
+
+test("auth_expired_goes_to_login", async () => {
+  vi.mocked(api.webListWorkflows).mockRejectedValueOnce({ code: "AUTH_EXPIRED" });
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByRole("button", { name: "로그인" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "대시보드" })).toBeNull();
+  expect((screen.getByLabelText("이메일") as HTMLInputElement).value).toBe(ACCOUNT.email);
+  expect(screen.getByText("로그인이 만료됐어요. 다시 로그인해 주세요.")).toBeTruthy();
 });

@@ -136,6 +136,7 @@ export function Sidebar({
                     )}
                   </span>
                 </span>
+                <span className="sr-only">{t(`nav.dot.${r.dot}`)}</span>
               </button>
             ))}
           </div>

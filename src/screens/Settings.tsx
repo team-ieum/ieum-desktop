@@ -1,5 +1,5 @@
-import { LogIn, LogOut, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { LogOut, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, type ApiProvider, type KeychainStatus, type KeyState, type Providers, type Settings as SettingsT } from "../api";
 import { INPUT } from "../editor/ConfigPanel";
 import { t } from "../i18n";
@@ -48,21 +48,12 @@ const Err = ({ msg }: { msg: string | null }) => (msg ? <p className="typo-capti
 export function Settings() {
   const settings = useSettings((s) => s.settings);
   const save = useSettings((s) => s.save);
-  const { account, expired, login, logout, load: loadAccount } = useWeb();
+  const { account, logout } = useWeb();
   const [providers, setProviders] = useState<Providers | null>(null);
   const [keychain, setKeychain] = useState<KeychainStatus | null>(null);
   const [keys, setKeys] = useState(EMPTY_KEYS);
   const [keyError, setKeyError] = useState<string | null>(null);
   const [generalError, setGeneralError] = useState<string | null>(null);
-  const [serverUrl, setServerUrl] = useState(settings?.serverUrl ?? "");
-  // 설정을 늦게 읽어도 입력란을 채운다.
-  const savedServerUrl = settings?.serverUrl;
-  useEffect(() => {
-    if (savedServerUrl !== undefined) setServerUrl(savedServerUrl);
-  }, [savedServerUrl]);
-  const [serverError, setServerError] = useState<string | null>(null);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -102,38 +93,6 @@ export function Settings() {
       setKeyError(String(e));
     }
     refresh();
-  };
-
-  // 서버 주소 허용 목록 밖이면 Rust 오류 문구 그대로.
-  const saveServer = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!settings) return;
-    setServerError(null);
-    try {
-      await save({ ...settings, serverUrl: serverUrl.trim() });
-      useWeb.setState({ expired: false });
-      await loadAccount();
-    } catch (err) {
-      setServerError(String(err));
-    }
-    refresh();
-  };
-
-  const doLogin = async (e: FormEvent) => {
-    e.preventDefault();
-    const pw = password;
-    setPassword("");
-    setLoginError(null);
-    setBusy(true);
-    try {
-      await login(email.trim(), pw);
-      setEmail("");
-    } catch (err) {
-      setLoginError(webErrorText(err));
-    } finally {
-      setBusy(false);
-      refresh();
-    }
   };
 
   const doLogout = async () => {
@@ -233,17 +192,6 @@ export function Settings() {
       </Section>
 
       <Section title={t("settings.account")}>
-        <form className="flex items-end gap-2" onSubmit={saveServer}>
-          <label className="flex min-w-0 flex-1 flex-col gap-1 typo-caption1_semibold text-neutral-700">
-            {t("settings.server")}
-            <input className={INPUT} value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} />
-          </label>
-          <button type="submit" className={BUTTON} disabled={!settings || !serverUrl.trim() || serverUrl.trim() === settings.serverUrl}>
-            {t("common.save")}
-          </button>
-        </form>
-        <Err msg={serverError} />
-
         {account ? (
           <div className="flex items-center gap-3">
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -256,29 +204,7 @@ export function Settings() {
               {t("settings.logout")}
             </button>
           </div>
-        ) : (
-          <form className="flex flex-col gap-2" onSubmit={doLogin}>
-            {expired && <p className="typo-caption1_semibold text-danger-700">{t("web.err.AUTH_EXPIRED")}</p>}
-            <label className="flex flex-col gap-1 typo-caption1_semibold text-neutral-700">
-              {t("settings.email")}
-              <input type="email" autoComplete="username" className={INPUT} value={email} onChange={(e) => setEmail(e.target.value)} />
-            </label>
-            <label className="flex flex-col gap-1 typo-caption1_semibold text-neutral-700">
-              {t("settings.password")}
-              <input
-                type="password"
-                autoComplete="current-password"
-                className={INPUT}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </label>
-            <button type="submit" className={`${PRIMARY} self-start`} disabled={busy || !email.trim() || !password}>
-              <LogIn size={16} aria-hidden="true" />
-              {t("settings.login")}
-            </button>
-          </form>
-        )}
+        ) : null}
         <Err msg={loginError} />
       </Section>
     </div>

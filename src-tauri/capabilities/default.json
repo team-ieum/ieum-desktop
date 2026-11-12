@@ -25,6 +25,7 @@
     "allow-web-login",
     "allow-web-logout",
     "allow-web-account",
+    "allow-current-account",
     "allow-web-list-workflows",
     "allow-web-get-workflow",
     "allow-web-list-executions",
