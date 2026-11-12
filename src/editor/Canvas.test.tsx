@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { Position, ReactFlowProvider } from "@xyflow/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Workflow } from "../api";
+import { setLang } from "../i18n";
+import { AnimatedEdge } from "./AnimatedEdge";
 import { Canvas } from "./Canvas";
 
 // ReactFlow는 진짜로 그리되, Canvas가 넘긴 핸들러를 꺼내 직접 부를 수 있게 한다.
@@ -14,10 +17,13 @@ vi.mock("@xyflow/react", async (orig) => {
       probe.props = p;
       return <m.ReactFlow {...p} />;
     },
+    // jsdom에선 엣지 라벨 층이 없다 — 보일 때 그 자리에 그린다.
+    EdgeToolbar: ({ isVisible, children }: { isVisible?: boolean; children: React.ReactNode }) => (isVisible ? <div>{children}</div> : null),
   };
 });
 
 beforeAll(() => {
+  setLang("ko");
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
@@ -80,7 +86,7 @@ test("canvas_read_only_blocks_edits", async () => {
 test("canvas_fit_view_caps_zoom", () => {
   setup(false);
   expect(probe.props.fitView).toBe(true);
-  expect(probe.props.fitViewOptions?.maxZoom).toBe(1);
+  expect(probe.props.fitViewOptions).toEqual({ padding: 0.24, minZoom: 0.78, maxZoom: 1 });
 });
 
 test("canvas_read_only_callbacks_guarded", async () => {
@@ -121,4 +127,58 @@ test("delete_node_and_unrelated_edge_together", async () => {
   const last: Workflow = onChange.mock.lastCall![0];
   expect(last.nodes.map((n) => n.id)).toEqual(["m", "x"]);
   expect(last.edges).toEqual([]);
+});
+
+test("node_card_shows_step_numbers", () => {
+  const three: Workflow = {
+    nodes: [...wf.nodes, { id: "x", event: "local.ai", type: "AI", position: { x: 600, y: 0 }, config: {} }],
+    edges: [],
+  };
+  const { container } = render(
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas workflow={three} />
+    </div>,
+  );
+  const steps = [...container.querySelectorAll("[data-step]")].map((e) => e.getAttribute("data-step"));
+  expect(steps).toEqual(["1", "2", "3"]);
+});
+
+test("ai_node_shows_model_pill", () => {
+  const ai = (config: Record<string, unknown>): Workflow => ({
+    nodes: [{ id: "a", event: "local.ai", type: "AI", position: { x: 0, y: 0 }, config }],
+    edges: [],
+  });
+  const r = render(<Canvas workflow={ai({ provider: "api:anthropic", model: "claude-sonnet-5-5" })} />);
+  expect(screen.getByText("claude-sonnet-5-5")).toBeTruthy();
+  r.rerender(<Canvas workflow={ai({ provider: "api:openai" })} />);
+  expect(screen.getByText("모델 정보 없음")).toBeTruthy();
+  r.rerender(<Canvas workflow={ai({ provider: "cli:claude", model: "x" })} />);
+  expect(screen.getByText("Claude (구독)")).toBeTruthy();
+});
+
+test("read_only_hides_edge_delete", () => {
+  const edge = (readOnly: boolean) => (
+    <ReactFlowProvider>
+      <svg>
+        <AnimatedEdge
+          {...({} as Parameters<typeof AnimatedEdge>[0])}
+          id="e"
+          source="t"
+          target="m"
+          sourceX={0}
+          sourceY={0}
+          targetX={100}
+          targetY={0}
+          sourcePosition={Position.Right}
+          targetPosition={Position.Left}
+          selected
+          data={{ readOnly }}
+        />
+      </svg>
+    </ReactFlowProvider>
+  );
+  const r = render(edge(false));
+  expect(screen.getByRole("button", { name: "연결 삭제" })).toBeTruthy();
+  r.rerender(edge(true));
+  expect(screen.queryByRole("button", { name: "연결 삭제" })).toBeNull();
 });

@@ -65,10 +65,14 @@ function Header({
  * (사이드바 최근 작업이 바로 열 수 있게), 실행 보기만 여기서. 로그인 만료는 `guard`가 App을 관문으로 돌린다.
  */
 export function Web({ workflow, onOpen }: { workflow?: string; onOpen: (id: string | null) => void }) {
-  const [execution, setExecution] = useState<WebExecution | null>(null);
+  // 실행은 그 워크플로우에 묶는다 — 다른 워크플로우나 목록으로 가면 풀린다.
+  const [opened, setOpened] = useState<{ workflow: string; execution: WebExecution } | null>(null);
+  if (opened && opened.workflow !== workflow) setOpened(null);
+  const execution = opened && opened.workflow === workflow ? opened.execution : null;
   if (workflow && execution)
-    return <WebExecutionView workflowId={workflow} execution={execution} onBack={() => setExecution(null)} />;
-  if (workflow) return <WebWorkflowView id={workflow} onBack={() => onOpen(null)} onOpenExecution={setExecution} />;
+    return <WebExecutionView workflowId={workflow} execution={execution} onBack={() => setOpened(null)} />;
+  if (workflow)
+    return <WebWorkflowView id={workflow} onBack={() => onOpen(null)} onOpenExecution={(x) => setOpened({ workflow, execution: x })} />;
   return <WebList onOpen={onOpen} />;
 }
 

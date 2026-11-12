@@ -62,6 +62,7 @@ export function ListToolbar({
           <select
             value={sort}
             onChange={(e) => onSort(e.target.value as Sort)}
+            aria-label={t("list.sort")}
             className="h-10 appearance-none rounded-[10px] border border-neutral-200 bg-white pl-3 pr-8 typo-body2_medium text-neutral-700 outline-none"
           >
             <option value="updated">{t("list.sort.updated")}</option>

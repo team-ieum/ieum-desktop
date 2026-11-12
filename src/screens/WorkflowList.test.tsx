@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { api, type WfNode, type WorkflowEntry } from "../api";
 import { setLang } from "../i18n";
+import { saveView } from "../list/ListToolbar";
 import { WorkflowList } from "./WorkflowList";
 
 const wf = (id: string, name: string, events: string[]): WorkflowEntry => ({
@@ -57,4 +58,6 @@ test("list_view_toggle_survives_storage_error", async () => {
   expect(list.getAttribute("aria-pressed")).toBe("false");
   await act(async () => fireEvent.click(list));
   expect(list.getAttribute("aria-pressed")).toBe("true");
+  // 저장 실패는 삼킨다 — 핸들러 밖으로 던지지 않는다.
+  expect(() => saveView("grid")).not.toThrow();
 });

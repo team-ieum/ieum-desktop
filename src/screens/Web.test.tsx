@@ -82,3 +82,21 @@ test("web_executions_more_appends_and_unwatch_on_leave", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "뒤로" })));
   expect(unwatch).toHaveBeenCalledWith("e1");
 });
+
+test("web_execution_view_resets_when_workflow_changes", async () => {
+  vi.spyOn(api, "webListExecutions").mockResolvedValue({ content: [ex("e1", "SUCCESS")], hasNext: false, nextCursor: null });
+  const logs = vi.spyOn(api, "webExecutionLogs").mockResolvedValue([]);
+  const r = await act(async () => render(<Web workflow="w1" onOpen={() => {}} />));
+  await act(async () => fireEvent.click(screen.getByText("성공")));
+  expect(logs).toHaveBeenCalledWith("w1", "e1");
+  logs.mockClear();
+
+  // 실행 보기 중 다른 워크플로우를 열면 그 워크플로우 화면 — A의 실행을 B와 짝지어 부르지 않는다.
+  await act(async () => r.rerender(<Web workflow="w2" onOpen={() => {}} />));
+  expect(screen.getByRole("heading", { name: "실행 기록" })).toBeTruthy();
+  expect(logs).not.toHaveBeenCalledWith("w2", "e1");
+
+  // 돌아와도 예전 실행이 다시 열리지 않는다.
+  await act(async () => r.rerender(<Web workflow="w1" onOpen={() => {}} />));
+  expect(screen.getByRole("heading", { name: "실행 기록" })).toBeTruthy();
+});
