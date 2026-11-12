@@ -167,6 +167,9 @@ export interface WebWorkflowSummary {
   active: boolean;
   triggerType?: string | null;
   updatedAt?: string | null;
+  /** BE `WorkflowServiceType` 이름(`GOOGLE_DRIVE` 등). */
+  services?: string[] | null;
+  nodeCount?: number | null;
 }
 export interface WebWorkflow extends Workflow {
   id: string;
@@ -245,6 +248,8 @@ export const api = {
   webUnwatchExecution: (executionId: string) => invoke<void>("web_unwatch_execution", { executionId }),
   /** 서버 주소 + `/main`을 기본 브라우저로. */
   openWebEditor: () => invoke<void>("open_web_editor"),
+  /** 웹 이음의 그 워크플로우 화면을 기본 브라우저로(Rust 명령은 Task 5). */
+  openWebWorkflow: (id: string) => invoke<void>("open_web_workflow", { id }),
   /** 설치·사용 안내 문서를 기본 브라우저로(Rust 명령은 Task 5). */
   openHelp: () => invoke<void>("open_help"),
   onWebExecEvent: (cb: (p: WebExecPayload) => void): Promise<UnlistenFn> =>

@@ -1,8 +1,10 @@
-import { ArrowLeft, ExternalLink, Eye } from "lucide-react";
+import { ArrowLeft, ExternalLink, Eye, Globe } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type WebExecution, type WebNodeLog, type WebWorkflow, type WebWorkflowSummary } from "../api";
 import { Canvas, nodeTitle, StatusIcon } from "../editor/Canvas";
 import { locale, t, tDyn } from "../i18n";
+import { ListPage } from "../list/ListPage";
+import { webCard, WorkflowCard } from "../list/WorkflowCard";
 import { applyWebEvent, emptyWebLive, useWeb, webErrorText, webStatuses } from "../stores/web";
 import { BUTTON } from "./Editor";
 
@@ -58,28 +60,16 @@ function Header({
   );
 }
 
-type View = { kind: "list" } | { kind: "workflow"; id: string } | { kind: "execution"; workflowId: string; execution: WebExecution };
-
-/** 웹 이음 탭 — 읽기 전용. 로그인 만료는 `guard`가 App을 로그인 화면으로 돌린다. */
-export function Web() {
-  const [view, setView] = useState<View>({ kind: "list" });
-  if (view.kind === "workflow")
-    return (
-      <WebWorkflowView
-        id={view.id}
-        onBack={() => setView({ kind: "list" })}
-        onOpenExecution={(execution) => setView({ kind: "execution", workflowId: view.id, execution })}
-      />
-    );
-  if (view.kind === "execution")
-    return (
-      <WebExecutionView
-        workflowId={view.workflowId}
-        execution={view.execution}
-        onBack={() => setView({ kind: "workflow", id: view.workflowId })}
-      />
-    );
-  return <WebList onOpen={(id) => setView({ kind: "workflow", id })} />;
+/**
+ * 웹 이음 탭 — 읽기 전용. 목록↔워크플로우는 App의 View(`{page:"web", workflow}`)가 쥐고
+ * (사이드바 최근 작업이 바로 열 수 있게), 실행 보기만 여기서. 로그인 만료는 `guard`가 App을 관문으로 돌린다.
+ */
+export function Web({ workflow, onOpen }: { workflow?: string; onOpen: (id: string | null) => void }) {
+  const [execution, setExecution] = useState<WebExecution | null>(null);
+  if (workflow && execution)
+    return <WebExecutionView workflowId={workflow} execution={execution} onBack={() => setExecution(null)} />;
+  if (workflow) return <WebWorkflowView id={workflow} onBack={() => onOpen(null)} onOpenExecution={setExecution} />;
+  return <WebList onOpen={onOpen} />;
 }
 
 function WebList({ onOpen }: { onOpen: (id: string) => void }) {
@@ -91,43 +81,40 @@ function WebList({ onOpen }: { onOpen: (id: string) => void }) {
     guard(api.webListWorkflows()).then(setList, (e) => setError(webErrorText(e)));
   }, [guard]);
 
+  const fail = (e: unknown) => setError(webErrorText(e));
   return (
-    <div className="flex h-full flex-col">
-      <Header title={t("web.title")} onError={setError} />
-      <ErrorLine msg={error} />
-      <div className="mx-auto flex w-full max-w-4xl flex-col gap-2 p-6">
-        {!list ? (
-          !error && <p className="typo-body3_regular text-neutral-500">{t("common.loading")}</p>
-        ) : list.length === 0 ? (
-          <p className="rounded-brand-md border border-dashed border-neutral-300 bg-white p-8 text-center typo-body2_regular text-neutral-500">
-            {t("web.empty")}
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {list.map((w) => (
-              <li key={w.id}>
-                <button
-                  type="button"
-                  onClick={() => onOpen(w.id)}
-                  className="flex w-full items-center gap-3 rounded-brand-md border border-neutral-200 bg-white p-4 text-left hover:border-main-blue"
-                >
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="truncate typo-body2_bold text-neutral-800">{w.name}</span>
-                    {w.description && <span className="truncate typo-caption1_regular text-neutral-500">{w.description}</span>}
-                    {w.updatedAt && (
-                      <span className="typo-caption2_regular text-neutral-400">
-                        {t("list.updated")} {when(w.updatedAt)}
-                      </span>
-                    )}
-                  </span>
-                  <span className={`${PILL} border-neutral-300 bg-white text-neutral-600`}>{w.active ? t("web.active") : t("web.inactive")}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
+    <ListPage
+      title={t("web.title")}
+      subtitle={t("web.subtitle")}
+      actions={
+        <>
+          <span className="inline-flex h-7 items-center gap-1.5 rounded-full border border-main-light-blue bg-main-light-blue px-2.5 typo-caption1_semibold text-main-deep-blue">
+            <Eye className="size-3.5" aria-hidden="true" />
+            {t("web.viewOnly")}
+          </span>
+          <button
+            type="button"
+            onClick={() => void api.openWebEditor().catch(fail)}
+            className="inline-flex h-10 items-center gap-2 rounded-[10px] border border-neutral-200 bg-white px-4 typo-body2_semibold text-main-deep-blue shadow-[0_1px_2px_rgba(16,24,40,.04)] hover:bg-neutral-50"
+          >
+            <Globe className="size-4" aria-hidden="true" />
+            <span>{t("web.openWeb")}</span>
+          </button>
+        </>
+      }
+      banner={error && <p className="rounded-xl border border-danger-300 bg-danger-100 px-4 py-2 typo-caption1_semibold text-danger-700">{error}</p>}
+      // 오류면 빈 목록 대신 오류만 — 읽는 중 문구가 남지 않게 []로.
+      cards={list ? list.map(webCard) : error ? [] : null}
+      empty={error ? "" : t("web.empty")}
+      renderCard={(c) => (
+        <WorkflowCard
+          key={c.id}
+          data={c}
+          onOpen={() => onOpen(c.id)}
+          menu={[{ label: t("list.openOnWeb"), onSelect: () => void api.openWebWorkflow(c.id).catch(fail) }]}
+        />
+      )}
+    />
   );
 }
 

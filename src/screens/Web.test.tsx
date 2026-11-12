@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { api, type WebExecPayload } from "../api";
 import { setLang } from "../i18n";
@@ -24,6 +25,12 @@ beforeAll(() => {
 });
 afterEach(cleanup);
 
+/** App처럼 목록↔워크플로우를 위에서 쥔다. */
+function Harness() {
+  const [id, setId] = useState<string | null>(null);
+  return <Web workflow={id ?? undefined} onOpen={setId} />;
+}
+
 test("web_executions_more_appends_and_unwatch_on_leave", async () => {
   const list = vi
     .spyOn(api, "webListExecutions")
@@ -40,9 +47,9 @@ test("web_executions_more_appends_and_unwatch_on_leave", async () => {
   const unwatch = vi.spyOn(api, "webUnwatchExecution").mockResolvedValue();
 
   await act(async () => {
-    render(<Web />);
+    render(<Harness />);
   });
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: /흐름/ })));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "흐름" })));
 
   // 웹 편집 열기 실패는 화면에.
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "웹에서 수정하기" })));

@@ -29,7 +29,7 @@ export function recentItems(local: WorkflowEntry[], web: WebWorkflowSummary[]): 
 const DOT = { active: "bg-[#006A4E]", paused: "bg-[#959595]", error: "bg-[#EC2D30]" };
 
 /** "방금"·"4시간 전"·"어제" */
-function ago(iso: string): string {
+export function ago(iso: string): string {
   const ms = time(iso);
   if (!ms) return "";
   const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: "auto" });
