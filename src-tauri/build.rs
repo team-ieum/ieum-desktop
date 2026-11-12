@@ -35,6 +35,8 @@ const COMMANDS: &[&str] = &[
     "open_help",
     "open_web_workflow",
     "claude_plan_usage",
+    "codex_plan_usage",
+    "antigravity_plan_usage",
     "open_system_settings",
     "send_test_notification",
 ];

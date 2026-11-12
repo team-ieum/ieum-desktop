@@ -17,7 +17,7 @@ use serde_json::{Map, Value, json};
 use crate::paths::AllowedRoots;
 
 pub use api::{API_TIMEOUT, ApiKind, ApiProvider};
-pub use cli::{CliKind, CliProvider, DetectedCli, detect_clis, parse_stream};
+pub use cli::{CliKind, CliProvider, DetectedCli, detect_clis, parse_stream, shell_output};
 pub use content::{MAX_CHARS, MAX_PDF_BYTES, Skip, file_text, file_text_bounded, read_file_text};
 pub use keys::{ApiKey, KeyStore, Keychain};
 

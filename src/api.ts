@@ -260,9 +260,10 @@ export interface UsageSummary {
   asOf: string;
 }
 
-// plan_usage.rs(Task 15) — Claude 구독 창별 사용 비율.
+// plan_usage.rs(Claude)·sub_usage.rs(Codex·Antigravity) — 구독 연결 상태와 창별 사용 비율.
 export interface PlanWindow {
-  kind: "five_hour" | "seven_day" | "seven_day_opus";
+  /** Claude: five_hour·seven_day·seven_day_opus. Codex·Antigravity: session(5시간)·weekly. */
+  kind: "five_hour" | "seven_day" | "seven_day_opus" | "session" | "weekly";
   usedPct: number;
   resetsAt: string;
 }
@@ -270,6 +271,8 @@ export interface PlanUsage {
   state: "ok" | "unavailable" | "not_logged_in";
   windows: PlanWindow[];
   checkedAt: string;
+  /** 이 컴퓨터에 로그인된 구독 계정. 모르면 null. */
+  accountEmail: string | null;
 }
 
 export const api = {
@@ -334,4 +337,6 @@ export const api = {
   // Rust 명령은 다음 세션(Task 14·15) — 그 전엔 실패하고 화면은 빈 상태를 보인다.
   usageSummary: (range: UsageRange) => invoke<UsageSummary>("usage_summary", { range }),
   claudePlanUsage: () => invoke<PlanUsage>("claude_plan_usage"),
+  codexPlanUsage: () => invoke<PlanUsage>("codex_plan_usage"),
+  antigravityPlanUsage: () => invoke<PlanUsage>("antigravity_plan_usage"),
 };

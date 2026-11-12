@@ -42,6 +42,8 @@ pub struct PlanUsage {
     pub state: &'static str,
     pub windows: Vec<PlanWindow>,
     pub checked_at: String,
+    /// 이 컴퓨터에 로그인된 구독 계정(로컬 파일·키체인에서). 모르면 null.
+    pub account_email: Option<String>,
 }
 
 pub struct PlanUsageClient {
@@ -60,16 +62,7 @@ impl PlanUsageClient {
 
     /// `url`은 `USAGE_URL` 또는 `http://127.0.0.1`(테스트)만.
     pub fn with_url(url: &str, token: TokenSource, ttl: Duration) -> Result<Self, String> {
-        let url = Url::parse(url).map_err(|e| e.to_string())?;
-        let loopback = url.scheme() == "http" && url.host_str() == Some("127.0.0.1");
-        if url.as_str() != USAGE_URL && !loopback {
-            return Err("허용되지 않은 사용량 주소예요.".into());
-        }
-        let http = Client::builder()
-            .redirect(redirect::Policy::none())
-            .timeout(TIMEOUT)
-            .build()
-            .map_err(|e| e.to_string())?;
+        let (url, http) = pinned_http(url, USAGE_URL)?;
         Ok(Self {
             url,
             http,
@@ -123,12 +116,37 @@ impl PlanUsageClient {
     }
 }
 
-fn usage(state: &'static str, windows: Vec<PlanWindow>) -> PlanUsage {
+/// `url`은 `fixed` 그대로이거나 `http://127.0.0.1`(테스트)만. 리다이렉트 끔, 5초.
+pub(crate) fn pinned_http(url: &str, fixed: &str) -> Result<(Url, Client), String> {
+    let url = Url::parse(url).map_err(|e| e.to_string())?;
+    let loopback = url.scheme() == "http" && url.host_str() == Some("127.0.0.1");
+    if url.as_str() != fixed && !loopback {
+        return Err("허용되지 않은 사용량 주소예요.".into());
+    }
+    let http = Client::builder()
+        .redirect(redirect::Policy::none())
+        .timeout(TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok((url, http))
+}
+
+pub(crate) fn usage(state: &'static str, windows: Vec<PlanWindow>) -> PlanUsage {
     PlanUsage {
         state,
         windows,
         checked_at: chrono::Utc::now().to_rfc3339(),
+        account_email: None,
     }
+}
+
+/// `~/.claude.json`의 `oauthAccount.emailAddress`. 없거나 못 읽으면 None.
+pub fn claude_account_email(path: &std::path::Path) -> Option<String> {
+    let v: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    v["oauthAccount"]["emailAddress"]
+        .as_str()
+        .filter(|e| !e.is_empty())
+        .map(str::to_string)
 }
 
 /// `{five_hour: {utilization, resets_at}, ...}`. `resets_at`이 RFC 3339가 아닌 창(아직 안 쓴 창은 null)은 뺀다.

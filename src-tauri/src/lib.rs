@@ -6,6 +6,7 @@ pub mod permissions;
 pub mod plan_usage;
 pub mod pricing;
 pub mod store;
+pub mod sub_usage;
 pub mod supervisor;
 mod tray;
 pub mod usage;
@@ -173,6 +174,14 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(crate::plan_usage::PlanUsageClient::new(Arc::new(
         crate::plan_usage::keychain_token,
     ))?);
+    app.manage(crate::sub_usage::CodexUsageClient::new(Arc::new(
+        crate::sub_usage::codex_auth_file,
+    ))?);
+    app.manage(crate::sub_usage::AntigravityUsageClient::new(
+        Arc::new(crate::sub_usage::agy_login),
+        Arc::new(crate::sub_usage::agy_usage_cli),
+        crate::plan_usage::CACHE_TTL,
+    ));
     tray::create(app)?;
     check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
@@ -242,6 +251,8 @@ pub fn run() {
             commands::open_help,
             commands::open_web_workflow,
             commands::claude_plan_usage,
+            commands::codex_plan_usage,
+            commands::antigravity_plan_usage,
             commands::open_system_settings,
             commands::send_test_notification,
         ])

@@ -42,6 +42,8 @@
     "allow-open-help",
     "allow-open-web-workflow",
     "allow-claude-plan-usage",
+    "allow-codex-plan-usage",
+    "allow-antigravity-plan-usage",
     "allow-open-system-settings",
     "allow-send-test-notification",
     "dialog:allow-open"

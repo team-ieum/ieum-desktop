@@ -4,7 +4,7 @@ import { t } from "../i18n";
 import { formatReset, formatUsd } from "../usage/format";
 
 const REFRESH_MS = 60_000;
-const UNAVAILABLE: PlanUsage = { state: "unavailable", windows: [], checkedAt: "" };
+const UNAVAILABLE: PlanUsage = { state: "unavailable", windows: [], checkedAt: "", accountEmail: null };
 
 /** 남은 비율 + 초기화까지 — "66% · 2일 10시간". */
 export const windowText = (w: PlanUsage["windows"][number], now: Date) => `${Math.max(0, Math.round(100 - w.usedPct))}% · ${formatReset(w.resetsAt, now)}`;

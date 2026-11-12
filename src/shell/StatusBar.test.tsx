@@ -37,6 +37,7 @@ test("status_bar_shows_plan_and_today_cost", async () => {
       { kind: "seven_day", usedPct: 10, resetsAt: inHours(100) },
     ],
     checkedAt: new Date().toISOString(),
+    accountEmail: null,
   };
   vi.spyOn(api, "claudePlanUsage").mockResolvedValue(plan);
   const summary = vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
@@ -47,7 +48,7 @@ test("status_bar_shows_plan_and_today_cost", async () => {
 });
 
 test("status_bar_hides_claude_when_not_logged_in", async () => {
-  vi.spyOn(api, "claudePlanUsage").mockResolvedValue({ state: "not_logged_in", windows: [], checkedAt: "" });
+  vi.spyOn(api, "claudePlanUsage").mockResolvedValue({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null });
   vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
   await mount();
   expect(screen.queryByText(/Claude/)).toBeNull();

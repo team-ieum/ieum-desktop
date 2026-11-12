@@ -470,8 +470,8 @@ pub struct DetectedCli {
     pub version: String,
 }
 
-/// 셸 명령의 stdout. 시간 상한을 넘으면 그룹째 kill하고 None.
-fn shell_output(cmd: &str, limit: Duration) -> Option<String> {
+/// 셸 명령의 stdout(사용자 로그인 셸 PATH). 실패하거나 시간 상한을 넘으면(그룹째 kill) None.
+pub fn shell_output(cmd: &str, limit: Duration) -> Option<String> {
     use std::os::unix::process::CommandExt;
     let mut child = std::process::Command::new(shell())
         .arg("-lc")

@@ -15,9 +15,10 @@ use tauri_plugin_autostart::ManagerExt;
 use crate::account::AccountId;
 use crate::active::{Active, NOT_SIGNED_IN};
 use crate::permissions;
-use crate::plan_usage::{PlanUsage, PlanUsageClient};
+use crate::plan_usage::{PlanUsage, PlanUsageClient, claude_account_email};
 use crate::pricing;
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
+use crate::sub_usage::{AntigravityUsageClient, CodexUsageClient};
 use crate::supervisor::WorkflowEntry;
 use crate::usage::{self, UsageSummary};
 use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
@@ -242,9 +243,30 @@ pub async fn keychain_status(
         .map_err(|e| e.to_string())
 }
 
-/// Claude 구독 사용량. 키체인 읽기는 `PlanUsageClient` 안에서 `spawn_blocking`.
+/// Claude 구독 사용량 + 로그인 계정(`~/.claude.json`). 키체인 읽기는 `PlanUsageClient` 안에서 `spawn_blocking`.
 #[tauri::command]
 pub async fn claude_plan_usage(client: State<'_, PlanUsageClient>) -> Result<PlanUsage, String> {
+    let mut u = client.get().await;
+    u.account_email = tauri::async_runtime::spawn_blocking(|| {
+        claude_account_email(&std::env::home_dir()?.join(".claude.json"))
+    })
+    .await
+    .ok()
+    .flatten();
+    Ok(u)
+}
+
+/// Codex 구독 연결 상태(계정·사용량). 파일 읽기는 안에서 `spawn_blocking`.
+#[tauri::command]
+pub async fn codex_plan_usage(client: State<'_, CodexUsageClient>) -> Result<PlanUsage, String> {
+    Ok(client.get().await)
+}
+
+/// Antigravity 구독 연결 상태. 키체인 읽기·`agy` 실행은 안에서 `spawn_blocking`.
+#[tauri::command]
+pub async fn antigravity_plan_usage(
+    client: State<'_, AntigravityUsageClient>,
+) -> Result<PlanUsage, String> {
     Ok(client.get().await)
 }
 
