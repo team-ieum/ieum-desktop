@@ -40,35 +40,63 @@ pub fn claim_legacy(app_data: &Path, key: &str) -> Result<bool, String> {
     let err = |p: &Path, e: std::io::Error| format!("{}: {e}", p.display());
     let accounts = app_data.join("accounts");
     let marker = accounts.join(".legacy-owner");
-    match fs::read_to_string(&marker) {
-        Ok(owner) if owner.trim() == key => {}
-        Ok(_) => return Ok(false),
-        Err(e) if e.kind() == ErrorKind::NotFound => {
-            fs::create_dir_all(&accounts).map_err(|e| err(&accounts, e))?;
-            let tmp = accounts.join(format!(".{}.tmp", crate::store::new_id()));
-            fs::File::create(&tmp)
-                .and_then(|mut f| f.write_all(key.as_bytes()).and_then(|()| f.sync_all()))
-                .and_then(|()| fs::rename(&tmp, &marker))
-                .map_err(|e| err(&marker, e))?;
+    let not_found = |r: &std::io::Result<fs::Metadata>| {
+        matches!(r, Err(e) if e.kind() == ErrorKind::NotFound)
+    };
+    // 표시는 hard_link로 배타적으로 만든다 — 동시 호출이어도 주인은 하나.
+    let owner = loop {
+        match fs::read_to_string(&marker) {
+            Ok(owner) => break owner,
+            Err(e) if e.kind() == ErrorKind::NotFound => {
+                fs::create_dir_all(&accounts).map_err(|e| err(&accounts, e))?;
+                let tmp = accounts.join(format!(".{}.tmp", crate::store::new_id()));
+                let linked = fs::File::create(&tmp)
+                    .and_then(|mut f| f.write_all(key.as_bytes()).and_then(|()| f.sync_all()))
+                    .and_then(|()| fs::hard_link(&tmp, &marker));
+                let _ = fs::remove_file(&tmp);
+                match linked {
+                    Ok(()) => break key.to_string(),
+                    Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+                    Err(e) => return Err(err(&marker, e)),
+                }
+            }
+            Err(e) => return Err(err(&marker, e)),
         }
-        Err(e) => return Err(err(&marker, e)),
+    };
+    let owner = owner.trim();
+    if !is_valid_key(owner) {
+        return Err(format!("{}: 내용이 잘못됐어요: {owner:?}", marker.display()));
+    }
+    if owner != key {
+        return Ok(false);
     }
     let root = account_root(app_data, key);
     for name in ["workflows", "runs"] {
         let old = app_data.join(name);
-        let entries = match fs::read_dir(&old) {
-            Ok(e) => e,
+        // 링크·일반 파일은 따라가지 않고 건너뛴다 — 바깥 사용자 파일을 옮기지 않게.
+        match fs::symlink_metadata(&old) {
+            Ok(m) if m.is_dir() => {}
+            Ok(_) => continue,
             Err(e) if e.kind() == ErrorKind::NotFound => continue,
             Err(e) => return Err(err(&old, e)),
-        };
+        }
+        let entries = fs::read_dir(&old).map_err(|e| err(&old, e))?;
         let new = root.join(name);
         fs::create_dir_all(&new).map_err(|e| err(&new, e))?;
+        let mut left = false;
         for entry in entries {
             let entry = entry.map_err(|e| err(&old, e))?;
-            fs::rename(entry.path(), new.join(entry.file_name()))
-                .map_err(|e| err(&entry.path(), e))?;
+            let dest = new.join(entry.file_name());
+            // 목적지에 이미 있으면 덮어쓰지 않고 옛 자리에 남긴다.
+            if !not_found(&fs::symlink_metadata(&dest)) {
+                left = true;
+                continue;
+            }
+            fs::rename(entry.path(), &dest).map_err(|e| err(&entry.path(), e))?;
         }
-        fs::remove_dir(&old).map_err(|e| err(&old, e))?;
+        if !left {
+            fs::remove_dir(&old).map_err(|e| err(&old, e))?;
+        }
     }
     Ok(true)
 }
