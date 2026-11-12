@@ -33,6 +33,20 @@ test("local_side_counts_today_only", () => {
   expect(s.hourly).toEqual({ "09": 2, "13": 1 });
 });
 
+// 로컬(KST) 자정 경계: 00:30은 UTC로 전날, 23:50은 UTC로 같은 날 14:50 — UTC 날짜로 세면 둘 다 틀린다.
+test("local_side_day_boundary_uses_local_time", () => {
+  expect(new Date().getTimezoneOffset()).toBe(-540);
+  const runs = [
+    run({ startedAt: new Date(2026, 10, 12, 0, 30).toISOString() }),
+    run({ startedAt: new Date(2026, 10, 11, 23, 50).toISOString() }),
+    run({ startedAt: new Date(2026, 10, 11, 0, 30).toISOString() }),
+  ];
+  const s = localSide(runs, [], {}, new Date(2026, 10, 12, 8, 0));
+  expect(s.todayRuns).toBe(1);
+  expect(s.hourly).toEqual({ "00": 1 });
+  expect(s.changePct).toBe(-50);
+});
+
 test("local_side_no_finished_runs_rate_null", () => {
   const s = localSide([run({ startedAt: at(12, 9), finishedAt: "" })], [], {}, NOW);
   expect(s.todayRuns).toBe(1);

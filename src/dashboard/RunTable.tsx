@@ -1,4 +1,4 @@
-import { CheckCircle2, ChevronRight, CircleX, File, Globe, Laptop, Loader2 } from "lucide-react";
+import { Ban, CheckCircle2, ChevronRight, CircleX, File, Globe, Laptop, Loader2, ShieldX } from "lucide-react";
 import type { RunSummary, WebDashboardExecution } from "../api";
 import { t, type Key } from "../i18n";
 import { formatDuration, formatRelative } from "./format";
@@ -9,7 +9,8 @@ export type Row = {
   /** 웹 행을 열 때 쓴다. */
   workflowId: string;
   workflowName: string;
-  status: "success" | "error" | "running";
+  /** cancelled·rejected는 내 PC만 — History RunPill과 같은 구분. */
+  status: "success" | "error" | "running" | "cancelled" | "rejected";
   durationSeconds: number | null;
   trigger: string | null;
   at: string;
@@ -17,13 +18,15 @@ export type Row = {
   fileOps?: number;
 };
 
+const LOCAL_STATUS = { succeeded: "success", failed: "error", cancelled: "cancelled", rejected: "rejected" } as const;
+
 /** 끝 시각 없는 기록은 실행 중(History RunPill과 같은 규칙). */
 export const localRow = (r: RunSummary, name: string): Row => ({
   source: "local",
   id: r.runId,
   workflowId: r.workflowId,
   workflowName: name,
-  status: !r.finishedAt ? "running" : r.status === "succeeded" ? "success" : "error",
+  status: !r.finishedAt ? "running" : LOCAL_STATUS[r.status],
   durationSeconds: r.finishedAt ? (Date.parse(r.finishedAt) - Date.parse(r.startedAt)) / 1000 : null,
   trigger: r.trigger ?? null,
   at: r.startedAt,
@@ -65,7 +68,10 @@ const STATUS = {
   success: { cls: "border-main-light-blue bg-main-light-blue text-main-deep-blue", Icon: CheckCircle2 },
   error: { cls: "border-danger-300 bg-danger-100 text-danger-700", Icon: CircleX },
   running: { cls: "border-neutral-300 bg-neutral-white text-neutral-600", Icon: Loader2 },
+  cancelled: { cls: "border-neutral-300 bg-neutral-white text-neutral-600", Icon: Ban },
+  rejected: { cls: "border-danger-300 bg-danger-100 text-danger-700", Icon: ShieldX },
 };
+const statusText = (s: Row["status"]) => (s === "cancelled" || s === "rejected" ? t(`status.${s}`) : t(`dashboard.run.${s}`));
 const SOURCE = {
   local: { cls: "border-main-light-blue bg-main-light-blue text-main-deep-blue", Icon: Laptop },
   web: { cls: "border-neutral-200 bg-neutral-white text-main-blue", Icon: Globe },
@@ -74,9 +80,20 @@ const PILL = "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 t
 const TH = "border-b border-neutral-200 px-5 py-2.5 text-left typo-caption1_semibold tracking-wide text-neutral-400";
 const COLS: Key[] = ["dashboard.col.id", "dashboard.col.workflow", "dashboard.col.status", "dashboard.col.duration", "dashboard.col.trigger", "dashboard.col.at"];
 
-/** `showSource={false}` = 실행 기록 표(출처 열 대신 파일 작업 열·화살표). */
-export function RunTable({ rows, showSource = true, onOpen }: { rows: Row[]; showSource?: boolean; onOpen: (r: Row) => void }) {
-  const cols: Key[] = showSource ? ["dashboard.col.source", ...COLS] : [...COLS.slice(0, 5), "history.fileOps", COLS[5]];
+/** `history` = 실행 기록 표(파일 작업 열·화살표·실행 중 강조). */
+export function RunTable({
+  rows,
+  showSource = true,
+  history = false,
+  onOpen,
+}: {
+  rows: Row[];
+  showSource?: boolean;
+  history?: boolean;
+  onOpen: (r: Row) => void;
+}) {
+  const cols: Key[] = [...(showSource ? ["dashboard.col.source" as Key] : []), ...COLS];
+  if (history) cols.splice(cols.length - 1, 0, "history.fileOps");
   if (rows.length === 0) return <p className="px-5 py-8 text-center typo-body2_regular text-neutral-500">{t("dashboard.recentEmpty")}</p>;
   return (
     <table className="w-full border-collapse">
@@ -87,7 +104,7 @@ export function RunTable({ rows, showSource = true, onOpen }: { rows: Row[]; sho
               {t(k)}
             </th>
           ))}
-          {!showSource && <th className="border-b border-neutral-200" />}
+          {history && <th className="border-b border-neutral-200" />}
         </tr>
       </thead>
       <tbody>
@@ -98,11 +115,17 @@ export function RunTable({ rows, showSource = true, onOpen }: { rows: Row[]; sho
             <tr
               key={`${r.source}:${r.id}`}
               tabIndex={0}
+              role="button"
+              aria-label={`${displayId(r.id)} ${r.workflowName} ${statusText(r.status)}`}
               className={`cursor-pointer border-b border-neutral-100 hover:bg-neutral-50 focus-visible:bg-neutral-50 focus-visible:outline-none ${
-                !showSource && r.status === "running" ? "bg-main-light-blue/30" : ""
+                history && r.status === "running" ? "bg-main-light-blue/30" : ""
               }`}
               onClick={() => onOpen(r)}
-              onKeyDown={(e) => e.key === "Enter" && onOpen(r)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                onOpen(r);
+              }}
             >
               {showSource && (
                 <td className="px-5 py-3">
@@ -117,7 +140,7 @@ export function RunTable({ rows, showSource = true, onOpen }: { rows: Row[]; sho
               <td className="px-5 py-3">
                 <span className={`${PILL} ${s.cls}`}>
                   <s.Icon className={`size-3 ${r.status === "running" ? "animate-spin" : ""}`} aria-hidden="true" />
-                  {t(`dashboard.run.${r.status}`)}
+                  {statusText(r.status)}
                 </span>
               </td>
               <td className="px-5 py-3 font-mono typo-body3_medium text-neutral-600">
@@ -132,7 +155,7 @@ export function RunTable({ rows, showSource = true, onOpen }: { rows: Row[]; sho
                   </span>
                 )}
               </td>
-              {!showSource && (
+              {history && (
                 <td className="px-5 py-3 typo-body3_medium tabular-nums text-neutral-600">
                   <span className="inline-flex items-center gap-1.5">
                     <File className="size-3.5 text-neutral-400" aria-hidden="true" />
@@ -141,7 +164,7 @@ export function RunTable({ rows, showSource = true, onOpen }: { rows: Row[]; sho
                 </td>
               )}
               <td className="px-5 py-3 typo-caption1_regular text-neutral-400">{r.at ? formatRelative(r.at) : "—"}</td>
-              {!showSource && (
+              {history && (
                 <td className="w-10 py-3 pr-4 text-right">
                   <ChevronRight className="inline size-4 text-neutral-300" aria-hidden="true" />
                 </td>

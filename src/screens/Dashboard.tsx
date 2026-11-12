@@ -1,6 +1,6 @@
 import { Globe, Laptop, Power, WifiOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { api, type WebDashboardExecution, type WebDashboardSummary } from "../api";
+import { api, type WebDashboardExecution, type WebDashboardSummary, type WebError } from "../api";
 import type { HeroSide } from "../dashboard/Hero";
 import { Hero } from "../dashboard/Hero";
 import { localSide, merge, webSide, type Source } from "../dashboard/metrics";
@@ -31,6 +31,8 @@ const closeBanner = () => {
 
 const TABS: { id: Source; icon?: typeof Laptop }[] = [{ id: "all" }, { id: "local", icon: Laptop }, { id: "web", icon: Globe }];
 const MAX_ROWS = 20;
+// 연결 문제일 때만 "연결 안 됨" — 만료는 guard가 관문으로 보낸다.
+const offline = (e: unknown) => ["NETWORK", "SERVER"].includes((e as Partial<WebError> | null)?.code ?? "");
 
 /** 내 PC 행 = 그 실행 상세. 웹 행 = 웹 워크플로우를 브라우저로. */
 export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
@@ -43,13 +45,14 @@ export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void })
   const [banner, setBanner] = useState(() => !bannerClosed());
   const [summary, setSummary] = useState<WebDashboardSummary | null>(null);
   const [execs, setExecs] = useState<WebDashboardExecution[]>([]);
-  const [webOff, setWebOff] = useState(false);
+  const [webFail, setWebFail] = useState<unknown>(null);
+  const webOff = webFail !== null && offline(webFail);
 
   useEffect(() => {
     void load();
     void loadWorkflows();
     // 만료면 guard가 관문으로, 그 밖 실패는 웹 쪽만 비운다.
-    guard(api.dashboardSummary()).then(setSummary, () => setWebOff(true));
+    guard(api.dashboardSummary()).then(setSummary, (e) => setWebFail(e ?? "failed"));
     guard(api.dashboardExecutions(null)).then(
       (p) => setExecs(p.content),
       () => setExecs([]),
@@ -78,7 +81,19 @@ export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void })
     .sort((a, b) => Date.parse(b.at || "0") - Date.parse(a.at || "0"))
     .slice(0, MAX_ROWS);
 
-  const open = (r: Row) => (r.source === "local" ? onOpenRun(r.id) : void api.openWebWorkflow(r.workflowId).catch(() => {}));
+  const open = (r: Row) =>
+    r.source === "local"
+      ? onOpenRun(r.id)
+      : void api.openWebWorkflow(r.workflowId).catch((e) => console.error("[ieum] 웹 워크플로우를 열지 못했어요", e));
+  // 탭 ←→ 이동(WAI-ARIA tabs)
+  const onTabKey = (e: React.KeyboardEvent) => {
+    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    const next = TABS[(TABS.findIndex((x) => x.id === source) + step + TABS.length) % TABS.length].id;
+    setSource(next);
+    document.getElementById(`dashboard-tab-${next}`)?.focus();
+  };
 
   return (
     <section className="flex flex-col gap-3.5 px-6 py-6">
@@ -94,13 +109,16 @@ export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void })
               {t("dashboard.webOffline")}
             </span>
           )}
-          <div role="tablist" className="inline-flex rounded-[10px] border border-neutral-200 bg-neutral-100 p-1">
+          <div role="tablist" onKeyDown={onTabKey} className="inline-flex rounded-[10px] border border-neutral-200 bg-neutral-100 p-1">
             {TABS.map(({ id, icon: Icon }) => (
               <button
                 key={id}
                 type="button"
                 role="tab"
+                id={`dashboard-tab-${id}`}
                 aria-selected={source === id}
+                aria-controls="dashboard-panel"
+                tabIndex={source === id ? 0 : -1}
                 className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-4 typo-body3_semibold ${
                   source === id ? "bg-main-deep-blue text-white shadow-[0_1px_2px_rgba(16,24,40,.08)]" : "text-neutral-600"
                 }`}
@@ -132,22 +150,24 @@ export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void })
         </div>
       )}
 
-      {source === "web" && !web ? (
-        <p className="rounded-brand-md border border-dashed border-neutral-300 bg-white p-8 text-center typo-body2_regular text-neutral-500">
-          {webOff ? t("dashboard.webOfflineBody") : t("common.loading")}
-        </p>
-      ) : (
-        <>
-          <Hero todayRuns={m.todayRuns} hourly={m.hourly} sides={sides} />
-          <StatusCards stats={m.stats} />
-          <div className="overflow-hidden rounded-brand-md border border-neutral-200 bg-neutral-white shadow-sm">
-            <div className="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-3.5">
-              <h3 className="typo-body2_semibold text-neutral-900">{t("dashboard.recent")}</h3>
+      <div id="dashboard-panel" role="tabpanel" aria-labelledby={`dashboard-tab-${source}`} className="flex flex-col gap-3.5">
+        {source === "web" && !web ? (
+          <p className="rounded-brand-md border border-dashed border-neutral-300 bg-white p-8 text-center typo-body2_regular text-neutral-500">
+            {webFail !== null ? t("dashboard.webOfflineBody") : t("common.loading")}
+          </p>
+        ) : (
+          <>
+            <Hero todayRuns={m.todayRuns} hourly={m.hourly} sides={sides} />
+            <StatusCards stats={m.stats} />
+            <div className="overflow-hidden rounded-brand-md border border-neutral-200 bg-neutral-white shadow-sm">
+              <div className="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-3.5">
+                <h3 className="typo-body2_semibold text-neutral-900">{t("dashboard.recent")}</h3>
+              </div>
+              <RunTable rows={rows} showSource={source === "all"} onOpen={open} />
             </div>
-            <RunTable rows={rows} showSource={source === "all"} onOpen={open} />
-          </div>
-        </>
-      )}
+          </>
+        )}
+      </div>
     </section>
   );
 }

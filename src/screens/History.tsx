@@ -167,7 +167,7 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
 }
 
 const PAGE = 20;
-type Filter = "all" | Row["status"];
+type Filter = "all" | "success" | "error" | "running";
 const FILTERS: Filter[] = ["all", "success", "error", "running"];
 const DOT: Record<Filter, string> = { all: "", success: "bg-main-blue", error: "bg-danger-600", running: "" };
 const CARD = "rounded-xl border border-neutral-200 bg-white shadow-[0_1px_2px_rgba(16,24,40,.04)]";
@@ -191,8 +191,10 @@ export function History({ initialRun = null }: { initialRun?: string | null }) {
 
   const name = (id: string) => names.find((w) => w.id === id)?.name ?? t("history.deletedWorkflow");
   const byWorkflow = runs.filter((r) => !workflow || r.workflowId === workflow).map((r) => localRow(r, name(r.workflowId)));
-  const count = (f: Filter) => (f === "all" ? byWorkflow.length : byWorkflow.filter((r) => r.status === f).length);
-  const rows = filter === "all" ? byWorkflow : byWorkflow.filter((r) => r.status === filter);
+  const count = (f: Filter) => (f === "all" ? byWorkflow.length : byWorkflow.filter((r) => match(r, f)).length);
+  // 거부(rejected)는 빨간 알약이라 "오류"에, 중단(cancelled)은 "전체"에만.
+  const match = (r: Row, f: Filter) => r.status === f || (f === "error" && r.status === "rejected");
+  const rows = filter === "all" ? byWorkflow : byWorkflow.filter((r) => match(r, filter));
   const shown = rows.slice(0, limit);
 
   return (
@@ -270,7 +272,7 @@ export function History({ initialRun = null }: { initialRun?: string | null }) {
           <p className="px-5 py-8 text-center typo-body2_regular text-neutral-500">{t("history.empty")}</p>
         ) : (
           <>
-            <RunTable rows={shown} showSource={false} onOpen={(r) => setOpenId(r.id)} />
+            <RunTable rows={shown} showSource={false} history onOpen={(r) => setOpenId(r.id)} />
             <div className="flex items-center justify-between border-t border-neutral-200 bg-neutral-50 px-5 py-3">
               <span className="typo-caption1_medium text-neutral-400">
                 {t("history.shown").replace("{total}", String(rows.length)).replace("{n}", String(shown.length))}

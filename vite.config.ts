@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -8,6 +9,9 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
+
+  // 날짜 경계 테스트(metrics)가 UTC와 다른 시각대에서 돌게 — 웹 대시보드와 같은 KST.
+  test: { env: { TZ: "Asia/Seoul" } },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
