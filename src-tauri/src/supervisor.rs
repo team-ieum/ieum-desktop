@@ -148,10 +148,16 @@ fn trigger_output(f: &NewFile) -> Map<String, Value> {
 impl Supervisor {
     /// tokio 런타임 안에서 부른다. 시작 시 폴더의 기존 파일은 보지 않는다.
     pub fn start(deps: Deps) -> Result<Self, String> {
+        Self::start_with(deps, true)
+    }
+
+    /// `close_unfinished` = 끝 시각 없는 기록을 중단됨으로 닫는다. 이 프로세스에서 그 저장소를
+    /// 처음 열 때만 참 — 다시 열 때는 앞선 감독의 실행이 아직 돌며 그 기록을 쓰고 있을 수 있다.
+    pub fn start_with(deps: Deps, close_unfinished: bool) -> Result<Self, String> {
         let catalog = Catalog::embedded().map_err(|e| format!("노드 정의를 읽지 못했어요: {e}"))?;
         let rt = Handle::try_current().map_err(|e| e.to_string())?;
         let every = deps.recheck;
-        if let Err(e) = deps.store.close_unfinished_runs() {
+        if close_unfinished && let Err(e) = deps.store.close_unfinished_runs() {
             eprintln!("[ieum] 끝나지 않은 실행 기록을 닫지 못했어요: {e}");
         }
         let sup = Supervisor(Arc::new(Inner {

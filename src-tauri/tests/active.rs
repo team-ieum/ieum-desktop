@@ -3,26 +3,36 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use ieum_desktop_lib::account::{AccountId, account_key, account_root};
 use ieum_desktop_lib::active::{Active, BaseDeps};
+use ieum_desktop_lib::commands::save_screen_settings;
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{AppEvent, WatchState};
-use ieum_engine::Workflow;
+use ieum_engine::{RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::KeyError;
 use ieum_local::ai::{AiError, AiProvider, AiRequest, AiRunner, ChunkFn, KeyStore};
 use serde_json::json;
+use std::future::Future;
 use tempfile::TempDir;
+use tokio::sync::Semaphore;
 
-struct FakeAi;
+/// `gate`가 있으면 허가를 하나씩 받아야 답한다(도는 실행을 붙잡기).
+struct FakeAi {
+    gate: Option<Arc<Semaphore>>,
+}
 
 #[async_trait]
 impl AiProvider for FakeAi {
     async fn ask(&self, _req: AiRequest, _chunk: &ChunkFn<'_>) -> Result<String, AiError> {
+        if let Some(g) = &self.gate {
+            g.acquire().await.unwrap().forget();
+        }
         Ok(r#"{"folder": "sorted"}"#.into())
     }
 }
@@ -51,6 +61,8 @@ struct Env {
     settings: Store,
     active: Active,
     events: Arc<Mutex<Vec<AppEvent>>>,
+    /// `ai_factory` 호출 수 = Supervisor 시작 수.
+    starts: Arc<AtomicUsize>,
 }
 
 impl Env {
@@ -74,6 +86,10 @@ impl Env {
 
 /// 임시 폴더 = 가짜 홈. 앱 데이터는 `data/`.
 fn env() -> Env {
+    env_gated(None)
+}
+
+fn env_gated(gate: Option<Arc<Semaphore>>) -> Env {
     let t = tempfile::tempdir().unwrap();
     let root = t.path().canonicalize().unwrap();
     fs::create_dir_all(root.join("trash")).unwrap();
@@ -81,6 +97,8 @@ fn env() -> Env {
     let settings = Store::new(app_data.clone());
     let events = Arc::new(Mutex::new(Vec::new()));
     let ev = events.clone();
+    let starts = Arc::new(AtomicUsize::new(0));
+    let counter = starts.clone();
     let active = Active::new(BaseDeps {
         app_data: app_data.clone(),
         settings: settings.clone(),
@@ -94,8 +112,10 @@ fn env() -> Env {
             recent_window: Duration::from_secs(10),
         },
         recheck: Duration::from_secs(30),
-        ai_factory: Arc::new(|_keys| {
-            Arc::new(AiRunner::empty().with_provider("fake", Arc::new(FakeAi)))
+        ai_factory: Arc::new(move |_keys| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            let ai = FakeAi { gate: gate.clone() };
+            Arc::new(AiRunner::empty().with_provider("fake", Arc::new(ai)))
         }),
     });
     Env {
@@ -105,6 +125,7 @@ fn env() -> Env {
         settings,
         active,
         events,
+        starts,
     }
 }
 
@@ -316,6 +337,7 @@ async fn concurrent_same_account_starts_one_supervisor() {
     );
     r1.unwrap();
     r2.unwrap();
+    assert_eq!(env.starts.load(Ordering::SeqCst), 1);
     tokio::time::sleep(Duration::from_millis(200)).await;
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
     assert!(wait_until(Duration::from_secs(5), || env.runs(&a) >= 1).await);
@@ -329,6 +351,111 @@ async fn concurrent_same_account_starts_one_supervisor() {
         .filter(|e| matches!(e, AppEvent::Exec { workflow_id, event: ieum_engine::ExecEvent::RunStarted { .. } } if workflow_id == &wf.id))
         .count();
     assert_eq!(started, 1);
+}
+
+/// 트리거 → `out/sorted`로 옮기기 → (붙잡히는) AI. 옮긴 뒤 끝나지 않은 기록이 남는다.
+fn move_then_ai_wf(watch: &Path, base: &Path) -> Workflow {
+    serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": watch}},
+            {"id": "m", "type": "ACTION", "event": "local.file_move", "config": {"path": "{{nodes.t.output.path}}", "baseFolder": base, "destination": "sorted"}},
+            {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "fake", "prompt": "분류", "outputFields": [{"key": "folder", "type": "text"}]}}
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "m"}, {"id": "e2", "source": "m", "target": "a"}]
+    }))
+    .unwrap()
+}
+
+/// 실행이 도는 중에 같은 계정을 다시 활성화해도 그 기록을 닫지 않는다(되돌리기는 끝난 뒤 한 번만).
+async fn reactivate_keeps_running_record(via_other: bool) {
+    let gate = Arc::new(Semaphore::new(0));
+    let env = env_gated(Some(gate.clone()));
+    let a = acc("a@x.com");
+    env.active.activate(a.clone()).await.unwrap();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    env.active
+        .sup()
+        .await
+        .unwrap()
+        .save_workflow(stored(move_then_ai_wf(&inbox, &out)))
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let store = env.account_store(&a);
+    let running = || {
+        store
+            .list_runs(None)
+            .unwrap()
+            .first()
+            .map(|r| r.finished_at.is_empty())
+    };
+    assert!(wait_until(Duration::from_secs(5), || running() == Some(true)).await);
+    let run_id = store.list_runs(None).unwrap()[0].run_id.clone();
+
+    if via_other {
+        env.active.activate(acc("b@x.com")).await.unwrap();
+    } else {
+        env.active.deactivate().await.unwrap();
+    }
+    env.active.activate(a.clone()).await.unwrap();
+    assert_eq!(running(), Some(true));
+    let sup = env.active.sup().await.unwrap();
+    assert!(sup.undo_run(&run_id).is_err());
+    assert!(out.join("sorted/a.pdf").exists());
+
+    gate.add_permits(1);
+    assert!(wait_until(Duration::from_secs(5), || running() == Some(false)).await);
+    assert_eq!(
+        store.get_run(&run_id).unwrap().run.status,
+        RunStatus::Succeeded
+    );
+    sup.undo_run(&run_id).unwrap();
+    assert!(inbox.join("a.pdf").exists());
+    assert!(sup.undo_run(&run_id).is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn relogin_does_not_close_running_record() {
+    reactivate_keeps_running_record(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn switch_back_does_not_close_running_record() {
+    reactivate_keeps_running_record(true).await;
+}
+
+/// 다른 계정의 감독 시작이 실패하면 슬롯처럼 저장값도 비운다(다음 실행 때 관문).
+#[test]
+fn failed_switch_clears_current_account() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let env = env();
+    rt.block_on(env.active.activate(acc("a@x.com"))).unwrap();
+    // tokio 런타임 밖에서 폴링 → Supervisor::start가 런타임을 못 찾아 실패.
+    let mut fut = std::pin::pin!(env.active.activate(acc("b@x.com")));
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+    match fut.as_mut().poll(&mut cx) {
+        std::task::Poll::Ready(r) => assert!(r.is_err()),
+        std::task::Poll::Pending => panic!("잠금이 비어 있으면 바로 끝나야 해요"),
+    }
+    assert_eq!(rt.block_on(env.active.current()), None);
+    assert_eq!(env.settings.get_settings().unwrap().current_account, None);
+}
+
+#[test]
+fn screen_settings_cannot_change_current_account() {
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let mut s = store.get_settings().unwrap();
+    s.current_account = Some(acc("a@x.com"));
+    store.set_settings(&s).unwrap();
+
+    let mut from_screen = s.clone();
+    from_screen.current_account = Some(acc("evil@x.com"));
+    from_screen.notifications_seen_at = "2026-11-12T00:00:00.000Z".into();
+    save_screen_settings(&store, &FakeKeys::default(), from_screen).unwrap();
+    let saved = store.get_settings().unwrap();
+    assert_eq!(saved.current_account, Some(acc("a@x.com")));
+    assert_eq!(saved.notifications_seen_at, "2026-11-12T00:00:00.000Z");
 }
 
 #[tokio::test(flavor = "multi_thread")]

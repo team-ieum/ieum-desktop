@@ -1,6 +1,7 @@
 //! 활성 계정 슬롯: 로그인한 계정 하나의 `Store`·`Supervisor`. 로그인·로그아웃이 갈아 끼운다.
 //! 만료는 슬롯을 건드리지 않는다 — 명시적 로그아웃(`deactivate`)만 감시를 멈춘다.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,17 +40,24 @@ struct ActiveAccount {
     sup: Supervisor,
 }
 
+#[derive(Default)]
+struct Slot {
+    current: Option<ActiveAccount>,
+    /// 이 프로세스에서 감독을 연 적 있는 계정 키 — 끝나지 않은 기록은 처음 열 때만 닫는다.
+    opened: HashSet<String>,
+}
+
 pub struct Active {
     base: BaseDeps,
     /// activate·deactivate는 이 잠금을 끝까지 쥔다(이중 클릭·동시 로그인).
-    slot: tokio::sync::Mutex<Option<ActiveAccount>>,
+    slot: tokio::sync::Mutex<Slot>,
 }
 
 impl Active {
     pub fn new(base: BaseDeps) -> Self {
         Self {
             base,
-            slot: tokio::sync::Mutex::new(None),
+            slot: tokio::sync::Mutex::default(),
         }
     }
 
@@ -63,10 +71,10 @@ impl Active {
         id.server_url = validate_server_url(&id.server_url)?;
         let key = account_key(&id.server_url, &id.email);
         let mut slot = self.slot.lock().await;
-        if slot.as_ref().is_some_and(|a| a.key == key) {
+        if slot.current.as_ref().is_some_and(|a| a.key == key) {
             return Ok(());
         }
-        if let Some(old) = slot.take() {
+        if let Some(old) = slot.current.take() {
             old.sup.stop();
         }
         // 옮기기 실패(표시 파일 손상 등)는 로그인을 막지 않는다 — 옛 데이터는 그대로, 계정은 빈 상태로.
@@ -74,17 +82,32 @@ impl Active {
             eprintln!("[ieum] 옛 데이터를 옮기지 못했어요(그대로 둠): {e}");
         }
         let b = &self.base;
-        let sup = Supervisor::start(Deps {
-            store: Store::new(account_root(&b.app_data, &key)),
-            app_data: b.app_data.clone(),
-            home: b.home.clone(),
-            trash_dir: b.trash_dir.clone(),
-            ai: (b.ai_factory)(b.keys.clone()),
-            emit: b.emit.clone(),
-            timing: b.timing,
-            recheck: b.recheck,
-        })?;
-        *slot = Some(ActiveAccount {
+        let first_open = !slot.opened.contains(&key);
+        let started = Supervisor::start_with(
+            Deps {
+                store: Store::new(account_root(&b.app_data, &key)),
+                app_data: b.app_data.clone(),
+                home: b.home.clone(),
+                trash_dir: b.trash_dir.clone(),
+                ai: (b.ai_factory)(b.keys.clone()),
+                emit: b.emit.clone(),
+                timing: b.timing,
+                recheck: b.recheck,
+            },
+            first_open,
+        );
+        let sup = match started {
+            Ok(sup) => sup,
+            Err(e) => {
+                // 슬롯이 비었으니 저장값도 비운다(다음 실행 때 관문).
+                if let Err(se) = self.save_current(None) {
+                    eprintln!("[ieum] 설정을 저장하지 못했어요: {se}");
+                }
+                return Err(e);
+            }
+        };
+        slot.opened.insert(key.clone());
+        slot.current = Some(ActiveAccount {
             id: id.clone(),
             key,
             sup,
@@ -95,7 +118,7 @@ impl Active {
     /// 명시적 로그아웃: 감시를 멈추고 슬롯을 비운다.
     pub async fn deactivate(&self) -> Result<(), String> {
         let mut slot = self.slot.lock().await;
-        if let Some(old) = slot.take() {
+        if let Some(old) = slot.current.take() {
             old.sup.stop();
         }
         self.save_current(None)
@@ -112,16 +135,27 @@ impl Active {
         self.slot
             .lock()
             .await
+            .current
             .as_ref()
             .map(|a| a.sup.clone())
             .ok_or_else(|| NOT_SIGNED_IN.to_string())
     }
 
     pub async fn current(&self) -> Option<AccountId> {
-        self.slot.lock().await.as_ref().map(|a| a.id.clone())
+        self.slot
+            .lock()
+            .await
+            .current
+            .as_ref()
+            .map(|a| a.id.clone())
     }
 
     pub async fn account_key(&self) -> Option<String> {
-        self.slot.lock().await.as_ref().map(|a| a.key.clone())
+        self.slot
+            .lock()
+            .await
+            .current
+            .as_ref()
+            .map(|a| a.key.clone())
     }
 }

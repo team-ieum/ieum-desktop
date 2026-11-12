@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::active::Active;
-use crate::store::{RunSummary, Settings, StoredRun, StoredWorkflow};
+use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::supervisor::WorkflowEntry;
 use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
 use crate::web::workflows::{WebWorkflow, WebWorkflowSummary};
@@ -250,11 +250,21 @@ pub async fn set_settings(
         };
         r.map_err(|e| format!("자동 시작을 바꾸지 못했어요: {e}"))?;
     }
-    let saved = web::save_settings(active.settings(), keys.0.as_ref(), s)?;
+    let saved = save_screen_settings(active.settings(), keys.0.as_ref(), s)?;
     if saved.server_url != old.server_url {
         watches.clear();
     }
     Ok(())
+}
+
+/// 화면이 보낸 설정 저장. `current_account`는 로그인·로그아웃만 바꾼다 — 화면 값은 버리고 저장된 값을 둔다.
+pub fn save_screen_settings(
+    store: &Store,
+    keys: &dyn KeyStore,
+    mut s: Settings,
+) -> Result<Settings, String> {
+    s.current_account = store.get_settings()?.current_account;
+    web::save_settings(store, keys, s)
 }
 
 fn be_client(active: &Active, keys: &Keys) -> Result<BeClient, WebError> {
