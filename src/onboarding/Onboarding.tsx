@@ -1,0 +1,228 @@
+import { CircleCheck } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { api, type FolderAccess, type FolderKind, type KeychainStatus, type Providers } from "../api";
+import symbol from "../assets/symbol.png";
+import { t, type Key } from "../i18n";
+import { BUTTON, PRIMARY } from "../screens/Editor";
+import { KeysPane } from "../screens/settings/AiPane";
+import { Switch } from "../screens/settings/GeneralPane";
+import { Row } from "../screens/settings/Row";
+import { useSettings } from "../stores/settings";
+
+const STEPS: { title: Key; desc: Key }[] = [
+  { title: "onboarding.folders.title", desc: "onboarding.folders.desc" },
+  { title: "onboarding.ai.title", desc: "onboarding.ai.desc" },
+  { title: "onboarding.notify.title", desc: "onboarding.notify.desc" },
+  { title: "onboarding.autostart.title", desc: "onboarding.autostart.desc" },
+];
+const NOTIFY = 2;
+
+const FOLDERS: FolderKind[] = ["downloads", "desktop", "documents"];
+const PILL = "inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 typo-caption1_semibold";
+const PILL_OF: Record<FolderAccess, string> = {
+  granted: "bg-node-green/10 text-node-green",
+  denied: "bg-danger-100 text-danger-700",
+  missing: "bg-neutral-100 text-neutral-500",
+};
+
+/** 1단계 — 폴더마다 한 번 읽어 macOS 허용 창을 띄운다. 들어오자마자 묻지 않는다(누를 때만). */
+function FoldersStep() {
+  const [state, setState] = useState<Partial<Record<FolderKind, FolderAccess | "checking">>>({});
+  const [error, setError] = useState<string | null>(null);
+  const check = async (k: FolderKind) => {
+    setError(null);
+    setState((s) => ({ ...s, [k]: "checking" }));
+    try {
+      const r = await api.folderAccess(k);
+      setState((s) => ({ ...s, [k]: r }));
+    } catch (e) {
+      setState((s) => ({ ...s, [k]: undefined }));
+      setError(String(e));
+    }
+  };
+  return (
+    <>
+      {FOLDERS.map((k) => {
+        const s = state[k];
+        return (
+          <Row key={k} title={t(`onboarding.folder.${k}`)}>
+            <div className="flex items-center gap-2">
+              {s === undefined || s === "checking" ? (
+                <button type="button" className={PRIMARY} disabled={s === "checking"} onClick={() => void check(k)}>
+                  {t(s ? "onboarding.checking" : "onboarding.allow")}
+                </button>
+              ) : (
+                <>
+                  {s === "denied" && (
+                    <>
+                      <button type="button" className={BUTTON} onClick={() => void api.openSystemSettings("files")}>
+                        {t("onboarding.openSettings")}
+                      </button>
+                      <button type="button" className={BUTTON} onClick={() => void check(k)}>
+                        {t("onboarding.recheck")}
+                      </button>
+                    </>
+                  )}
+                  <span className={`${PILL} ${PILL_OF[s]}`}>{t(`onboarding.${s}`)}</span>
+                </>
+              )}
+            </div>
+          </Row>
+        );
+      })}
+      {error && <p className="pt-2 typo-caption1_semibold text-danger-700">{error}</p>}
+    </>
+  );
+}
+
+/** 2단계 — 구독 Claude는 상태만, API 키는 설정 화면 부품 그대로. */
+function AiStep() {
+  const [providers, setProviders] = useState<Providers | null>(null);
+  const [keychain, setKeychain] = useState<KeychainStatus | null>(null);
+  const refresh = useCallback(() => {
+    api.detectProviders().then(setProviders, () => {});
+    api.keychainStatus().then(setKeychain, () => {});
+  }, []);
+  useEffect(refresh, [refresh]);
+  return (
+    <>
+      {providers?.clis.some((c) => c.id === "claude") && (
+        <p className={`${PILL} mb-2 bg-node-green/10 text-node-green`}>
+          <CircleCheck className="size-4" aria-hidden="true" />
+          {t("onboarding.ai.claude")}
+        </p>
+      )}
+      <KeysPane keychain={keychain} refresh={refresh} />
+    </>
+  );
+}
+
+type Notice = "idle" | "asked" | "yes" | "no";
+
+/** 3단계 — 테스트 알림 → 보였는지 묻는다. 안 보였으면 설정 열기·다시 보내기. */
+function NotifyStep({ notice, setNotice }: { notice: Notice; setNotice: (n: Notice) => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const send = async () => {
+    setError(null);
+    try {
+      await api.sendTestNotification();
+      setNotice("asked");
+    } catch (e) {
+      setError(String(e));
+      setNotice("no");
+    }
+  };
+  return (
+    <div className="flex flex-col items-start gap-4">
+      {notice === "idle" && (
+        <button type="button" className={PRIMARY} onClick={() => void send()}>
+          {t("onboarding.notify.enable")}
+        </button>
+      )}
+      {notice !== "idle" && (
+        <div className="flex items-center gap-3">
+          <span className="typo-body2_semibold text-neutral-800">{t("onboarding.notify.seen")}</span>
+          <button type="button" className={notice === "yes" ? PRIMARY : BUTTON} onClick={() => setNotice("yes")}>
+            {t("onboarding.notify.yes")}
+          </button>
+          <button type="button" className={notice === "no" ? PRIMARY : BUTTON} onClick={() => setNotice("no")}>
+            {t("onboarding.notify.no")}
+          </button>
+        </div>
+      )}
+      {notice === "no" && (
+        <div className="flex items-center gap-2">
+          <button type="button" className={BUTTON} onClick={() => void api.openSystemSettings("notifications")}>
+            {t("onboarding.openSettings")}
+          </button>
+          <button type="button" className={BUTTON} onClick={() => void send()}>
+            {t("onboarding.notify.resend")}
+          </button>
+        </div>
+      )}
+      {error && <p className="typo-caption1_semibold text-danger-700">{error}</p>}
+    </div>
+  );
+}
+
+/** 첫 실행 온보딩 4단계. [시작하기]가 저장에 성공해야 끝 — 그 전에 끄면 다음에 1단계부터. */
+export function Onboarding({ onDone }: { onDone: () => void }) {
+  const settings = useSettings((s) => s.settings);
+  const [step, setStep] = useState(0);
+  const [notice, setNotice] = useState<Notice>("idle");
+  // 새 설치(첫 실행 전)면 켜짐 제안, v0.1.0에서 올라온 사람은 지금 값 그대로.
+  const [autostart, setAutostart] = useState(() => !!settings && (settings.autostart || !settings.firstRunDone));
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const last = step === STEPS.length - 1;
+
+  const finish = async () => {
+    if (!settings) return;
+    setError(null);
+    setSaving(true);
+    try {
+      await api.setSettings({ ...settings, onboardingDone: true, firstRunDone: true, autostart });
+      onDone();
+    } catch (e) {
+      setError(String(e));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full items-center justify-center overflow-y-auto bg-main-light-blue px-6 py-10">
+      <div className="w-full max-w-[560px] rounded-brand-lg bg-white px-10 py-9 shadow-[0_12px_32px_-12px_rgba(41,83,124,.25)]">
+        <div className="flex items-center justify-between">
+          <img src={symbol} className="h-8 w-8" alt="" />
+          <ol className="flex gap-2" aria-label={t("onboarding.progress")}>
+            {STEPS.map((s, i) => (
+              <li
+                key={s.title}
+                aria-current={i === step ? "step" : undefined}
+                className={`h-2 rounded-full transition-all ${i === step ? "w-6 bg-main-deep-blue" : i < step ? "w-2 bg-main-blue" : "w-2 bg-neutral-200"}`}
+              />
+            ))}
+          </ol>
+        </div>
+        <h1 className="mt-6 typo-title2_bold text-main-deep-blue">{t(STEPS[step].title)}</h1>
+        <p className="mt-2 typo-body2_medium text-neutral-500">{t(STEPS[step].desc)}</p>
+        <div className="mt-6 min-h-[180px]">
+          {step === 0 && <FoldersStep />}
+          {step === 1 && <AiStep />}
+          {step === NOTIFY && <NotifyStep notice={notice} setNotice={setNotice} />}
+          {last && (
+            <div className="flex items-center justify-between gap-6 rounded-brand-md bg-neutral-50 px-4 py-3.5">
+              <div className="min-w-0">
+                <div className="typo-body2_semibold text-neutral-800">{t("settings.autostart")}</div>
+                <div className="mt-0.5 typo-caption1_regular text-neutral-500">{t("onboarding.autostart.note")}</div>
+              </div>
+              <Switch on={autostart} label={t("settings.autostart")} disabled={saving} onChange={setAutostart} />
+            </div>
+          )}
+        </div>
+        {error && <p className="mt-3 typo-caption1_semibold text-danger-700">{error}</p>}
+        <div className="mt-8 flex items-center justify-end gap-2">
+          {step !== NOTIFY && !last && (
+            <button type="button" className={BUTTON} onClick={() => setStep(step + 1)}>
+              {t("onboarding.skip")}
+            </button>
+          )}
+          {last ? (
+            <button type="button" className={PRIMARY} disabled={!settings || saving} onClick={() => void finish()}>
+              {t("onboarding.start")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={PRIMARY}
+              disabled={step === NOTIFY && notice !== "yes" && notice !== "no"}
+              onClick={() => setStep(step + 1)}
+            >
+              {t("onboarding.next")}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -5,7 +5,7 @@ import { useSettings } from "../../stores/settings";
 import { Row } from "./Row";
 
 /** 웹 ActiveToggle 모양 — 켜짐은 이음 남색. */
-function Switch({ on, label, disabled, onChange }: { on: boolean; label: string; disabled: boolean; onChange: (v: boolean) => void }) {
+export function Switch({ on, label, disabled, onChange }: { on: boolean; label: string; disabled: boolean; onChange: (v: boolean) => void }) {
   return (
     <button
       type="button"

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api, type WebWorkflowSummary } from "./api";
 import { AuthScreen } from "./auth/AuthScreen";
 import { t } from "./i18n";
+import { Onboarding } from "./onboarding/Onboarding";
 import { BUTTON, Editor, PRIMARY } from "./screens/Editor";
 import { Dashboard } from "./screens/Dashboard";
 import { History } from "./screens/History";
@@ -42,9 +43,8 @@ export default function App() {
   const [web, setWeb] = useState<WebWorkflowSummary[]>([]);
 
   useEffect(() => {
-    void loadSettings();
-    // 계정 응답 전엔 아무것도 그리지 않는다 — 관문이 잠깐 깜빡이지 않게.
-    void loadAccount().finally(() => setReady(true));
+    // 설정·계정 응답 전엔 아무것도 그리지 않는다 — 관문·온보딩이 잠깐 깜빡이지 않게.
+    void Promise.allSettled([loadSettings(), loadAccount()]).then(() => setReady(true));
     subscribeExecEvents();
     getVersion().then(setVersion, () => {});
   }, [loadSettings, loadAccount]);
@@ -52,6 +52,7 @@ export default function App() {
   // 관문을 지나면(로그인한 계정의) 최근 작업을 읽는다. 웹 몫은 못 불러오면 내 PC만 —
   // 만료면 guard가 관문으로, 오프라인이면 그대로.
   const gated = account === null || expired;
+  const onboarding = useSettings((s) => s.settings?.onboardingDone === false);
   useEffect(() => {
     if (gated) return setWeb([]);
     void loadLocal();
@@ -81,7 +82,7 @@ export default function App() {
   // ⌘N = 새 캔버스
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!gated && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
+      if (!gated && !onboarding && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
         e.preventDefault();
         newCanvas();
       }
@@ -110,6 +111,14 @@ export default function App() {
     return (
       <div key={lang} className="h-full">
         <AuthScreen key={account?.email ?? ""} initialEmail={account?.email} />
+      </div>
+    );
+
+  // 관문 다음 첫 실행 온보딩 — 기기 단위(계정과 무관). [시작하기] 저장 뒤 설정을 다시 읽으면 닫힌다.
+  if (onboarding)
+    return (
+      <div key={lang} className="h-full">
+        <Onboarding onDone={() => void loadSettings()} />
       </div>
     );
 
