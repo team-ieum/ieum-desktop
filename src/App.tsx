@@ -7,7 +7,7 @@ import { t } from "./i18n";
 import { BUTTON, Editor, PRIMARY } from "./screens/Editor";
 import { History } from "./screens/History";
 import { RunView } from "./screens/RunView";
-import { Settings } from "./screens/Settings";
+import { SettingsShell } from "./screens/settings/SettingsShell";
 import { Web } from "./screens/Web";
 import { WorkflowList } from "./screens/WorkflowList";
 import { Header } from "./shell/Header";
@@ -39,6 +39,7 @@ export default function App() {
   const lang = useSettings((s) => s.lang);
   const loadSettings = useSettings((s) => s.load);
   const [view, setView] = useState<View>({ page: "local" });
+  const [back, setBack] = useState<View>({ page: "local" });
   const account = useWeb((s) => s.account);
   const loadAccount = useWeb((s) => s.load);
   const expired = useWeb((s) => s.expired);
@@ -91,7 +92,11 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const navigate = (page: Page) => leave(() => setView({ page }));
+  const navigate = (page: Page) =>
+    leave(() => {
+      if (page === "settings") setBack(view);
+      setView({ page });
+    });
 
   if (!ready) return null;
 
@@ -100,6 +105,15 @@ export default function App() {
     return (
       <div key={lang} className="h-full">
         <AuthScreen key={account?.email ?? ""} initialEmail={account?.email} />
+      </div>
+    );
+
+  // 설정은 셸 사이드바 대신 설정 전용 사이드바.
+  if (view.page === "settings")
+    return (
+      <div key={lang} className="flex h-full flex-col">
+        <Header crumb={t("nav.settings")} email={account?.email ?? null} />
+        <SettingsShell onBack={() => setView(back)} version={version} />
       </div>
     );
 
@@ -157,8 +171,6 @@ export default function App() {
             {view.page === "dashboard" ? (
               // 내용은 Task 9.
               <h1 className="p-6 typo-heading3_bold text-neutral-800">{t("dashboard.title")}</h1>
-            ) : view.page === "settings" ? (
-              <Settings />
             ) : view.page === "web" ? (
               <Web />
             ) : view.page === "history" ? (
