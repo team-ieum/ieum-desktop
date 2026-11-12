@@ -67,6 +67,10 @@ pub struct Settings {
     pub first_run_done: bool,
     /// 이음 BE 주소. 바꾸면 세션을 지운다(`web::save_settings`).
     pub server_url: String,
+    /// 로그인된(마지막 활성) 계정. 없으면 로그인 관문.
+    pub current_account: Option<crate::account::AccountId>,
+    /// 알림을 마지막으로 연 시각(RFC3339). 빈 문자열 = 한 번도 안 열어 봄.
+    pub notifications_seen_at: String,
 }
 
 pub const DEFAULT_SERVER_URL: &str = "https://green.kiacms.co.kr";
@@ -78,6 +82,8 @@ impl Default for Settings {
             autostart: false,
             first_run_done: false,
             server_url: DEFAULT_SERVER_URL.into(),
+            current_account: None,
+            notifications_seen_at: String::new(),
         }
     }
 }

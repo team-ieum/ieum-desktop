@@ -1,3 +1,4 @@
+pub mod account;
 pub mod commands;
 pub mod store;
 pub mod supervisor;
