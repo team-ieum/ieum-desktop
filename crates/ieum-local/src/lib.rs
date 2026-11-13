@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod builder;
+pub mod chat;
 mod files;
 mod journal;
 mod paths;
