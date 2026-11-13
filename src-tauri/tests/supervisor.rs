@@ -825,3 +825,19 @@ async fn run_notice_failed_node_is_label_not_error() {
         k => panic!("{k:?}"),
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn save_expecting_does_not_revive_deleted_workflow() {
+    let env = env();
+    let id = save(&env, ai_only_wf(&env.dir("watch")), false);
+    let wf = env.store.get_workflow(&id).unwrap();
+    env.sup.delete_workflow(&id).unwrap();
+    let expected = wf.updated_at.clone();
+    assert!(env.sup.save_workflow_expecting(wf, &expected).is_err());
+    assert!(
+        !env.root
+            .join("data/workflows")
+            .join(format!("{id}.json"))
+            .exists()
+    );
+}

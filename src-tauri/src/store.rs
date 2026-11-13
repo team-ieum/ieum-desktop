@@ -218,8 +218,19 @@ impl Store {
         read_json(&path)
     }
 
+    /// `CHAT_LOCK`을 잡은 채 부른다. 지워진 워크플로우에 늦게 도착한 쓰기가 고아 채팅 파일을 남기지 않게
+    /// (`delete_workflow`는 워크플로우 파일을 먼저 지우고 이 잠금 안에서 채팅 파일을 지운다).
+    fn chat_owner_exists(&self, workflow_id: &str) -> Result<(), String> {
+        if self.workflow_path(workflow_id)?.exists() {
+            Ok(())
+        } else {
+            Err(format!("없는 워크플로우예요: {workflow_id}"))
+        }
+    }
+
     pub fn save_chat(&self, workflow_id: &str, chat: &ChatFile) -> Result<(), String> {
         let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        self.chat_owner_exists(workflow_id)?;
         write_atomic(&self.chat_path(workflow_id)?, chat)
     }
 
@@ -230,6 +241,7 @@ impl Store {
         f: impl FnOnce(&mut ChatFile),
     ) -> Result<ChatFile, String> {
         let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        self.chat_owner_exists(workflow_id)?;
         let mut chat = self.get_chat(workflow_id)?;
         f(&mut chat);
         write_atomic(&self.chat_path(workflow_id)?, &chat)?;

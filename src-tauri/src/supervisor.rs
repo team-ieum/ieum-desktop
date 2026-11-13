@@ -352,7 +352,9 @@ impl Supervisor {
         lock(&self.0.editing).contains(workflow_id)
     }
 
+    /// 저장과 같은 잠금 안에서 지운다 — `save_workflow_expecting`의 확인과 쓰기 사이에 끼면 지운 것이 되살아난다.
     pub fn delete_workflow(&self, id: &str) -> Result<(), String> {
+        let _g = lock(&self.0.save_lock);
         self.store().delete_workflow(id)?;
         self.sync();
         Ok(())

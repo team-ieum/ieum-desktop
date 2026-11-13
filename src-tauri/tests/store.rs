@@ -148,3 +148,19 @@ fn chat_file_default_update_and_deleted_with_workflow() {
     let id2 = store.save_workflow(stored("")).unwrap().id;
     store.delete_workflow(&id2).unwrap();
 }
+
+#[test]
+fn chat_write_after_workflow_delete_is_rejected() {
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let id = store.save_workflow(stored("")).unwrap().id;
+    store.delete_workflow(&id).unwrap();
+    // 삭제 뒤 도착한 쓰기가 고아 채팅 파일을 남기지 않는다.
+    assert!(
+        store
+            .update_chat(&id, |c| c.state.outline.push("a".into()))
+            .is_err()
+    );
+    assert!(store.save_chat(&id, &Default::default()).is_err());
+    assert!(!t.path().join("chats").join(format!("{id}.json")).exists());
+}
