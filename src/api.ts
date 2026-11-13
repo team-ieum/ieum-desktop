@@ -134,7 +134,12 @@ export interface Settings {
   notifyManualStart: boolean;
   notifyManualEnd: boolean;
   notifyWatchEnd: boolean;
+  /** 확인 창 토글 — 옛 설정·테스트엔 없을 수 있어 `!== false`로 읽는다. */
+  confirmDeleteWorkflow?: boolean;
+  confirmDiscardUnsaved?: boolean;
 }
+/** 설정 [업데이트 확인] 결과(Rust `UpdateCheck`). */
+export type UpdateCheck = { status: "dev" } | { status: "latest" } | { status: "installed"; version: string };
 export type SystemSettingsPane = "files" | "notifications" | "login_items";
 /** 시스템 알림 클릭으로 열 화면(Rust `notify::Target`). */
 export type OpenTarget = { kind: "run"; runId: string } | { kind: "history" };
@@ -366,6 +371,7 @@ export const api = {
   openProviderConsole: (provider: ApiProvider) => invoke<void>("open_provider_console", { provider }),
   /** 앞 여부·알림 토글과 무관하게 "알림이 켜졌어요". */
   sendTestNotification: () => invoke<void>("send_test_notification"),
+  checkUpdateNow: () => invoke<UpdateCheck>("check_update_now"),
   /** 시스템 알림을 누르면 열 화면. */
   onOpenTarget: (cb: (t: OpenTarget) => void): Promise<UnlistenFn> =>
     listen<OpenTarget>("open-target", (e) => cb(e.payload)),

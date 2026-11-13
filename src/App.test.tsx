@@ -34,7 +34,7 @@ beforeAll(() => {
 });
 afterEach(() => {
   cleanup();
-  useWeb.setState({ expired: false, offline: false });
+  useWeb.setState({ expired: false, relogin: false, offline: false });
   vi.unstubAllGlobals();
 });
 
@@ -151,15 +151,22 @@ test("offline_start_opens_app_without_gate", async () => {
   expect(useWeb.getState().offline).toBe(true);
 });
 
-test("auth_expired_goes_to_login", async () => {
+test("auth_expired_keeps_app_and_relogin_from_account_settings", async () => {
   vi.mocked(api.webListWorkflows).mockRejectedValueOnce({ code: "AUTH_EXPIRED" });
   await act(async () => {
     render(<App />);
   });
-  expect(screen.getByRole("button", { name: "로그인" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "대시보드" })).toBeNull();
+  // 만료돼도 앱은 그대로 — 관문으로 보내지 않는다.
+  expect(screen.queryByRole("button", { name: "로그인" })).toBeNull();
+  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "설정" })[0]));
+  expect(screen.getByText("이음 클라우드를 쓰려면 다시 로그인하세요.")).toBeTruthy();
+
+  // [다시 로그인] → 이메일이 채워진 관문, [뒤로]면 앱으로.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "다시 로그인" })));
   expect((screen.getByLabelText("이메일") as HTMLInputElement).value).toBe(ACCOUNT.email);
   expect(screen.getByText("로그인이 만료됐어요. 다시 로그인해 주세요.")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "뒤로" })));
+  expect(screen.queryByLabelText("이메일")).toBeNull();
 });
 
 test("gate_waits_for_account_before_rendering", async () => {

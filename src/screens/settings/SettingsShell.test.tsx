@@ -122,7 +122,7 @@ test("settings_search_filters_rows", async () => {
   await renderShell("general");
   expect(screen.getByText("언어")).toBeTruthy();
 
-  await act(async () => fireEvent.change(screen.getByLabelText("설정 검색"), { target: { value: "자동" } }));
+  await act(async () => fireEvent.change(screen.getByLabelText("설정 검색"), { target: { value: "로그인할" } }));
 
   expect(screen.getByText("로그인할 때 자동으로 시작")).toBeTruthy();
   expect(screen.queryByText("언어")).toBeNull();
@@ -498,4 +498,14 @@ test("relogin_after_logout_opens_dashboard", async () => {
   await act(async () => useWeb.getState().login(ACCOUNT.email, "pw"));
   expect(screen.queryByRole("button", { name: "앱으로 돌아가기" })).toBeNull();
   expect(screen.getByRole("button", { name: "대시보드" }).getAttribute("aria-current")).toBe("page");
+});
+
+test("general_update_check_shows_result", async () => {
+  vi.spyOn(api, "checkUpdateNow").mockResolvedValueOnce({ status: "latest" }).mockRejectedValueOnce("offline");
+  await renderShell("general");
+  expect(screen.getByText("업데이트는 시작할 때 자동으로 확인해요.")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "업데이트 확인" })));
+  expect(screen.getByText("최신 버전이에요.")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "업데이트 확인" })));
+  expect(screen.getByText("업데이트를 확인하지 못했어요. 네트워크를 확인해 주세요.")).toBeTruthy();
 });

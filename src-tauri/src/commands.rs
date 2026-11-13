@@ -348,6 +348,30 @@ pub fn send_test_notification(app: AppHandle) -> Result<(), String> {
     crate::notify::send_test(&app)
 }
 
+/// 설정 [업데이트 확인] — `dev`(개발 빌드라 안 함)·`latest`·`installed`(+버전, 다시 시작하면 적용).
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum UpdateCheck {
+    Dev,
+    Latest,
+    Installed { version: String },
+}
+
+#[tauri::command]
+pub async fn check_update_now(app: AppHandle) -> Result<UpdateCheck, String> {
+    if cfg!(debug_assertions) {
+        return Ok(UpdateCheck::Dev);
+    }
+    match crate::install_update(&app).await {
+        Ok(Some(version)) => Ok(UpdateCheck::Installed { version }),
+        Ok(None) => Ok(UpdateCheck::Latest),
+        Err(e) => {
+            eprintln!("[ieum] 업데이트 확인 실패: {e}");
+            Err("업데이트를 확인하지 못했어요. 네트워크를 확인해 주세요.".into())
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn get_settings(active: State<'_, Active>) -> Result<Settings, String> {
     active.settings().get_settings()

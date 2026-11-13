@@ -35,6 +35,8 @@ export default function App() {
   }
   const loadAccount = useWeb((s) => s.load);
   const expired = useWeb((s) => s.expired);
+  const relogin = useWeb((s) => s.relogin);
+  const setRelogin = useWeb((s) => s.setRelogin);
   const guard = useWeb((s) => s.guard);
   const [ready, setReady] = useState(false);
   const [version, setVersion] = useState("");
@@ -49,9 +51,9 @@ export default function App() {
     getVersion().then(setVersion, () => {});
   }, [loadSettings, loadAccount]);
 
-  // 관문을 지나면(로그인한 계정의) 최근 작업을 읽는다. 웹 몫은 못 불러오면 내 PC만 —
-  // 만료면 guard가 관문으로, 오프라인이면 그대로.
-  const gated = account === null || expired;
+  // 관문을 지나면(로그인한 계정의) 최근 작업을 읽는다. 웹 몫은 못 불러오면 내 PC만.
+  // 만료돼도 앱은 그대로 쓴다 — 관문은 [다시 로그인]을 눌렀을 때만(설정 이음 계정·대시보드).
+  const gated = account === null || (expired && relogin);
   const onboarding = useSettings((s) => s.settings?.onboardingDone === false);
   useEffect(() => {
     if (gated) return setWeb([]);
@@ -66,18 +68,20 @@ export default function App() {
   // 편집기에 저장 안 한 변경이 있으면 떠나기 전에 앱 안에서 묻는다.
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState<(() => void) | null>(null);
-  const leave = (go: () => void) => (dirty ? setPending(() => go) : go());
+  // 설정 확인 창에서 끄면 묻지 않고 버리고 나간다.
+  const askDiscard = useSettings((s) => s.settings?.confirmDiscardUnsaved !== false);
+  const leave = (go: () => void) => (dirty && askDiscard ? setPending(() => go) : go());
   const newCanvas = () => leave(() => openEditor(null));
 
   // 시스템 알림 클릭 → 그 실행 상세(대시보드와 같은 기록 화면) 또는 실행 기록.
   useEffect(() => {
     const un = api.onOpenTarget((t) => {
       const go = () => setView(t.kind === "run" ? { page: "history", run: t.runId } : { page: "history" });
-      if (dirty) setPending(() => go);
+      if (dirty && askDiscard) setPending(() => go);
       else go();
     });
     return () => void un.then((f) => f(), () => {});
-  }, [dirty]);
+  }, [dirty, askDiscard]);
 
   const [collapsed, toggleSidebar] = useSidebarCollapsed();
   const [searching, setSearching] = useState(false);
@@ -112,11 +116,11 @@ export default function App() {
 
   if (!ready) return null;
 
-  // 관문: 로그인 전·만료면 로그인 화면만(만료면 이메일을 채운다). 오프라인은 관문으로 보내지 않는다.
+  // 관문: 로그인 전이거나 만료 뒤 다시 로그인할 때(이메일을 채우고 취소로 돌아갈 수 있다).
   if (gated)
     return (
       <div key={lang} className="h-full">
-        <AuthScreen key={account?.email ?? ""} initialEmail={account?.email} />
+        <AuthScreen key={account?.email ?? ""} initialEmail={account?.email} onCancel={account ? () => setRelogin(false) : undefined} />
       </div>
     );
 
