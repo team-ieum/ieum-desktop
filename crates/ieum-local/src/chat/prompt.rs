@@ -3,7 +3,7 @@
 use serde_json::Value;
 
 use super::HISTORY_MAX;
-use crate::ai::wrap_data;
+use crate::ai::{defuse_mentions, wrap_data};
 use crate::builder::{ChatMessage, Reply, Role};
 
 /// 채팅 패널 고정 지시문(system 자리, `SYSTEM_INSTRUCTION` 뒤). 규칙 내용은 `ieum workflow guide`와 같다.
@@ -105,7 +105,7 @@ pub fn tail(status: &Reply) -> String {
     lines.join("\n")
 }
 
-/// user 자리 프롬프트. 상태·동작 결과는 데이터로 감싸고, 사용자·어시스턴트 글과 `[시스템]` 줄은 그대로 둔다.
+/// user 자리 프롬프트. 상태·동작 결과는 데이터로 감싸고, 사용자·어시스턴트 글과 `[시스템]` 줄은 구분선 밖에 둔다.
 pub fn build(
     tail: &str,
     now: &str,
@@ -136,5 +136,7 @@ pub fn build(
             p.push_str(&format!("\n{n}"));
         }
     }
-    p
+    // CLI는 `@경로`를 파일 첨부로 푼다. 조각마다 막지 않고 나가는 프롬프트 전체를 여기 한 곳에서 막는다
+    // (지난 어시스턴트 말·사용자 글·안내 줄 포함). 이미 바뀐 글에 다시 적용해도 결과가 같다.
+    if cli { defuse_mentions(&p) } else { p }
 }

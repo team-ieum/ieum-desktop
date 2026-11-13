@@ -95,6 +95,8 @@ pub const HISTORY_MAX: usize = 40;
 
 /// 답 모양이 연달아 이만큼 틀리면 턴을 끝낸다(AI 노드의 재시도 수와 같다).
 const BAD_ANSWERS: usize = 2;
+/// 고정 문구 — AI가 낸 값은 싣지 않는다(구분선 밖이라 지시로 읽힌다).
+const BAD_ANSWER_NOTICE: &str = "[시스템] 직전 답을 읽지 못했음. say와 actions 두 칸(둘 다 문자열, actions는 JSON 배열을 담은 문자열) 모양을 지켜 다시 답할 것";
 const EDITING_NOTICE: &str = "[시스템] 사용자가 캔버스에서 고치는 중이라 실행하지 않았음. say로 사용자에게 알리고, 다음 답에서 status로 다시 확인한 뒤 다시 시도할 것";
 
 fn field(key: &str, description: &str) -> OutputField {
@@ -105,17 +107,17 @@ fn field(key: &str, description: &str) -> OutputField {
     }
 }
 
-/// 답 글자 → (say, actions). 실패 이유는 다음 프롬프트에 붙는다.
-fn parse(text: &str, fields: &[OutputField]) -> Result<(String, Vec<Value>), String> {
-    let out = parse_structured_output(text, fields)?;
+/// 답 글자 → (say, actions). 모양이 틀리면 None — 이유에는 AI가 낸 값이 섞여 있어 프롬프트에 싣지 않는다.
+fn parse(text: &str, fields: &[OutputField]) -> Option<(String, Vec<Value>)> {
+    let out = parse_structured_output(text, fields).ok()?;
     let say = out["say"].as_str().unwrap_or("").trim().to_string();
     let raw = out["actions"].as_str().unwrap_or("").trim();
     let actions = if raw.is_empty() {
         Vec::new()
     } else {
-        serde_json::from_str(raw).map_err(|_| "actions가 JSON 배열이 아님")?
+        serde_json::from_str(raw).ok()?
     };
-    Ok((say, actions))
+    Some((say, actions))
 }
 
 /// 한 턴: AI에게 묻고 → 동작을 실행하고 → 결과를 붙여 다시 묻기를 `actions`가 빌 때까지(또는 카드·상한까지).
@@ -190,19 +192,14 @@ pub async fn run_turn(
             Ok(Ok(a)) => a,
         };
         r.usage.extend(answer.usage);
-        let (say, todo) = match parse(&answer.text, &fields) {
-            Ok(x) => x,
-            Err(why) => {
-                bad += 1;
-                if bad >= BAD_ANSWERS {
-                    r.error = Some(BAD_ANSWER.into());
-                    break;
-                }
-                notice = Some(format!(
-                    "[시스템] 직전 답을 읽지 못했음: {why}. say와 actions 두 칸 모양을 지켜 다시 답할 것"
-                ));
-                continue;
+        let Some((say, todo)) = parse(&answer.text, &fields) else {
+            bad += 1;
+            if bad >= BAD_ANSWERS {
+                r.error = Some(BAD_ANSWER.into());
+                break;
             }
+            notice = Some(BAD_ANSWER_NOTICE.into());
+            continue;
         };
         bad = 0;
         if !say.is_empty() {

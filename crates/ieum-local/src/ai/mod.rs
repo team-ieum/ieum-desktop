@@ -304,7 +304,7 @@ fn strip_delimiters(s: &str) -> String {
 
 /// claude CLI(2.1.322 실측)는 줄 처음·공백·`。、？！` 뒤 `@경로`를 파일 첨부로 푼다(`--tools ""` 우회).
 /// 경계 규칙은 CLI 업데이트로 늘 수 있어 따라가지 않고 `@`를 전부 전각 `＠`로 바꾼다(메일 주소 포함).
-fn defuse_mentions(s: &str) -> String {
+pub(crate) fn defuse_mentions(s: &str) -> String {
     s.replace('@', "＠")
 }
 

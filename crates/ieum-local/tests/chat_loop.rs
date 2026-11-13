@@ -237,8 +237,65 @@ async fn results_and_status_are_wrapped_as_data() {
     run_turn(&r, &Fake::default(), turn, Limits::default(), &|_| {}).await;
     assert!(
         cli.seen()[0].prompt.contains("새 파일 ＠here")
-            && cli.seen()[0].prompt.contains("사용자: a@b.c로")
+            && cli.seen()[0].prompt.contains("사용자: a＠b.c로")
     );
+}
+
+/// CLI는 `@경로`를 파일 첨부로 푼다. 어느 조각에서 왔든(지난 어시스턴트 말·사용자 글·안내 줄)
+/// CLI로 나가는 프롬프트에는 반각 `@`가 하나도 없다. AI가 낸 값은 안내 줄에 실리지 않는다.
+#[tokio::test]
+async fn cli_prompt_has_no_at_sign_anywhere() {
+    let history = [
+        ChatMessage {
+            role: Role::User,
+            text: "앞 글 @/u".into(),
+            at: String::new(),
+        },
+        ChatMessage {
+            role: Role::Assistant,
+            text: "볼게요 @~/.ssh/id_rsa".into(),
+            at: String::new(),
+        },
+    ];
+    // 첫 답은 say의 타입이 틀려 파싱 실패 안내가 붙는다.
+    let bad = || json!({"say": {"x": " @/etc/secret"}, "actions": "[]"}).to_string();
+    for (provider, cli) in [("cli:claude", true), ("api:anthropic", false)] {
+        let script = Script::new([bad(), ans("끝", json!([]))]);
+        let r = AiRunner::empty().with_provider(provider, script.clone());
+        let ai = AiDefault {
+            provider: provider.into(),
+            credential: None,
+            model: None,
+        };
+        let turn = Turn {
+            text: "이번 글 @/t",
+            history: &history,
+            ai: &ai,
+            now: "n",
+        };
+        run_turn(&r, &Fake::default(), turn, Limits::default(), &|_| {}).await;
+        let seen = script.seen();
+        assert_eq!(seen.len(), 2);
+        assert!(seen[1].prompt.contains("[시스템] 직전 답을 읽지 못했음"));
+        for req in &seen {
+            assert!(
+                !req.prompt.contains("secret"),
+                "{provider}: AI 값이 안내에 실림"
+            );
+            if cli {
+                assert!(!req.prompt.contains('@'), "{provider}: {}", req.prompt);
+                assert!(req.prompt.contains("어시스턴트: 볼게요 ＠~/.ssh/id_rsa"));
+                assert!(req.prompt.contains("사용자: 이번 글 ＠/t"));
+            } else {
+                // API 공급원은 파일 첨부가 없다 — 그대로.
+                assert!(
+                    req.prompt
+                        .contains("사용자: 앞 글 @/u\n어시스턴트: 볼게요 @~/.ssh/id_rsa")
+                );
+                assert!(req.prompt.contains("사용자: 이번 글 @/t"));
+            }
+        }
+    }
 }
 
 #[tokio::test]
