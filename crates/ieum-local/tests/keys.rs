@@ -152,6 +152,17 @@ fn scoped_keys_pass_own_full_names() {
             .any(|k| k.starts_with("anthropic.bbbb"))
     );
     assert_eq!(a.get("anthropic.bbbbbbbbbbbbbbbb.0123abcd").unwrap(), None);
+    // B 계정 키가 있어도 A로는 읽히지 않는다.
+    inner
+        .set("anthropic.bbbbbbbbbbbbbbbb.0123abcd", "sk-b1")
+        .unwrap();
+    assert_ne!(
+        a.get("anthropic.bbbbbbbbbbbbbbbb.0123abcd")
+            .ok()
+            .flatten()
+            .as_deref(),
+        Some("sk-b1")
+    );
 }
 
 /// 원시 키체인 가짜: 항목 맵 + 읽기 횟수 + 다음 N번 읽기/vault 쓰기 실패.

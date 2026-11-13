@@ -455,12 +455,89 @@ fn begin_account_command_quotes_path() {
     // 따옴표·$·백틱이 든 경로는 명령을 만들지 않는다.
     let bad = AccountCredentials::new(t.path().join("a\"b"), K16, Arc::new(FakeKeys::default()));
     assert!(bad.begin_cli_account("claude", "x").is_err());
+    // ASCII가 아닌 경로도(claude가 NFC로 해시해 폴더가 어긋날 수 있다).
+    let bad = AccountCredentials::new(t.path().join("계정"), K16, Arc::new(FakeKeys::default()));
+    assert!(bad.begin_cli_account("claude", "x").is_err());
+}
+
+/// 키체인 접근을 거부당한 저장소.
+struct DeniedKeys;
+
+impl KeyStore for DeniedKeys {
+    fn get(&self, _: &str) -> Result<Option<String>, KeyError> {
+        Err(KeyError("거부됨".into()))
+    }
+    fn set(&self, _: &str, _: &str) -> Result<(), KeyError> {
+        Err(KeyError("거부됨".into()))
+    }
+    fn delete(&self, _: &str) -> Result<(), KeyError> {
+        Err(KeyError("거부됨".into()))
+    }
+}
+
+#[test]
+fn legacy_key_with_keychain_denied_reports_keychain() {
+    let t = tempfile::tempdir().unwrap();
+    let c = AccountCredentials::new(t.path().to_path_buf(), K16, Arc::new(DeniedKeys));
+    let e = c.api_key_name("anthropic", Some("default")).unwrap_err();
+    assert_ne!(e, MISSING);
+    assert!(e.contains("키체인"), "{e}");
+}
+
+#[test]
+fn add_key_rolls_back_vault_when_meta_write_fails() {
+    use std::os::unix::fs::PermissionsExt;
+    let (t, keys, c) = setup();
+    std::fs::set_permissions(t.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let r = c.add_api_key("openai", "개인", "sk-proj-abcdefgh");
+    std::fs::set_permissions(t.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(r.is_err());
+    assert!(keys.0.lock().unwrap().is_empty());
+}
+
+/// 목록 파일을 고쳐 `../victim` 같은 id를 넣어도 계정 폴더 밖은 건드리지 않는다.
+#[test]
+fn traversal_id_never_leaves_account_dir() {
+    let (t, _keys, c) = setup();
+    let m = json!({"id": "../victim", "label": "x", "isDefault": false, "createdAt": "", "email": null});
+    std::fs::write(
+        t.path().join("credentials.json"),
+        json!({"claudeAccounts": [m], "pendingClaudeAccounts": [m]}).to_string(),
+    )
+    .unwrap();
+    let victim = t.path().join("victim");
+    std::fs::create_dir(&victim).unwrap();
+    std::fs::write(victim.join("keep"), "x").unwrap();
+    assert_eq!(
+        c.cancel_cli_account("claude", "../victim").unwrap_err(),
+        MISSING
+    );
+    assert_eq!(c.delete("claude", "../victim").unwrap_err(), MISSING);
+    assert_eq!(c.claude_config_dir(Some("../victim")).unwrap_err(), MISSING);
+    assert!(victim.join("keep").exists());
+}
+
+#[test]
+fn codex_account_reads_only_its_auth_json() {
+    use ieum_desktop_lib::sub_usage::codex_auth_file;
+    let t = tempfile::tempdir().unwrap();
+    // 빈 계정 폴더: 이 Mac의 `~/.codex`로 넘어가지 않는다.
+    assert!(codex_auth_file(Some(t.path())).is_none());
+    std::fs::write(
+        t.path().join("auth.json"),
+        json!({"tokens": {"access_token": "at", "account_id": "acc",
+            "id_token": "e30.eyJlbWFpbCI6ImNAeC5jb20ifQ.sig"}})
+        .to_string(),
+    )
+    .unwrap();
+    let a = codex_auth_file(Some(t.path())).unwrap();
+    assert!(format!("{a:?}").contains("c@x.com"), "{a:?}");
 }
 
 #[tokio::test]
 async fn pending_account_hidden_until_confirmed() {
     let (t, c) = setup_spaced();
-    let (usage, _) = fake_usage(t.path());
+    let (usage, seen) = fake_usage(t.path());
     let b = c.begin_cli_account("claude", "회사").unwrap();
     let ids = |c: &AccountCredentials| -> Vec<String> {
         c.list().claude_accounts.into_iter().map(|a| a.id).collect()
@@ -474,6 +551,11 @@ async fn pending_account_hidden_until_confirmed() {
         .unwrap();
     assert_eq!(u.state, "not_logged_in");
     assert_eq!(ids(&c), ["system"]);
+    // 다시 [확인]하면 캐시된 not_logged_in이 아니라 토큰을 새로 읽는다.
+    confirm_cli_account(c.clone(), &usage, "claude", &b.id)
+        .await
+        .unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
     // 취소하면 폴더째 지운다.
     let dir = c.pending_dir("claude", &b.id).unwrap();
     c.cancel_cli_account("claude", &b.id).unwrap();

@@ -300,14 +300,14 @@ fn open_url(url: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn open_web_editor(active: State<'_, Active>) -> Result<(), String> {
+pub async fn open_web_editor(active: State<'_, Active>) -> Result<(), String> {
     open_url(&web_editor_url(
         &active.settings().get_settings()?.server_url,
     )?)
 }
 
 #[tauri::command]
-pub fn open_web_workflow(active: State<'_, Active>, id: String) -> Result<(), String> {
+pub async fn open_web_workflow(active: State<'_, Active>, id: String) -> Result<(), String> {
     open_url(&web_workflow_url(
         &active.settings().get_settings()?.server_url,
         &id,
@@ -334,7 +334,7 @@ pub fn send_test_notification(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn get_settings(active: State<'_, Active>) -> Result<Settings, String> {
+pub async fn get_settings(active: State<'_, Active>) -> Result<Settings, String> {
     active.settings().get_settings()
 }
 

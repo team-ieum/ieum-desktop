@@ -308,7 +308,8 @@ impl AccountCredentials {
         if key.is_empty() {
             return Err("키가 비었어요.".into());
         }
-        self.edit(|c| {
+        let written = std::cell::Cell::new(None);
+        let r = self.edit(|c| {
             let list = c.api_keys.entry(provider.to_string()).or_default();
             let id = loop {
                 let id = new_id();
@@ -316,9 +317,9 @@ impl AccountCredentials {
                     break id;
                 }
             };
-            self.keys
-                .set(&self.vault_name(provider, &id), key)
-                .map_err(|e| e.to_string())?;
+            let name = self.vault_name(provider, &id);
+            self.keys.set(&name, key).map_err(|e| e.to_string())?;
+            written.set(Some(name));
             let m = ApiKeyMeta {
                 id,
                 label,
@@ -328,7 +329,14 @@ impl AccountCredentials {
             };
             list.push(m.clone());
             Ok(m)
-        })
+        });
+        // 메타를 못 썼으면 목록에 없는 값이 vault에 남지 않게 되돌린다.
+        if r.is_err()
+            && let Some(name) = written.take()
+        {
+            let _ = self.keys.delete(&name);
+        }
+        r
     }
 
     /// `kind` = `anthropic|openai|gemini|claude|codex`.
@@ -378,7 +386,8 @@ impl AccountCredentials {
             let dir = self.account_dir(kind, &id)?;
             let shown = dir.display().to_string();
             // 큰따옴표 안에서도 뜻이 바뀌는 글자가 있으면 붙여 넣을 명령을 만들지 않는다.
-            if shown.contains(['"', '$', '`', '\\', '\n']) {
+            // ASCII가 아니면 claude가 경로를 NFC로 바꿔 해시해 앱이 넘기는 폴더와 어긋날 수 있다.
+            if !shown.is_ascii() || shown.contains(['"', '$', '`', '\\', '\n']) {
                 return Err("계정 폴더 경로에 쓸 수 없는 글자가 있어요.".into());
             }
             std::fs::create_dir_all(&dir).map_err(|e| format!("계정 폴더를 못 만들었어요: {e}"))?;
@@ -429,6 +438,10 @@ impl AccountCredentials {
     fn finish_cli_account(&self, kind: &str, id: &str, email: String) -> Result<(), String> {
         self.edit(|c| {
             let (list, pending) = accounts(c, kind);
+            // [확인]이 겹치면 먼저 끝난 쪽이 이미 옮겼다.
+            if list.iter().any(|m| m.id == id) {
+                return Ok(());
+            }
             let i = pending
                 .iter()
                 .position(|m| m.id == id)
@@ -499,7 +512,7 @@ impl CredentialResolver for AccountCredentials {
     /// 고른 id가 목록에 없거나 vault에 값이 없으면 `MISSING`. 비우면 기본(없으면 옛 이름 — 공급원이 "키가 없어요").
     fn api_key_name(&self, provider: &str, credential: Option<&str>) -> Result<String, String> {
         let provider = api_provider(provider)?;
-        let (c, _) = {
+        let (c, keychain_error) = {
             let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
             self.merged()?
         };
@@ -511,6 +524,12 @@ impl CredentialResolver for AccountCredentials {
                 .map_or(LEGACY_ID, |m| &m.id);
             return Ok(self.vault_name(provider, id));
         };
+        // 옛 키는 키체인을 읽어야 목록에 보인다 — 못 읽었으면 없는 키가 아니라 키체인 오류.
+        if id == LEGACY_ID
+            && let Some(e) = keychain_error
+        {
+            return Err(format!("키체인에서 키를 읽지 못했어요: {e}"));
+        }
         if !list.iter().any(|m| m.id == id) {
             return Err(MISSING.into());
         }

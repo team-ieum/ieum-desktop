@@ -10,7 +10,10 @@ fn keychain_commands_are_async() {
         .skip(1)
         .map(|chunk| chunk.split('{').next().unwrap_or(""))
         .filter(|sig| {
-            (sig.contains("Keys>") || sig.contains("UsageClient>")) && !sig.contains("async fn")
+            ["Keys>", "UsageClient>", "SubscriptionUsage>", "Active>"]
+                .iter()
+                .any(|t| sig.contains(t))
+                && !sig.contains("async fn")
         })
         .collect();
     assert!(sync.is_empty(), "키체인을 쓰는 동기 명령: {sync:#?}");

@@ -380,7 +380,19 @@ impl AiProvider for CliProvider {
             (Some(s), CliKind::Codex) => Some(SchemaFile::write(s)?),
             _ => None,
         };
-        let mut line = sh_quote(&self.program);
+        // 고른 구독 계정의 설정 폴더는 명령 줄 앞에 — 로그인 셸이 읽는 프로필이 덮지 못하게.
+        // 없으면 앱이 물려받은 값만 지운다(사용자 프로필의 값은 셸이 다시 넣는다).
+        let mut cmd = Command::new(shell());
+        let mut line = match (&req.config_dir, self.kind) {
+            (Some(d), CliKind::Claude) => {
+                format!("CLAUDE_CONFIG_DIR={} ", sh_quote(&d.to_string_lossy()))
+            }
+            _ => {
+                cmd.env_remove("CLAUDE_CONFIG_DIR");
+                String::new()
+            }
+        };
+        line.push_str(&sh_quote(&self.program));
         for a in self
             .kind
             .args(&req, schema_file.as_ref().map(|f| f.0.as_path()))
@@ -388,12 +400,6 @@ impl AiProvider for CliProvider {
             line.push(' ');
             line.push_str(&sh_quote(&a));
         }
-        let mut cmd = Command::new(shell());
-        // 고른 구독 계정의 설정 폴더. 없으면 앱이 물려받은 값도 지워 이 Mac의 로그인으로.
-        match (&req.config_dir, self.kind) {
-            (Some(d), CliKind::Claude) => cmd.env("CLAUDE_CONFIG_DIR", d),
-            _ => cmd.env_remove("CLAUDE_CONFIG_DIR"),
-        };
         let mut child = cmd
             .arg("-lc")
             .arg(&line)
