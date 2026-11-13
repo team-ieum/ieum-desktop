@@ -30,6 +30,18 @@ fn usage(source: &str, model: &str, input: u64, output: u64) -> AiUsage {
     }
 }
 
+/// 가격표에 있는 모델이어도 구독은 금액을 매기지 않는다.
+#[test]
+fn estimate_skips_codex_subscription() {
+    assert_eq!(
+        estimate_usd(
+            &usage("cli:codex", "gpt-5.6-luna", 1_000_000, 10),
+            ieum_desktop_lib::pricing::table()
+        ),
+        None
+    );
+}
+
 #[test]
 fn estimate_uses_table_and_skips_subscription() {
     let t = table();
@@ -186,6 +198,27 @@ fn cached(source: &str, model: &str, input: u64, output: u64, read: u64, write: 
 
 fn names() -> HashMap<String, String> {
     HashMap::from([("w1".to_string(), "요약".to_string())])
+}
+
+/// Antigravity 구독은 Google 묶음에 들고 금액은 매기지 않는다.
+#[test]
+fn usage_report_counts_agy_under_google() {
+    let runs = vec![run(
+        "w1",
+        "2026-11-12T01:00:00.000Z",
+        &[
+            usage("gemini", "gemini-x", 7, 3),
+            usage("cli:agy", "gemini-3.8-flash-low", 20, 4),
+        ],
+    )];
+    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let v = serde_json::to_value(&r).unwrap();
+    let g = provider(&v, "google");
+    assert_eq!(
+        (g["calls"].clone(), g["input"].clone()),
+        (json!(2), json!(27))
+    );
+    assert_eq!(g["usd"], 0.0);
 }
 
 fn provider<'a>(v: &'a Value, id: &str) -> &'a Value {

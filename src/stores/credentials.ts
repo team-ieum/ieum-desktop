@@ -10,6 +10,7 @@ export const useCredentials = create<{ view: CredentialsView | null; load: () =>
 /** 노드 공급원(`cli:claude`·`api:openai` …)이 고를 수 있는 키·계정. */
 export const choicesFor = (view: CredentialsView, provider: unknown) => {
   if (provider === "cli:claude") return view.claudeAccounts;
+  if (provider === "cli:codex") return view.codexAccounts;
   if (typeof provider === "string" && provider.startsWith("api:")) return view.apiKeys[provider.slice(4) as keyof CredentialsView["apiKeys"]] ?? [];
   return [];
 };

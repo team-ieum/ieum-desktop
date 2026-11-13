@@ -21,6 +21,14 @@
           "name": "Claude (구독)"
         },
         {
+          "id": "cli:codex",
+          "name": "Codex (구독)"
+        },
+        {
+          "id": "cli:agy",
+          "name": "Antigravity (구독)"
+        },
+        {
           "id": "api:anthropic",
           "name": "Anthropic API 키"
         },

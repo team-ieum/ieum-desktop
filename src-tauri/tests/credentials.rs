@@ -176,6 +176,17 @@ fn resolver_picks_named_key() {
     assert_eq!(c.claude_config_dir(Some("deadbeef")).unwrap_err(), MISSING);
 }
 
+#[test]
+fn codex_home_resolves_like_claude() {
+    let (_t, _k, c) = setup();
+    assert_eq!(c.codex_home(None).unwrap(), None); // 기본 = 이 Mac의 로그인
+    assert_eq!(c.codex_home(Some("system")).unwrap(), None);
+    assert_eq!(c.codex_home(Some("deadbeef")).unwrap_err(), MISSING);
+    assert_eq!(c.codex_home(Some("../victim")).unwrap_err(), MISSING);
+    c.set_system_hidden("codex", true).unwrap();
+    assert_eq!(c.codex_home(None).unwrap_err(), MISSING); // 숨긴 로그인을 다른 계정으로 대신하지 않는다
+}
+
 // ---- 노드 실행 ----
 
 /// Anthropic SSE 응답을 주는 가짜 서버. 요청마다 `x-api-key`를 보내고, `gate`가 있으면 허가를 받고 답한다.

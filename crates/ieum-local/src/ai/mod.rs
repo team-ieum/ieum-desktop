@@ -17,7 +17,10 @@ use serde_json::{Map, Value, json};
 use crate::paths::AllowedRoots;
 
 pub use api::{API_TIMEOUT, ApiKind, ApiProvider};
-pub use cli::{CliKind, CliProvider, DetectedCli, detect_clis, parse_stream, shell_output};
+pub use cli::{
+    AGY_GATE, AGY_SETTINGS, CliKind, CliProvider, DetectedCli, detect_clis, lock_codex_catalog,
+    parse_stream, shell_output,
+};
 pub use content::{MAX_CHARS, MAX_PDF_BYTES, Skip, file_text, file_text_bounded, read_file_text};
 pub use keys::{ApiKey, KeyStore, Keychain};
 
@@ -33,7 +36,7 @@ pub struct AiRequest {
     pub schema: Option<Value>,
     /// API 키 공급원이 읽을 키 저장소 이름(`CredentialResolver`가 고른 것). None이면 공급원 기본.
     pub key_name: Option<String>,
-    /// claude CLI에 줄 `CLAUDE_CONFIG_DIR`(고른 구독 계정). None이면 CLI 기본 설정.
+    /// 고른 구독 계정의 설정 폴더 — claude `CLAUDE_CONFIG_DIR`, codex `CODEX_HOME`. None이면 CLI 기본 설정.
     pub config_dir: Option<PathBuf>,
 }
 
@@ -47,6 +50,10 @@ pub trait CredentialResolver: Send + Sync {
     fn api_key_name(&self, provider: &str, credential: Option<&str>) -> Result<String, String>;
     /// `None` = CLI 기본 설정 폴더.
     fn claude_config_dir(&self, credential: Option<&str>) -> Result<Option<PathBuf>, String>;
+    /// codex 계정의 `CODEX_HOME`. `None` = CLI 기본 폴더.
+    fn codex_home(&self, _credential: Option<&str>) -> Result<Option<PathBuf>, String> {
+        Ok(None)
+    }
 }
 
 /// 텍스트 조각 콜백. 별칭으로 둔다 — `async_trait`이 `&str`의 생략 수명을 고정 수명으로 바꿔 버린다.
@@ -57,7 +64,7 @@ pub type ChunkFn<'a> = dyn Fn(&str) + Send + Sync + 'a;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiUsage {
-    /// `anthropic`·`openai`·`gemini`·`cli:claude`
+    /// `anthropic`·`openai`·`gemini`·`cli:claude`·`cli:codex`·`cli:agy`
     pub source: String,
     pub model: Option<String>,
     pub input_tokens: u64,
@@ -79,6 +86,38 @@ impl AiUsage {
             output_tokens: u["output_tokens"].as_u64().unwrap_or(0),
             cache_read_tokens: u["cache_read_input_tokens"].as_u64(),
             cache_write_tokens: u["cache_creation_input_tokens"].as_u64(),
+            credential: None,
+        }
+    }
+
+    /// codex `turn.completed.usage` — 입력은 캐시 읽기·쓰기를 포함해 오므로 뺀다(OpenAI API와 같은 규칙).
+    fn from_codex(model: Option<&str>, u: &Value) -> Self {
+        let n = |k: &str| u[k].as_u64();
+        let (read, write) = (n("cached_input_tokens"), n("cache_write_input_tokens"));
+        AiUsage {
+            source: CliKind::Codex.id().into(),
+            model: model.map(str::to_string),
+            input_tokens: n("input_tokens")
+                .unwrap_or(0)
+                .saturating_sub(read.unwrap_or(0))
+                .saturating_sub(write.unwrap_or(0)),
+            output_tokens: n("output_tokens").unwrap_or(0),
+            cache_read_tokens: read,
+            cache_write_tokens: write,
+            credential: None,
+        }
+    }
+
+    /// agy `result.usage`. 생각 토큰은 출력에 더한다(Gemini API와 같은 규칙).
+    fn from_agy(model: Option<&str>, u: &Value) -> Self {
+        let n = |k: &str| u[k].as_u64();
+        AiUsage {
+            source: CliKind::Agy.id().into(),
+            model: model.map(str::to_string),
+            input_tokens: n("input_tokens").unwrap_or(0),
+            output_tokens: n("output_tokens").unwrap_or(0) + n("thinking_tokens").unwrap_or(0),
+            cache_read_tokens: n("cache_read_tokens"),
+            cache_write_tokens: None,
             credential: None,
         }
     }
@@ -161,8 +200,15 @@ impl AiRunner {
             let id = name.splitn(3, '.').nth(2).unwrap_or("default").to_string();
             return Ok((Some(name), None, Some(id)));
         }
-        if provider_id == CliKind::Claude.id() {
-            let dir = r.claude_config_dir(credential).map_err(fail)?;
+        let dir = if provider_id == CliKind::Claude.id() {
+            Some(r.claude_config_dir(credential))
+        } else if provider_id == CliKind::Codex.id() {
+            Some(r.codex_home(credential))
+        } else {
+            None
+        };
+        if let Some(dir) = dir {
+            let dir = dir.map_err(fail)?;
             // 계정 폴더 이름 = 계정 id(`.../claude/<id>`), 없으면 이 Mac의 로그인.
             let id = dir
                 .as_deref()
@@ -194,15 +240,17 @@ impl AiRunner {
         Ok(real)
     }
 
-    /// 구독 CLI(claude만 — `cli:codex`는 보류, `CliKind::Codex` 주석) + API 키 공급원 셋.
+    /// 구독 CLI(claude·codex·agy) + API 키 공급원 셋.
     pub fn new() -> Self {
         Self::with_keys(Arc::new(Keychain))
     }
 
     /// `new()`와 같은 공급원, 키 저장소만 주입(계정 범위 키).
     pub fn with_keys(keys: Arc<dyn KeyStore>) -> Self {
-        let k = CliKind::Claude;
-        let mut r = Self::empty().with_provider(k.id(), Arc::new(CliProvider::new(k)));
+        let mut r = Self::empty();
+        for k in cli::ENABLED {
+            r = r.with_provider(k.id(), Arc::new(CliProvider::new(k)));
+        }
         for k in [ApiKind::Anthropic, ApiKind::OpenAi, ApiKind::Gemini] {
             r = r.with_provider(
                 k.id(),
@@ -350,6 +398,12 @@ impl AiRunner {
         let model = opt_str(cfg, "model");
         let extra = opt_str(cfg, "data");
         let send_content = cfg.get("sendContent").and_then(Value::as_bool) == Some(true);
+        // agy는 세션 저장을 끌 수 없어 넘긴 내용이 디스크에 남는다 — 이름·확장자·크기만 보낸다.
+        if provider_id == CliKind::Agy.id() && send_content {
+            return Err(fail(
+                "Antigravity (구독)에는 파일 내용을 보낼 수 없어요. '파일 내용도 보내기'를 꺼 주세요.",
+            ));
+        }
         let file = opt_str(cfg, "file")
             .map(|f| self.allowed_file(f))
             .transpose()?;

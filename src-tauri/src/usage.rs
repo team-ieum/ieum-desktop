@@ -340,7 +340,7 @@ fn provider_of(source: &str) -> Option<usize> {
     match source {
         "cli:claude" | "anthropic" => Some(0),
         "openai" | "cli:codex" => Some(1),
-        "gemini" => Some(2),
+        "gemini" | "cli:agy" => Some(2),
         _ => None,
     }
 }

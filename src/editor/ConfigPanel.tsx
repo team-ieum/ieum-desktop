@@ -29,7 +29,7 @@ interface FieldProps {
   provider?: unknown;
 }
 
-const PROVIDER_LOGO: Record<string, LogoId> = { "cli:claude": "claude", "api:anthropic": "anthropic", "api:openai": "openai", "api:gemini": "gemini" };
+const PROVIDER_LOGO: Record<string, LogoId> = { "cli:claude": "claude", "cli:codex": "openai", "cli:agy": "antigravity", "api:anthropic": "anthropic", "api:openai": "openai", "api:gemini": "gemini" };
 
 /** AI 노드 "키·계정" — 그 공급원의 목록 + 맨 위 "기본(이름표)". 비우면 칸을 저장하지 않는다(`undefined`). */
 function CredentialSelect({ id, provider, value, onChange }: { id: string; provider: unknown; value: string; onChange: (v: unknown) => void }) {
@@ -152,10 +152,24 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
       </div>
     );
   } else if (field.type === "boolean") {
+    // Antigravity는 파일 내용을 못 받는다(러너도 거절한다) — 칸을 잠근다.
+    const locked = field.key === "sendContent" && provider === "cli:agy";
     input = (
       <div className="flex flex-col gap-1.5">
-        <input id={id} type="checkbox" className="size-4 accent-main-blue" checked={value === true} onChange={(e) => onChange(e.target.checked)} />
-        {field.key === "sendContent" && value === true && (
+        <input
+          id={id}
+          type="checkbox"
+          className="size-4 accent-main-blue"
+          checked={value === true && !locked}
+          disabled={locked}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        {locked && (
+          <p className="typo-caption1_regular text-neutral-500" role="note">
+            {t("editor.sendContentAgy")}
+          </p>
+        )}
+        {field.key === "sendContent" && value === true && !locked && (
           <p className="flex items-start gap-1.5 rounded-brand-sm bg-danger-100 px-2.5 py-2 typo-caption1_semibold text-danger-700" role="note">
             <TriangleAlert size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
             {t("editor.sendContentWarning")}
@@ -235,7 +249,10 @@ export function ConfigPanel({ node, workflow, onChange, pickFolder = () => api.p
           onChange={(v) => {
             // undefined = 칸을 뺀다. 공급원을 바꾸면 고른 키·계정(다른 공급원의 id)도 뺀다.
             const { [f.key]: _old, ...rest } = node.config;
-            if (node.event === "local.ai" && f.key === "provider") delete rest.credential;
+            if (node.event === "local.ai" && f.key === "provider") {
+              delete rest.credential;
+              if (v === "cli:agy") delete rest.sendContent;
+            }
             onChange({ ...node, config: v === undefined ? rest : { ...rest, [f.key]: v } });
           }}
           refs={refs}
