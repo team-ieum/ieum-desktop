@@ -215,23 +215,44 @@ const IDLE: Duration = Duration::from_secs(300);
 /// 백그라운드 감시 루프. 키체인 허용 창은 띄우지 않는다(`get_quiet`).
 pub fn spawn(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let mut seen = Seen::default();
+        let seen = Arc::new(Mutex::new(Seen::default()));
         loop {
-            let delay = run_once(&app, &mut seen).await;
+            // 회차마다 따로 돌려 패닉이 나도 루프는 산다.
+            let once = tauri::async_runtime::spawn(run_once(app.clone(), seen.clone()));
+            let delay = once.await.unwrap_or_else(|e| {
+                eprintln!("[ieum] 구독 한도 감시 회차가 실패했어요: {e}");
+                IDLE
+            });
             tokio::time::sleep(delay).await;
         }
     });
 }
 
-async fn run_once(app: &AppHandle, seen: &mut Seen) -> Duration {
+/// 처음 보는 제안이면 갈 곳을 정하고, 실제로 보낼 때만(`Drop` 아님) 기억한다
+/// — 알림을 끈 동안 버린 제안은 켠 뒤 다시 권한다.
+pub fn deliver_once(seen: &mut Seen, s: &Suggestion, enabled: bool, focused: bool) -> Delivery {
+    if seen.0.contains(&s.key()) {
+        return Delivery::Drop;
+    }
+    let d = route_suggestion(enabled, focused);
+    if d != Delivery::Drop {
+        seen.first_time(s);
+    }
+    d
+}
+
+async fn run_once(app: AppHandle, seen: Arc<Mutex<Seen>>) -> Duration {
+    let app = &app;
     let Ok(creds) = app.state::<Active>().credentials().await else {
         return IDLE;
     };
     let creds = Arc::new(creds);
     let c = creds.clone();
-    let view = tauri::async_runtime::spawn_blocking(move || c.list())
+    // 파일만 읽는다 — `list`는 옛 API 키를 찾느라 키체인을 읽어 허용 창이 뜰 수 있다.
+    let view = tauri::async_runtime::spawn_blocking(move || c.subscription_accounts())
         .await
-        .ok();
+        .ok()
+        .and_then(Result::ok);
     let s = notify::settings(app);
     let lang: Lang = s.language.into();
     let usage = app.state::<SubscriptionUsage>();
@@ -251,10 +272,14 @@ async fn run_once(app: &AppHandle, seen: &mut Seen) -> Duration {
         eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");
     }
     for sug in t.suggestions {
-        if !seen.first_time(&sug) {
-            continue;
-        }
-        match route_suggestion(s.notify_account_suggest, notify::focused(app)) {
+        let focused = notify::focused(app);
+        let d = deliver_once(
+            &mut seen.lock().unwrap_or_else(|e| e.into_inner()),
+            &sug,
+            s.notify_account_suggest,
+            focused,
+        );
+        match d {
             Delivery::Banner => {
                 if let Err(e) = app.emit("account-suggest", &sug) {
                     eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");

@@ -629,3 +629,37 @@ fn hide_system_account_then_restore() {
     assert!(v.claude_accounts[0].is_default);
     assert_eq!(c.claude_config_dir(None).unwrap(), None);
 }
+
+/// `get`을 몇 번 불렀는지 센다.
+#[derive(Default)]
+struct CountingKeys(std::sync::atomic::AtomicUsize);
+
+impl KeyStore for CountingKeys {
+    fn get(&self, _: &str) -> Result<Option<String>, KeyError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(None)
+    }
+    fn set(&self, _: &str, _: &str) -> Result<(), KeyError> {
+        Ok(())
+    }
+    fn delete(&self, _: &str) -> Result<(), KeyError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn subscription_accounts_never_touch_keychain() {
+    let t = tempfile::tempdir().unwrap();
+    let keys = Arc::new(CountingKeys::default());
+    let c = AccountCredentials::new(t.path().to_path_buf(), K16, keys.clone());
+    let v = c.subscription_accounts().unwrap();
+    assert_eq!(keys.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // `system` 줄 규칙은 `list`와 같다.
+    let full = c.list();
+    assert_eq!(v.claude_accounts, full.claude_accounts);
+    assert_eq!(v.codex_accounts, full.codex_accounts);
+    assert_eq!(v.claude_accounts[0].id, "system");
+    assert!(v.claude_accounts[0].is_default);
+    c.set_system_hidden("codex", true).unwrap();
+    assert!(c.subscription_accounts().unwrap().codex_accounts.is_empty());
+}

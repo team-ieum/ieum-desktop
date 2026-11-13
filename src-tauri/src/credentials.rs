@@ -185,6 +185,30 @@ fn api_provider(p: &str) -> Result<&'static str, String> {
 /// 파일 읽기·쓰기를 한 프로세스 안에서 차례로.
 static LOCK: Mutex<()> = Mutex::new(());
 
+/// 숨긴 `system` 줄은 빼고, 없으면 맨 앞에 넣는다(다른 기본이 없으면 기본).
+fn with_system(c: &mut Credentials) {
+    for (kind, list) in [
+        ("claude", &mut c.claude_accounts),
+        ("codex", &mut c.codex_accounts),
+    ] {
+        if c.hidden_system.iter().any(|h| h == kind) {
+            list.retain(|m| m.id != SYSTEM_ID);
+        } else if !list.iter().any(|m| m.id == SYSTEM_ID) {
+            let is_default = !list.iter().any(|m| m.is_default);
+            list.insert(
+                0,
+                CliAccountMeta {
+                    id: SYSTEM_ID.into(),
+                    label: "이 Mac의 로그인".into(),
+                    is_default,
+                    created_at: String::new(),
+                    email: None,
+                },
+            );
+        }
+    }
+}
+
 /// 계정 하나의 키·계정 목록. 키 저장소는 범위 없는 vault(`anthropic.<계정 키>...` 전체 이름으로 접근).
 pub struct AccountCredentials {
     root: PathBuf,
@@ -246,27 +270,24 @@ impl AccountCredentials {
                 Err(e) => keychain_error = Some(e.to_string()),
             }
         }
-        for (kind, list) in [
-            ("claude", &mut c.claude_accounts),
-            ("codex", &mut c.codex_accounts),
-        ] {
-            if c.hidden_system.iter().any(|h| h == kind) {
-                list.retain(|m| m.id != SYSTEM_ID);
-            } else if !list.iter().any(|m| m.id == SYSTEM_ID) {
-                let is_default = !list.iter().any(|m| m.is_default);
-                list.insert(
-                    0,
-                    CliAccountMeta {
-                        id: SYSTEM_ID.into(),
-                        label: "이 Mac의 로그인".into(),
-                        is_default,
-                        created_at: String::new(),
-                        email: None,
-                    },
-                );
-            }
-        }
+        with_system(&mut c);
         Ok((c, keychain_error))
+    }
+
+    /// 구독 계정 목록만(`system` 줄 규칙은 `list`와 같다). 파일만 읽고 키체인은 부르지 않는다
+    /// — 백그라운드 감시용. `api_keys`는 비어 있다.
+    pub fn subscription_accounts(&self) -> Result<CredentialsView, String> {
+        let mut c = {
+            let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            self.read_file()?
+        };
+        with_system(&mut c);
+        Ok(CredentialsView {
+            api_keys: BTreeMap::new(),
+            claude_accounts: c.claude_accounts,
+            codex_accounts: c.codex_accounts,
+            keychain_error: None,
+        })
     }
 
     /// 고칠 때: 키체인을 못 읽었으면 옛 키를 빠뜨린 채 저장하지 않게 멈춘다.

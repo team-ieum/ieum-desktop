@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use ieum_desktop_lib::credentials::{CliAccountMeta, CredentialsView};
 use ieum_desktop_lib::limit_watch::{
-    Candidate, Delivery, Seen, gating, needs_others, next_delay, route_suggestion, suggest, tick,
+    Candidate, Delivery, Seen, deliver_once, gating, needs_others, next_delay, route_suggestion,
+    suggest, tick,
 };
 use ieum_desktop_lib::notify::Lang;
 use ieum_desktop_lib::plan_usage::{PlanUsage, PlanWindow};
@@ -259,4 +260,21 @@ async fn tick_fetches_others_only_when_default_full() {
     assert_eq!(*fetched.lock().unwrap(), ["claude:system"]);
     assert!(t.suggestions.is_empty());
     assert_eq!(t.delay, Duration::from_secs(300));
+}
+
+#[test]
+fn dropped_suggestion_not_remembered() {
+    let def = cand("me", plan("ok", &[("five_hour", 100.0)]));
+    let s = suggest(
+        "claude",
+        &def,
+        &[cand("b", plan("ok", &[("five_hour", 3.0)]))],
+    )
+    .unwrap();
+    let mut seen = Seen::default();
+    // 알림 꺼짐 → 버리고 기억하지 않는다.
+    assert_eq!(deliver_once(&mut seen, &s, false, false), Delivery::Drop);
+    // 켜면 같은 제안을 한 번 보내고, 그 뒤로는 다시 안 보낸다.
+    assert_eq!(deliver_once(&mut seen, &s, true, false), Delivery::System);
+    assert_eq!(deliver_once(&mut seen, &s, true, true), Delivery::Drop);
 }
