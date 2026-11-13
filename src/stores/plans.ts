@@ -22,6 +22,16 @@ function loadPlans(sig: string, force = false, fresh = false) {
   }
 }
 
+/** 감시 루프 결과를 스토어에 합친다 — 앱 전체에서 한 번만. 구독에 실패하면 다음 호출 때 다시 시도. */
+let watching: Promise<unknown> | null = null;
+function watchPlans() {
+  watching ??= api
+    .onPlansUpdated((p) => usePlanStore.setState((s) => ({ plans: { ...s.plans, ...p } })))
+    .catch(() => {
+      watching = null;
+    });
+}
+
 export function useDefaultPlans(view: CredentialsView | null | undefined) {
   const sig = [
     ...(["claude", "codex"] as const).flatMap((k) =>
@@ -32,7 +42,10 @@ export function useDefaultPlans(view: CredentialsView | null | undefined) {
     planKey("antigravity"),
   ].join(",");
   const plans = usePlanStore((s) => s.plans);
-  useEffect(() => loadPlans(sig), [sig]);
+  useEffect(() => {
+    watchPlans();
+    loadPlans(sig);
+  }, [sig]);
   const refresh = useCallback(() => loadPlans(sig, true), [sig]);
   const refreshNow = useCallback(() => loadPlans(sig, true, true), [sig]);
   return { plans, refresh, refreshNow };

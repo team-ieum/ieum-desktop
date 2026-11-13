@@ -62,6 +62,22 @@ const openPopover = async () => {
   return within(screen.getByRole("dialog", { name: "사용량" }));
 };
 
+test("status_bar_no_subscription_polling", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  try {
+    const sub = mockAll();
+    await mount();
+    const subCalls = sub.mock.calls.length;
+    const todayCalls = vi.mocked(api.usageSummary).mock.calls.length;
+    // 구독은 백그라운드 감시가 보내 준다 — 60초 타이머는 오늘 API 금액만 다시 읽는다.
+    await act(async () => vi.advanceTimersByTime(60_000));
+    expect(sub.mock.calls.length).toBe(subCalls);
+    expect(vi.mocked(api.usageSummary).mock.calls.length).toBe(todayCalls + 1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 test("status_bar_shows_subscription_percent_and_reset", async () => {
   const sub = mockAll();
   await mount();

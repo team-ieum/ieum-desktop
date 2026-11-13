@@ -137,12 +137,25 @@ export interface Settings {
   /** 확인 창 토글 — 옛 설정·테스트엔 없을 수 있어 `!== false`로 읽는다. */
   confirmDeleteWorkflow?: boolean;
   confirmDiscardUnsaved?: boolean;
+  /** 한도 도달 시 다른 계정 권하기 — 옛 설정·테스트엔 없을 수 있어 `!== false`로 읽는다. */
+  notifyAccountSuggest?: boolean;
+}
+/** 기본 계정이 한도에 닿아 권하는 다른 계정(Rust `limit_watch::Suggestion`). */
+export interface Suggestion {
+  company: "claude" | "codex";
+  fromId: string;
+  fromLabel: string;
+  toId: string;
+  toLabel: string;
+  toUsedPct: number;
+  windowKind: string;
+  resetsAt: string;
 }
 /** 설정 [업데이트 확인] 결과(Rust `UpdateCheck`). */
 export type UpdateCheck = { status: "dev" } | { status: "latest" } | { status: "installed"; version: string };
 export type SystemSettingsPane = "files" | "notifications" | "login_items";
 /** 시스템 알림 클릭으로 열 화면(Rust `notify::Target`). */
-export type OpenTarget = { kind: "run"; runId: string } | { kind: "history" };
+export type OpenTarget = { kind: "run"; runId: string } | { kind: "history" } | { kind: "suggest" };
 /** 계정 = 서버 + 이메일. */
 export interface AccountId {
   email: string;
@@ -408,6 +421,14 @@ export const api = {
   /** 시스템 알림을 누르면 열 화면. */
   onOpenTarget: (cb: (t: OpenTarget) => void): Promise<UnlistenFn> =>
     listen<OpenTarget>("open-target", (e) => cb(e.payload)),
+  /** 백그라운드 감시 한 회차의 구독 사용량(`claude:<id>`·`codex:<id>`·`antigravity` → 사용량). */
+  onPlansUpdated: (cb: (p: Record<string, PlanUsage>) => void): Promise<UnlistenFn> =>
+    listen<Record<string, PlanUsage>>("plans-updated", (e) => cb(e.payload)),
+  /** 앱이 앞에 있을 때 권하기(띠). */
+  onAccountSuggest: (cb: (s: Suggestion) => void): Promise<UnlistenFn> =>
+    listen<Suggestion>("account-suggest", (e) => cb(e.payload)),
+  /** 시스템 알림으로 보낸 대기 중 제안을 꺼낸다(한 번 꺼내면 비워짐). */
+  takeAccountSuggestion: () => invoke<Suggestion | null>("take_account_suggestion"),
   onWebExecEvent: (cb: (p: WebExecPayload) => void): Promise<UnlistenFn> =>
     listen<WebExecPayload>("web-exec-event", (e) => cb(e.payload)),
   /** 폴더·파일 고르기(tauri-plugin-dialog, 권한 `dialog:allow-open`). 취소하면 null. */

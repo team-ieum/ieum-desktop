@@ -110,6 +110,20 @@ test("dashboard_shows_window_label", async () => {
   expect(claude.getByText("Fable")).toBeTruthy();
 });
 
+test("plans_update_from_watch_event", async () => {
+  let push: ((p: Record<string, PlanUsage>) => void) | undefined;
+  vi.spyOn(api, "onPlansUpdated").mockImplementation(async (cb) => {
+    push = cb;
+    return () => {};
+  });
+  mockSubs(OUT);
+  await mountCard();
+  expect(subRegion().getByText("연결된 구독이 없어요 —")).toBeTruthy();
+  // 감시 루프가 보낸 결과로 구독 칸이 채워진다.
+  await act(async () => push!({ "claude:system": OK }));
+  expect(within(subRegion().getByRole("group", { name: "Claude" })).getByText("17% 사용 · 13시간 20분 뒤 초기화")).toBeTruthy();
+});
+
 test("dashboard_usage_hides_unconnected_subscriptions", async () => {
   mockSubs();
   await mountCard();

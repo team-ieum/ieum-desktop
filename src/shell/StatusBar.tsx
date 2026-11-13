@@ -14,7 +14,7 @@ const REFRESH_MS = 60_000;
 /** 창 맨 아래 줄 — "사용" + 구독 회사마다 [로고 N% 남은 시간](가장 빡빡한 창). 구독이 없으면 오늘 API 예상 금액. 누르면 사용량 팝오버. */
 export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSettings: () => void }) {
   const view = useCredentials((s) => s.view);
-  const { plans, refresh, refreshNow } = useDefaultPlans(view);
+  const { plans, refreshNow } = useDefaultPlans(view);
   // undefined = 아직, null = 못 읽음
   const [today, setToday] = useState<UsageSummary | null | undefined>(undefined);
   const [open, setOpen] = useState(false);
@@ -26,12 +26,10 @@ export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSett
     void loadToday();
   }, []);
 
-  // 구독은 useDefaultPlans가 처음 읽는다(대시보드와 같은 스토어). 창이 안 보이면 멈추고, 다시 보이면 바로 새로 읽는다.
+  // 구독은 useDefaultPlans가 처음 읽고, 이후엔 백그라운드 감시(plans-updated)가 채운다. 여기선 오늘 API 금액만 — 창이 안 보이면 멈추고, 다시 보이면 바로 읽는다.
   useEffect(() => {
     const load = () => {
-      if (document.visibilityState !== "visible") return;
-      refresh();
-      void loadToday();
+      if (document.visibilityState === "visible") void loadToday();
     };
     const id = setInterval(load, REFRESH_MS);
     document.addEventListener("visibilitychange", load);
@@ -39,7 +37,7 @@ export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSett
       clearInterval(id);
       document.removeEventListener("visibilitychange", load);
     };
-  }, [refresh]);
+  }, []);
 
   // 바깥 클릭·Esc로 닫는다. Esc면 연 버튼으로 포커스를 돌린다.
   useEffect(() => {
