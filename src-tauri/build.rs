@@ -54,6 +54,11 @@ const COMMANDS: &[&str] = &[
     "confirm_finish",
     // ── 캔버스 채팅 B(통로·동기화) — 여기 아래에 추가 ──
     // ── 캔버스 채팅 C(터미널 term_*) — 여기 아래에 추가 ──
+    "term_spawn",
+    "term_write",
+    "term_resize",
+    "term_kill",
+    "term_tools",
     // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
 ];
 

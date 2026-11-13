@@ -7,9 +7,11 @@ pub mod notify;
 pub mod permissions;
 pub mod plan_usage;
 pub mod pricing;
+pub mod skill;
 pub mod store;
 pub mod sub_usage;
 pub mod supervisor;
+pub mod terminal;
 mod tray;
 pub mod usage;
 pub mod web;
@@ -205,6 +207,8 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         crate::plan_usage::CACHE_TTL,
     ));
     app.manage(builder_host::no_pick());
+    app.manage(terminal::Terms::default());
+    app.manage(terminal::no_gate());
     tray::create(app)?;
     check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
@@ -293,6 +297,11 @@ pub fn run() {
             commands::confirm_finish,
             // ── 캔버스 채팅 B(통로·동기화) — 여기 아래에 추가 ──
             // ── 캔버스 채팅 C(터미널 term_*) — 여기 아래에 추가 ──
+            terminal::term_spawn,
+            terminal::term_write,
+            terminal::term_resize,
+            terminal::term_kill,
+            terminal::term_tools,
             // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
         ])
         .build(tauri::generate_context!())
@@ -302,6 +311,10 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = e {
                 tray::show_main(app);
+            }
+            // 앱이 끝나면 터미널 세션도 전부 끝낸다.
+            if let tauri::RunEvent::Exit = e {
+                app.state::<terminal::Terms>().kill_all();
             }
         });
 }

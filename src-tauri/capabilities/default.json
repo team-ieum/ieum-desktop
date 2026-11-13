@@ -59,6 +59,11 @@
     "allow-get-chat",
     "allow-pending-finish",
     "allow-confirm-finish",
+    "allow-term-spawn",
+    "allow-term-write",
+    "allow-term-resize",
+    "allow-term-kill",
+    "allow-term-tools",
     "dialog:allow-open"
   ]
 }
