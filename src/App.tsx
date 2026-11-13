@@ -21,7 +21,6 @@ import { useSettings } from "./stores/settings";
 import { useWeb } from "./stores/web";
 import { useWorkflows } from "./stores/workflows";
 import { SuggestBanner } from "./usage/SuggestBanner";
-import { SwitchAccountDialog } from "./usage/SwitchAccount";
 
 export default function App() {
   const lang = useSettings((s) => s.lang);
@@ -75,17 +74,23 @@ export default function App() {
   const leave = (go: () => void) => (dirty && askDiscard ? setPending(() => go) : go());
   const newCanvas = () => leave(() => openEditor(null));
 
-  // 기본 계정 한도 도달 → 다른 계정 권하기 띠. 감시 이벤트, 또는 창이 다시 앞에 올 때·알림 클릭 때 남은 제안을 가져온다.
+  // 기본 계정 한도 도달 → 다른 계정 권하기 띠. Rust는 보낸 제안을 대기 칸에도 넣으므로
+  // 마운트·창이 다시 앞에 올 때·알림 클릭 때 꺼내 오고, 이벤트로 띄울 때도 대기 칸을 비운다.
   // "나중에"는 띠만 닫는다 — 같은 제안을 다시 띄우지 않는 건 Rust가 기억한다.
   const [suggest, setSuggest] = useState<Suggestion | null>(null);
-  const [switching, setSwitching] = useState(false);
   const takeSuggest = () =>
     void api.takeAccountSuggestion().then(
       (s) => s && setSuggest(s),
       () => {},
     );
   useEffect(() => {
-    const un = api.onAccountSuggest(setSuggest).catch(() => () => {});
+    const un = api
+      .onAccountSuggest((s) => {
+        setSuggest(s);
+        api.takeAccountSuggestion().catch(() => {});
+      })
+      .catch(() => () => {});
+    takeSuggest();
     window.addEventListener("focus", takeSuggest);
     return () => {
       void un.then((f) => f());
@@ -165,48 +170,38 @@ export default function App() {
     />
   );
 
-  const suggestBanner = suggest && <SuggestBanner s={suggest} onSwitch={() => setSwitching(true)} onLater={() => setSuggest(null)} />;
-  const switchDialog = suggest && switching && (
-    <SwitchAccountDialog
-      kind={suggest.company}
-      fromName={suggest.fromLabel}
-      to={{ id: suggest.toId, name: suggest.toLabel, usedPct: Math.round(suggest.toUsedPct) }}
-      onClose={() => {
-        setSwitching(false);
-        setSuggest(null);
-      }}
-    />
-  );
+  // 본문 열 맨 위(머리줄 아래) — 창 맨 위에 두면 신호등과 겹치고 끌어 옮길 수 없다.
+  const suggestBanner = suggest && <SuggestBanner s={suggest} onClose={() => setSuggest(null)} />;
 
   // 설정은 셸 사이드바 대신 설정 전용 사이드바(창 신호등 자리 포함). 머리줄은 본문 위.
   if (view.page === "settings")
     return (
       <div key={lang} className="flex h-full flex-col">
-        {suggestBanner}
         <SettingsShell
           key={"section" in view ? view.section : ""}
           onBack={() => setView(back)}
           version={version}
           initial={"section" in view ? view.section : undefined}
           header={
-            <Header
-              crumb={t("nav.settings")}
-              email={account?.email ?? null}
-              onSearch={() => setSearching(true)}
-              onOpenRun={(run) => setView({ page: "history", run })}
-            />
+            <>
+              <Header
+                crumb={t("nav.settings")}
+                email={account?.email ?? null}
+                onSearch={() => setSearching(true)}
+                onOpenRun={(run) => setView({ page: "history", run })}
+              />
+              {suggestBanner}
+            </>
           }
         />
         <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
         {searchDialog}
-        {switchDialog}
       </div>
     );
 
   return (
     // 언어가 바뀌면 화면 전체를 다시 그린다.
     <div key={lang} className="flex h-full flex-col">
-      {suggestBanner}
       <div className="flex min-h-0 flex-1">
         {!collapsed && (
           <Sidebar
@@ -230,6 +225,7 @@ export default function App() {
             onExpand={collapsed ? toggleSidebar : undefined}
           />
           <main className="flex min-h-0 flex-1 flex-col bg-neutral-50 text-neutral-800">
+            {suggestBanner}
             {pending && (
               <div role="alert" className="flex items-center gap-3 border-b border-danger-300 bg-danger-100 px-4 py-2 typo-body3_semibold text-danger-700">
                 <span className="min-w-0 flex-1">{t("common.unsavedLeave")}</span>
@@ -274,7 +270,6 @@ export default function App() {
       </div>
       <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
       {searchDialog}
-      {switchDialog}
     </div>
   );
 }

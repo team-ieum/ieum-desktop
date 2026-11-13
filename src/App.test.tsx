@@ -216,11 +216,18 @@ test("suggest_banner_from_event", async () => {
     return () => {};
   });
   const set = vi.spyOn(api, "setDefaultCredential").mockResolvedValue();
+  const usage = vi.spyOn(api, "antigravityPlanUsage").mockResolvedValue(null as never);
   await act(async () => {
     render(<App />);
   });
+  const take = vi.mocked(api.takeAccountSuggestion);
+  take.mockClear();
   await act(async () => push(SUGGEST));
+  // 띠를 띄우면 대기 칸을 비운다.
+  expect(take).toHaveBeenCalledTimes(1);
   const banner = screen.getByText(/바꿔서 쓸까요/).closest<HTMLElement>('[role="status"]')!;
+  // 창 신호등과 겹치지 않게 본문 열 안(머리줄 아래)에 뜬다.
+  expect(banner.closest("main")).toBeTruthy();
   expect(banner.textContent).toContain("회사(12% 사용)으로 바꿔서 쓸까요?");
   expect(banner.textContent).toContain("세션 100%");
   await act(async () => fireEvent.click(within(banner).getByRole("button", { name: "바꾸기" })));
@@ -228,8 +235,18 @@ test("suggest_banner_from_event", async () => {
   expect(dialog.textContent).toContain("이 Mac의 로그인 → 회사 (12% 사용)");
   await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "바꾸기" })));
   expect(set).toHaveBeenCalledWith("claude", "abcd");
+  // 바꾼 뒤 구독 사용량을 캐시 없이 다시 읽는다.
+  expect(usage).toHaveBeenCalledWith(true);
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+});
+
+test("pending_suggestion_shows_on_mount", async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce(SUGGEST);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByText(/바꿔서 쓸까요/)).toBeTruthy();
 });
 
 test("suggest_banner_on_focus", async () => {

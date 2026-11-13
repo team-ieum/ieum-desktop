@@ -136,7 +136,8 @@ pub fn route_suggestion(enabled: bool, focused: bool) -> Delivery {
     }
 }
 
-/// 시스템 알림으로 보낸 제안 — 알림을 눌러 화면이 `take_account_suggestion`으로 꺼낸다.
+/// 보낸 제안(띠·시스템 알림 둘 다) — 화면이 `take_account_suggestion`으로 꺼낸다.
+/// 띠 이벤트가 화면 리스너보다 먼저 와도, 마운트·포커스·알림 클릭 때 여기서 다시 가져간다.
 #[derive(Default)]
 pub struct PendingSuggest(pub Mutex<Option<Suggestion>>);
 
@@ -229,14 +230,21 @@ pub fn spawn(app: AppHandle) {
 }
 
 /// 처음 보는 제안이면 갈 곳을 정하고, 실제로 보낼 때만(`Drop` 아님) 기억한다
-/// — 알림을 끈 동안 버린 제안은 켠 뒤 다시 권한다.
-pub fn deliver_once(seen: &mut Seen, s: &Suggestion, enabled: bool, focused: bool) -> Delivery {
+/// — 알림을 끈 동안 버린 제안은 켠 뒤 다시 권한다. 보내는 제안은 대기 칸에도 넣는다.
+pub fn deliver_once(
+    seen: &mut Seen,
+    pending: &PendingSuggest,
+    s: &Suggestion,
+    enabled: bool,
+    focused: bool,
+) -> Delivery {
     if seen.0.contains(&s.key()) {
         return Delivery::Drop;
     }
     let d = route_suggestion(enabled, focused);
     if d != Delivery::Drop {
         seen.first_time(s);
+        *pending.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
     }
     d
 }
@@ -275,6 +283,7 @@ async fn run_once(app: AppHandle, seen: Arc<Mutex<Seen>>) -> Duration {
         let focused = notify::focused(app);
         let d = deliver_once(
             &mut seen.lock().unwrap_or_else(|e| e.into_inner()),
+            &app.state::<PendingSuggest>(),
             &sug,
             s.notify_account_suggest,
             focused,
@@ -286,12 +295,7 @@ async fn run_once(app: AppHandle, seen: Arc<Mutex<Seen>>) -> Duration {
                 }
             }
             Delivery::System => {
-                let notice = notify::suggest_notice(&sug, lang);
-                *app.state::<PendingSuggest>()
-                    .0
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(sug);
-                notify::deliver(app, &notice);
+                notify::deliver(app, &notify::suggest_notice(&sug, lang));
             }
             Delivery::Drop => {}
         }

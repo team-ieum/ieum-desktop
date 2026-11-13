@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ieum_desktop_lib::credentials::{CliAccountMeta, CredentialsView};
 use ieum_desktop_lib::limit_watch::{
-    Candidate, Delivery, Seen, deliver_once, gating, needs_others, next_delay, route_suggestion,
+    Candidate, Delivery, PendingSuggest, Seen, deliver_once, gating, needs_others, next_delay, route_suggestion,
     suggest, tick,
 };
 use ieum_desktop_lib::notify::Lang;
@@ -272,9 +272,27 @@ fn dropped_suggestion_not_remembered() {
     )
     .unwrap();
     let mut seen = Seen::default();
+    let pending = PendingSuggest::default();
     // 알림 꺼짐 → 버리고 기억하지 않는다.
-    assert_eq!(deliver_once(&mut seen, &s, false, false), Delivery::Drop);
+    assert_eq!(deliver_once(&mut seen, &pending, &s, false, false), Delivery::Drop);
+    assert!(pending.0.lock().unwrap().is_none());
     // 켜면 같은 제안을 한 번 보내고, 그 뒤로는 다시 안 보낸다.
-    assert_eq!(deliver_once(&mut seen, &s, true, false), Delivery::System);
-    assert_eq!(deliver_once(&mut seen, &s, true, true), Delivery::Drop);
+    assert_eq!(deliver_once(&mut seen, &pending, &s, true, false), Delivery::System);
+    assert_eq!(deliver_once(&mut seen, &pending, &s, true, true), Delivery::Drop);
+}
+
+#[test]
+fn banner_suggestion_also_pending() {
+    let def = cand("me", plan("ok", &[("five_hour", 100.0)]));
+    let s = suggest(
+        "claude",
+        &def,
+        &[cand("b", plan("ok", &[("five_hour", 3.0)]))],
+    )
+    .unwrap();
+    let mut seen = Seen::default();
+    let pending = PendingSuggest::default();
+    // 앱이 앞이어도 대기 칸에 넣는다 — 화면 리스너가 붙기 전에 emit돼도 꺼내 갈 수 있게.
+    assert_eq!(deliver_once(&mut seen, &pending, &s, true, true), Delivery::Banner);
+    assert_eq!(pending.0.lock().unwrap().as_ref(), Some(&s));
 }
