@@ -421,6 +421,32 @@ async fn antigravity_quiet_get_needs_prior_login() {
 }
 
 #[tokio::test]
+async fn antigravity_quiet_get_reuses_login_after_ttl() {
+    let (n, runs): (Calls, Calls) = Default::default();
+    let (seen, ran) = (n.clone(), runs.clone());
+    let c = AntigravityUsageClient::new(
+        Arc::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            TokenRead::Found("me@example.com".into())
+        }),
+        Arc::new(move || {
+            ran.fetch_add(1, Ordering::SeqCst);
+            AgyRun::Out(agy_sample())
+        }),
+        std::time::Duration::ZERO,
+    );
+    assert_eq!(c.get().await.state, "ok");
+    for _ in 0..3 {
+        let u = c.get_quiet().await.unwrap();
+        assert_eq!(u.state, "ok");
+        assert_eq!(u.account_email.as_deref(), Some("me@example.com"));
+    }
+    // 로그인(키체인)은 한 번만, agy는 매번.
+    assert_eq!(n.load(Ordering::SeqCst), 1);
+    assert_eq!(runs.load(Ordering::SeqCst), 4);
+}
+
+#[tokio::test]
 async fn codex_quiet_get_reads_file() {
     let (url, _) = serve(|_| (200, codex_sample().to_string())).await;
     let s = SubscriptionUsage::with(

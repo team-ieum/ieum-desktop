@@ -4,7 +4,6 @@
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use reqwest::{Client, Url, redirect};
@@ -132,8 +131,9 @@ pub struct PlanUsageClient {
     http: Client,
     token: TokenSource,
     cache: Cache,
-    /// 이번 실행에서 토큰을 `Found`로 읽은 적 있음 — 다시 읽어도 허용 창이 안 뜬다.
-    read: AtomicBool,
+    /// 마지막으로 `Found`로 읽은 토큰(메모리에만) — 백그라운드는 키체인 대신 이것을 쓴다.
+    /// `Missing`·`Denied`면 비운다.
+    remembered: std::sync::Mutex<Option<String>>,
 }
 
 impl PlanUsageClient {
@@ -149,16 +149,19 @@ impl PlanUsageClient {
             http,
             token,
             cache: Cache::new(ttl),
-            read: AtomicBool::new(false),
+            remembered: Default::default(),
         })
     }
 
-    /// 백그라운드용 — 토큰을 아직 못 읽은 계정은 키체인(허용 창)을 건드리지 않고 None.
+    /// 백그라운드용 — 키체인(허용 창)을 부르지 않는다. 기억한 토큰이 없으면 None,
+    /// 있으면 그 토큰으로 캐시를 거쳐 묻는다(실패하면 캐시 규칙대로 직전 성공값).
     pub async fn get_quiet(&self) -> Option<PlanUsage> {
-        if !self.read.load(Ordering::Relaxed) {
-            return None;
-        }
-        Some(self.get().await)
+        let token = self.remembered().clone()?;
+        Some(self.cache.get(false, self.request(token)).await)
+    }
+
+    fn remembered(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.remembered.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// `ttl` 안에 다시 부르면 저장해 둔 결과(키체인·네트워크를 건드리지 않음). 키체인 거부는 계속 쓴다.
@@ -173,17 +176,21 @@ impl PlanUsageClient {
 
     async fn fetch(&self) -> Fetched {
         let token = self.token.clone();
-        let token = match tokio::task::spawn_blocking(move || token()).await {
-            Ok(TokenRead::Found(t)) => {
-                self.read.store(true, Ordering::Relaxed);
-                t
-            }
-            // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
-            Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true, None),
-            Ok(TokenRead::Missing) | Err(_) => {
-                return (usage("not_logged_in", Vec::new()), false, None);
-            }
+        let read = tokio::task::spawn_blocking(move || token()).await;
+        *self.remembered() = match &read {
+            Ok(TokenRead::Found(t)) => Some(t.clone()),
+            _ => None,
         };
+        match read {
+            Ok(TokenRead::Found(t)) => self.request(t).await,
+            // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
+            Ok(TokenRead::Denied) => (usage("unavailable", Vec::new()), true, None),
+            Ok(TokenRead::Missing) | Err(_) => (usage("not_logged_in", Vec::new()), false, None),
+        }
+    }
+
+    /// 이미 읽은 토큰으로 사용량을 묻는다.
+    async fn request(&self, token: String) -> Fetched {
         let mut wait = None;
         // 오류(reqwest 포함)는 버린다 — 헤더 값이 섞일 여지를 두지 않는다.
         let body: Option<Value> = async {

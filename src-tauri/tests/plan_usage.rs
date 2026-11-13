@@ -477,6 +477,53 @@ async fn quiet_get_after_denied_stays_none() {
     assert!(c.get_quiet().await.is_none());
 }
 
+#[tokio::test]
+async fn quiet_get_reuses_token_after_ttl() {
+    let (url, log) = serve(|_| (200, sample().to_string())).await;
+    let (src, n) = counting(|| TokenRead::Found(TOKEN.into()));
+    // 캐시 시간 0 — 매번 새로 묻지만 키체인은 다시 읽지 않는다.
+    let c = PlanUsageClient::with_url(&url, src, Duration::ZERO).unwrap();
+    assert_eq!(c.get().await.state, "ok");
+    for _ in 0..3 {
+        assert_eq!(c.get_quiet().await.map(|u| u.state), Some("ok"));
+    }
+    assert_eq!(n.load(Ordering::SeqCst), 1);
+    let log = log.lock().unwrap();
+    assert_eq!(log.len(), 4);
+    assert!(log[3].head.contains(&format!("Bearer {TOKEN}")));
+}
+
+#[tokio::test]
+async fn quiet_get_none_after_missing() {
+    let (url, _) = serve(|_| (200, sample().to_string())).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    // 처음엔 토큰이 있다가 로그아웃(항목 없음).
+    let src: TokenSource = Arc::new(move || match seen.fetch_add(1, Ordering::SeqCst) {
+        0 => TokenRead::Found(TOKEN.into()),
+        _ => TokenRead::Missing,
+    });
+    let c = PlanUsageClient::with_url(&url, src, Duration::ZERO).unwrap();
+    assert_eq!(c.get().await.state, "ok");
+    assert_eq!(c.get().await.state, "not_logged_in");
+    assert!(c.get_quiet().await.is_none());
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn subscription_quiet_get_claude_after_read() {
+    let (url, _) = serve(|_| (200, sample().to_string())).await;
+    let (token, seen) = per_dir(None);
+    let s = subs(&url, token);
+    let a = Some(PathBuf::from("/accts/a"));
+    assert!(s.get_quiet("claude", a.clone()).await.unwrap().is_none());
+    assert!(seen.lock().unwrap().is_empty());
+    assert_eq!(s.get("claude", a.clone()).await.unwrap().state, "ok");
+    let u = s.get_quiet("claude", a).await.unwrap();
+    assert_eq!(u.map(|u| u.state), Some("ok"));
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
+
 /// 수동 확인용(실제 키체인·Anthropic): `cargo test -p ieum-desktop --test plan_usage -- --ignored`.
 #[tokio::test]
 #[ignore]

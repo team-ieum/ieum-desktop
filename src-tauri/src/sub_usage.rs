@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use reqwest::{Client, Url};
@@ -340,8 +339,8 @@ pub struct AntigravityUsageClient {
     login: AgyLoginSource,
     run: AgyRunner,
     cache: Cache,
-    /// 이번 실행에서 로그인을 `Found`로 읽은 적 있음.
-    read: AtomicBool,
+    /// 마지막으로 `Found`로 읽은 로그인 이메일 — `Missing`·`Denied`면 비운다.
+    remembered: std::sync::Mutex<Option<String>>,
 }
 
 impl AntigravityUsageClient {
@@ -350,16 +349,19 @@ impl AntigravityUsageClient {
             login,
             run,
             cache: Cache::new(ttl),
-            read: AtomicBool::new(false),
+            remembered: Default::default(),
         }
     }
 
-    /// 백그라운드용 — 로그인을 아직 못 읽었으면 키체인(허용 창)·agy를 건드리지 않고 None.
+    /// 백그라운드용 — 로그인 읽기(키체인 허용 창)를 부르지 않는다. 기억한 로그인이 없으면 None,
+    /// 있으면 그 이메일로 캐시를 거쳐 agy에 묻는다.
     pub async fn get_quiet(&self) -> Option<PlanUsage> {
-        if !self.read.load(Ordering::Relaxed) {
-            return None;
-        }
-        Some(self.get().await)
+        let email = self.remembered().clone()?;
+        Some(self.cache.get(false, self.run_usage(email)).await)
+    }
+
+    fn remembered(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+        self.remembered.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub async fn get(&self) -> PlanUsage {
@@ -373,17 +375,21 @@ impl AntigravityUsageClient {
 
     async fn fetch(&self) -> Fetched {
         let login = self.login.clone();
-        let email = match tokio::task::spawn_blocking(move || login()).await {
-            Ok(TokenRead::Found(e)) => {
-                self.read.store(true, Ordering::Relaxed);
-                e
-            }
-            // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
-            Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true, None),
-            Ok(TokenRead::Missing) | Err(_) => {
-                return (usage("not_logged_in", Vec::new()), false, None);
-            }
+        let read = tokio::task::spawn_blocking(move || login()).await;
+        *self.remembered() = match &read {
+            Ok(TokenRead::Found(e)) => Some(e.clone()),
+            _ => None,
         };
+        match read {
+            Ok(TokenRead::Found(e)) => self.run_usage(e).await,
+            // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
+            Ok(TokenRead::Denied) => (usage("unavailable", Vec::new()), true, None),
+            Ok(TokenRead::Missing) | Err(_) => (usage("not_logged_in", Vec::new()), false, None),
+        }
+    }
+
+    /// 이미 읽은 로그인(`email`)으로 agy에 사용량을 묻는다.
+    async fn run_usage(&self, email: String) -> Fetched {
         let run = self.run.clone();
         let mut u = match tokio::task::spawn_blocking(move || run()).await {
             Ok(AgyRun::Out(out)) => match parse_agy(&out) {
