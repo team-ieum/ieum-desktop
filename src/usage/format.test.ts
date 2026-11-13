@@ -1,8 +1,13 @@
 import { afterEach, expect, test } from "vitest";
 import { setLang } from "../i18n";
-import { formatReset, formatTokens, formatUsd } from "./format";
+import { formatCount, formatHm, formatReset, formatTokens, formatUsd } from "./format";
 
 afterEach(() => setLang("ko"));
+
+test("format_count_and_hm", () => {
+  expect([950, 1_234, 34_567, 1_000_000, 3_400_000, 2_500_000_000].map(formatCount)).toEqual(["950", "1.2k", "34.6k", "1M", "3.4M", "2.5B"]);
+  expect([8040, 2100, 12].map(formatHm)).toEqual(["2h 14m", "35m", "12s"]);
+});
 
 test("format_usd_edges", () => {
   expect(formatUsd(null)).toBe("—");

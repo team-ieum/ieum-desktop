@@ -302,6 +302,46 @@ export interface UsageSummary {
   asOf: string;
 }
 
+// usage.rs `report` — 설정 › 통계 및 사용량. 합계는 전체 기간, 나머지는 최근 30일(히트맵 42일).
+export type UsageProvider = "claude" | "openai" | "google";
+export interface TokenParts {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+export interface ProviderReport extends TokenParts {
+  provider: UsageProvider;
+  /** 구독 호출은 빠진 예상 금액. */
+  usd: number;
+  unpricedCalls: number;
+  calls: number;
+  runs: number;
+  cacheReuse: number;
+  noCacheCallShare: number;
+  topModel: string | null;
+  byDay: ({ date: string } & TokenParts)[];
+  byModel: { model: string; tokens: number; calls: number }[];
+  byWorkflow: { workflowId: string; name: string | null; tokens: number; calls: number; runs: number }[];
+  recent: { at: string; workflowId: string; workflowName: string | null; model: string | null; credential: string; input: number; output: number; cache: number }[];
+}
+export interface UsageReport {
+  updatedAt: string;
+  trackingSince: string | null;
+  totals: { runs: number; runSeconds: number; aiCalls: number };
+  overview: {
+    totalTokens: number;
+    usd: number;
+    unpricedCalls: number;
+    activeDays: number;
+    cacheShare: number;
+    heat: { date: string; tokens: number }[];
+    composition: TokenParts;
+  };
+  /** 늘 claude·openai·google 순. */
+  providers: ProviderReport[];
+}
+
 // plan_usage.rs(Claude)·sub_usage.rs(Codex·Antigravity) — 구독 연결 상태와 창별 사용 비율.
 export interface PlanWindow {
   /** Claude: five_hour·seven_day·seven_day_opus. Codex·Antigravity: session(하루 이하)·weekly(7일 이하)·monthly(Codex 무료 30일). */
@@ -385,6 +425,7 @@ export const api = {
     listen<ExecPayload>("exec-event", (e) => cb(e.payload)),
   // Rust 명령은 다음 세션(Task 14·15) — 그 전엔 실패하고 화면은 빈 상태를 보인다.
   usageSummary: (range: UsageRange) => invoke<UsageSummary>("usage_summary", { range }),
+  usageReport: () => invoke<UsageReport>("usage_report"),
   /** 구독 계정 하나의 연결 상태·사용량(계정별 60초 캐시). */
   subscriptionUsage: (kind: SubKind, id: string) => invoke<PlanUsage>("subscription_usage", { kind, id }),
   /** 계정 폴더를 만들고 로그인 명령을 준다(확인 전엔 목록에 안 보임). */

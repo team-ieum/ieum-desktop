@@ -16,6 +16,7 @@
     "allow-list-runs",
     "allow-get-run",
     "allow-usage-summary",
+    "allow-usage-report",
     "allow-undo-run",
     "allow-detect-providers",
     "allow-list-credentials",

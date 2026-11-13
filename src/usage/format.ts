@@ -10,6 +10,27 @@ export function formatUsd(n: number | null): string {
 /** ko "12.3만", en "123K". */
 export const formatTokens = (n: number) => new Intl.NumberFormat(locale(), { notation: "compact", maximumFractionDigits: 1 }).format(n);
 
+/** 언어와 무관하게 "950"·"1.2k"·"3.4M"·"2.5B"(끝 ".0"은 뗀다). */
+export function formatCount(n: number): string {
+  const units: [number, string][] = [
+    [1e9, "B"],
+    [1e6, "M"],
+    [1e3, "k"],
+  ];
+  for (const [v, s] of units) if (Math.abs(n) >= v) return `${(n / v).toFixed(1).replace(/\.0$/, "")}${s}`;
+  return String(Math.round(n));
+}
+
+/** "2h 14m"·"35m"·"12s" */
+export function formatHm(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
+  return m ? `${m}m` : `${Math.max(0, Math.round(seconds))}s`;
+}
+
+/** 0~1 → "42%" */
+export const formatShare = (x: number) => `${Math.round(x * 100)}%`;
+
 /** 초기화까지 남은 시간 — "2일 10시간"·"3시간 5분"·"35분". */
 export function formatReset(iso: string, now: Date): string {
   const min = Math.max(0, Math.floor((Date.parse(iso) - now.getTime()) / 60_000));

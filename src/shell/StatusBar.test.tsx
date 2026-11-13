@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { api, type PlanUsage, type UsageSummary } from "../api";
+import { api, type CliAccountMeta, type CredentialsView, type PlanUsage, type UsageSummary } from "../api";
 import { setLang } from "../i18n";
+import { useCredentials } from "../stores/credentials";
 import { StatusBar } from "./StatusBar";
 
-const SUMMARY: UsageSummary = {
-  totalUsd: 0.42,
+const summary = (totalUsd: number): UsageSummary => ({
+  totalUsd,
   totalInput: 1000,
   totalOutput: 500,
   unpricedCalls: 0,
@@ -15,122 +16,145 @@ const SUMMARY: UsageSummary = {
   byWorkflow: [],
   byDay: [],
   asOf: "2026-11-01",
+});
+const inHours = (h: number, m = 0) => new Date(Date.now() + (h * 60 + m) * 60_000 + 30_000).toISOString();
+const SYS: CliAccountMeta = { id: "system", label: "이 Mac의 로그인", isDefault: true, createdAt: "", email: "me@claude.dev" };
+const WORK: CliAccountMeta = { id: "abcd1234", label: "회사", isDefault: false, createdAt: "", email: "work@claude.dev" };
+const VIEW: CredentialsView = { apiKeys: { anthropic: [], openai: [], gemini: [] }, claudeAccounts: [SYS, WORK], codexAccounts: [], keychainError: null };
+
+const OK: PlanUsage = {
+  state: "ok",
+  windows: [
+    { kind: "five_hour", usedPct: 34, resetsAt: inHours(13, 21) },
+    { kind: "seven_day", usedPct: 12, resetsAt: inHours(100) },
+  ],
+  checkedAt: new Date(Date.now() - 3 * 60_000 - 5_000).toISOString(),
+  accountEmail: "me@claude.dev",
 };
-const inHours = (h: number) => new Date(Date.now() + h * 3600_000 + 30_000).toISOString();
+const WORK_PLAN: PlanUsage = { ...OK, windows: [{ kind: "five_hour", usedPct: 91, resetsAt: inHours(2) }], accountEmail: "work@claude.dev" };
+const OUT: PlanUsage = { state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null };
 
 beforeAll(() => setLang("ko"));
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  useCredentials.setState({ view: null });
 });
+
+/** Claude 계정 둘(기본 = 이 Mac), Codex 없음, Antigravity 로그인 전. */
+const mockAll = () => {
+  vi.spyOn(api, "listCredentials").mockResolvedValue(VIEW);
+  const sub = vi.spyOn(api, "subscriptionUsage").mockImplementation(async (k, id) => (k === "claude" ? (id === "system" ? OK : WORK_PLAN) : OUT));
+  vi.spyOn(api, "antigravityPlanUsage").mockResolvedValue(OUT);
+  vi.spyOn(api, "usageSummary").mockImplementation(async (r) => summary(r === "month" ? 1.5 : 0.42));
+  return sub;
+};
 
 const mount = async (onUsage = () => {}, onSettings = () => {}) => {
   await act(async () => {
     render(<StatusBar onUsage={onUsage} onSettings={onSettings} />);
   });
 };
-
-const OK: PlanUsage = {
-  state: "ok",
-  windows: [{ kind: "five_hour", usedPct: 34, resetsAt: inHours(58) }],
-  checkedAt: new Date().toISOString(),
-  accountEmail: null,
+const openPopover = async () => {
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /^사용/ })));
+  return within(screen.getByRole("dialog", { name: "사용량" }));
 };
 
-/** 구독 종류마다 다른 답. */
-const subs = (claude: () => Promise<PlanUsage>, codex: () => Promise<PlanUsage>) =>
-  vi.spyOn(api, "subscriptionUsage").mockImplementation((k) => (k === "claude" ? claude() : codex()));
+test("status_bar_shows_subscription_percent_and_reset", async () => {
+  const sub = mockAll();
+  await mount();
+  // 가장 빡빡한 창(34%) 기준, 연결된 구독만.
+  const chip = screen.getByTitle("Claude 34% 사용 · 13시간 21분 뒤 초기화");
+  expect(within(chip).getByText("34%")).toBeTruthy();
+  expect(within(chip).getByText("13시간 21분")).toBeTruthy();
+  expect(screen.queryByTitle(/Codex|Antigravity/)).toBeNull();
+  expect(screen.queryByText(/오늘 API/)).toBeNull();
+  // 새로 고침 아이콘
+  const calls = sub.mock.calls.length;
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "새로 고침" })));
+  expect(sub.mock.calls.length).toBeGreaterThan(calls);
+});
 
-test("status_bar_opens_usage_popover_not_settings", async () => {
-  const sub = subs(
-    async () => OK,
-    async () => ({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null }),
-  );
-  const codexCalls = () => sub.mock.calls.filter((c) => c[0] === "codex").length;
+test("status_bar_without_subscription_shows_today_api", async () => {
+  vi.spyOn(api, "listCredentials").mockResolvedValue({ ...VIEW, claudeAccounts: [] });
+  vi.spyOn(api, "subscriptionUsage").mockResolvedValue(OUT);
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
-  vi.spyOn(api, "usageSummary").mockResolvedValue({ ...SUMMARY, bySource: [{ source: "openai", input: 10, output: 5, usd: 1.5 }] });
-  const onSettings = vi.fn();
-  await mount(() => {}, onSettings);
+  vi.spyOn(api, "usageSummary").mockResolvedValue(summary(0.42));
+  await mount();
+  expect(screen.getByText("오늘 API 예상 $0.42")).toBeTruthy();
+  expect(screen.queryByTitle(/Claude/)).toBeNull();
+});
 
-  await act(async () => fireEvent.click(screen.getByText("Claude 66% · 2일 10시간")));
-  expect(onSettings).not.toHaveBeenCalled();
-  const pop = within(screen.getByRole("dialog", { name: "AI 사용량" }));
-  // 공급자 박스 셋, 각각 구독 기본·API 기본 한 줄씩.
-  expect(pop.getAllByRole("listitem").map((li) => li.getAttribute("aria-label"))).toEqual(["Claude", "OpenAI", "Google"]);
-  const openai = within(pop.getByRole("listitem", { name: "OpenAI" }));
-  expect(openai.getByText("로그인 필요")).toBeTruthy();
-  expect(openai.getByText("이번 달 예상 $1.50")).toBeTruthy();
-  expect(pop.getByText("66% 남음 · 2일 10시간 뒤 초기화")).toBeTruthy();
-  expect(pop.getByText("로그인 필요")).toBeTruthy();
-  expect(pop.getByText("확인 불가")).toBeTruthy();
-  expect(pop.getByText("이번 달 예상 $1.50")).toBeTruthy();
-  expect(document.activeElement).toBe(pop.getByRole("button", { name: "새로 고침" }));
+test("usage_popover_flyout_shows_accounts_and_windows", async () => {
+  mockAll();
+  await mount();
+  const pop = await openPopover();
+  // 연결된 구독 줄 + API 줄
+  const claudeRow = pop.getByRole("button", { name: /^Claude/ });
+  expect(within(claudeRow).getByText("34%")).toBeTruthy();
+  expect(within(claudeRow).getByText("13시간 21분")).toBeTruthy();
+  expect(pop.queryByRole("button", { name: /^Codex/ })).toBeNull();
+  expect(pop.getByText("API 이번 달 예상 $1.50")).toBeTruthy();
 
-  const calls = codexCalls();
-  await act(async () => fireEvent.click(pop.getByRole("button", { name: "새로 고침" })));
-  expect(codexCalls()).toBe(calls + 1);
+  await act(async () => fireEvent.mouseEnter(claudeRow));
+  const fly = within(screen.getByRole("region", { name: "Claude" }));
+  expect(fly.getByText("3분 전 업데이트됨")).toBeTruthy();
+  expect(fly.getByText("세션")).toBeTruthy();
+  expect(fly.getByText("34% 사용")).toBeTruthy();
+  expect(fly.getByText("13시간 21분 뒤 초기화")).toBeTruthy();
+  expect(fly.getByText("주간")).toBeTruthy();
+  expect(fly.getByText("12% 사용")).toBeTruthy();
+  // 계정 목록 — 체크 = 기본, 각 계정 사용 %(80% 넘으면 빨강). 보기 전용.
+  const list = within(fly.getByRole("list", { name: "Claude 계정" }));
+  const me = within(list.getByRole("listitem", { name: /me@claude\.dev/ }));
+  expect(me.getByLabelText("기본")).toBeTruthy();
+  expect(me.getByText("34%")).toBeTruthy();
+  const work = within(list.getByRole("listitem", { name: /work@claude\.dev/ }));
+  expect(work.queryByLabelText("기본")).toBeNull();
+  expect(work.getByText("91%").className).toMatch(/danger/);
+  expect(list.queryByRole("button")).toBeNull();
+  expect(fly.getByRole("button", { name: "계정 관리…" })).toBeTruthy();
+});
 
+test("usage_popover_keyboard_moves_rows_and_opens_flyout", async () => {
+  mockAll();
+  await mount();
+  const pop = await openPopover();
+  const claudeRow = pop.getByRole("button", { name: /^Claude/ });
+  await act(async () => fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" }));
+  expect(document.activeElement).toBe(claudeRow);
+  await act(async () => fireEvent.keyDown(claudeRow, { key: "ArrowRight" }));
+  expect(screen.getByRole("region", { name: "Claude" })).toBeTruthy();
+  await act(async () => fireEvent.keyDown(document.activeElement!, { key: "ArrowLeft" }));
+  expect(screen.queryByRole("region", { name: "Claude" })).toBeNull();
+  expect(document.activeElement).toBe(claudeRow);
   // Esc·바깥 클릭으로 닫힌다.
   await act(async () => fireEvent.keyDown(document, { key: "Escape" }));
   expect(screen.queryByRole("dialog")).toBeNull();
-  await act(async () => fireEvent.click(screen.getByText("오늘 API 예상 $0.42")));
-  expect(screen.getByRole("dialog")).toBeTruthy();
+  await openPopover();
   await act(async () => fireEvent.mouseDown(document.body));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-test("popover_links_open_usage_and_ai_settings", async () => {
-  subs(
-    async () => OK,
-    () => Promise.reject("no command"),
-  );
-  vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
-  vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
+test("popover_links_to_usage_and_accounts", async () => {
+  mockAll();
   const onUsage = vi.fn();
   const onSettings = vi.fn();
   await mount(onUsage, onSettings);
 
-  await act(async () => fireEvent.click(screen.getByText("오늘 API 예상 $0.42")));
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "사용량 자세히" })));
+  let pop = await openPopover();
+  await act(async () => fireEvent.click(pop.getByRole("button", { name: /사용량 세부 정보 및 기록/ })));
   expect(onUsage).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("dialog")).toBeNull();
 
-  await act(async () => fireEvent.click(screen.getByText("오늘 API 예상 $0.42")));
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "AI 설정 열기" })));
+  pop = await openPopover();
+  await act(async () => fireEvent.click(pop.getByRole("button", { name: /^계정 관리…/ })));
   expect(onSettings).toHaveBeenCalledTimes(1);
   expect(screen.queryByRole("dialog")).toBeNull();
-});
 
-test("status_bar_shows_plan_and_today_cost", async () => {
-  const plan: PlanUsage = {
-    state: "ok",
-    windows: [
-      { kind: "five_hour", usedPct: 34, resetsAt: inHours(58) },
-      { kind: "seven_day", usedPct: 10, resetsAt: inHours(100) },
-    ],
-    checkedAt: new Date().toISOString(),
-    accountEmail: null,
-  };
-  vi.spyOn(api, "subscriptionUsage").mockResolvedValue(plan);
-  const summary = vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
-  await mount();
-  expect(summary).toHaveBeenCalledWith("today");
-  expect(screen.getByText("Claude 66% · 2일 10시간")).toBeTruthy();
-  expect(screen.getByText("오늘 API 예상 $0.42")).toBeTruthy();
-});
-
-test("status_bar_hides_claude_when_not_logged_in", async () => {
-  vi.spyOn(api, "subscriptionUsage").mockResolvedValue({ state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null });
-  vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
-  await mount();
-  expect(screen.queryByText(/Claude/)).toBeNull();
-  expect(screen.getByText("오늘 API 예상 $0.42")).toBeTruthy();
-});
-
-test("status_bar_unavailable_when_commands_fail", async () => {
-  vi.spyOn(api, "subscriptionUsage").mockRejectedValue("no command");
-  vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
-  await mount();
-  expect(screen.getByText("Claude 확인 불가")).toBeTruthy();
-  expect(screen.getByText("오늘 API 예상 —")).toBeTruthy();
+  // 두 번째 패널의 계정 관리도 같은 곳으로.
+  pop = await openPopover();
+  await act(async () => fireEvent.click(pop.getByRole("button", { name: /^Claude/ })));
+  await act(async () => fireEvent.click(within(screen.getByRole("region", { name: "Claude" })).getByRole("button", { name: "계정 관리…" })));
+  expect(onSettings).toHaveBeenCalledTimes(2);
 });

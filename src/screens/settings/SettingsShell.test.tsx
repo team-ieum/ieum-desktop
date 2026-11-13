@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import App from "../../App";
-import { api, type CliAccountMeta, type CredentialsView } from "../../api";
+import { api, type CliAccountMeta, type CredentialsView, type ProviderReport, type UsageProvider, type UsageReport } from "../../api";
 import { setLang } from "../../i18n";
 import { useSettings } from "../../stores/settings";
 import { useWeb } from "../../stores/web";
@@ -43,6 +43,7 @@ beforeAll(() => {
   vi.spyOn(api, "subscriptionUsage").mockRejectedValue("no command");
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
   vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
+  vi.spyOn(api, "usageReport").mockRejectedValue("no command");
 });
 beforeEach(() => {
   useSettings.setState({ settings: { language: "ko", autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true } });
@@ -76,25 +77,177 @@ test("ai_providers_has_optional_badge", async () => {
   expect(within(screen.getByRole("button", { name: "이음 계정" })).queryByText("선택 사항")).toBeNull();
 });
 
-test("usage_page_shows_usage_card", async () => {
-  const sum = vi.spyOn(api, "usageSummary").mockResolvedValue({
-    totalUsd: 1.85,
-    totalInput: 100_000,
-    totalOutput: 23_000,
-    unpricedCalls: 0,
-    bySource: [{ source: "openai", input: 100_000, output: 23_000, usd: 1.85 }],
-    byCredential: [],
-    byWorkflow: [],
-    byDay: [],
-    asOf: "2026-11-01",
+const EMPTY_PROVIDER = (provider: UsageProvider): ProviderReport => ({
+  provider,
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  usd: 0,
+  unpricedCalls: 0,
+  calls: 0,
+  runs: 0,
+  cacheReuse: 0,
+  noCacheCallShare: 0,
+  topModel: null,
+  byDay: [],
+  byModel: [],
+  byWorkflow: [],
+  recent: [],
+});
+const heat = (peak?: string) =>
+  Array.from({ length: 42 }, (_, i) => {
+    const date = new Date(Date.UTC(2026, 9, 3 + i)).toISOString().slice(0, 10);
+    return { date, tokens: !peak ? 0 : date === peak ? 900_000 : i % 3 ? 10_000 : 0 };
   });
-  onTestFinished(() => void sum.mockRejectedValue("no command"));
+const EMPTY_REPORT: UsageReport = {
+  updatedAt: new Date().toISOString(),
+  trackingSince: null,
+  totals: { runs: 0, runSeconds: 0, aiCalls: 0 },
+  overview: { totalTokens: 0, usd: 0, unpricedCalls: 0, activeDays: 0, cacheShare: 0, heat: heat(), composition: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
+  providers: [EMPTY_PROVIDER("claude"), EMPTY_PROVIDER("openai"), EMPTY_PROVIDER("google")],
+};
+const REPORT: UsageReport = {
+  updatedAt: new Date(Date.now() - 3 * 60_000 - 5_000).toISOString(),
+  trackingSince: "2026-10-01T03:00:00Z",
+  totals: { runs: 12, runSeconds: 8040, aiCalls: 30 },
+  overview: {
+    totalTokens: 1_234_567,
+    usd: 3.456,
+    unpricedCalls: 4,
+    activeDays: 5,
+    cacheShare: 0.81,
+    heat: heat("2026-11-10"),
+    composition: { input: 200_000, output: 34_567, cacheRead: 1_000_000, cacheWrite: 0 },
+  },
+  providers: [
+    {
+      ...EMPTY_PROVIDER("claude"),
+      input: 200_000,
+      output: 30_000,
+      cacheRead: 1_000_000,
+      cacheWrite: 2_500,
+      usd: 3.0,
+      unpricedCalls: 4,
+      calls: 20,
+      runs: 8,
+      cacheReuse: 0.833,
+      noCacheCallShare: 0.25,
+      topModel: "claude-sonnet-5-5",
+      byDay: [{ date: "2026-11-10", input: 150_000, output: 20_000, cacheRead: 700_000, cacheWrite: 2_500 }],
+      byModel: [{ model: "claude-sonnet-5-5", tokens: 1_232_500, calls: 20 }],
+      byWorkflow: [{ workflowId: "w1", name: "회의록 요약", tokens: 1_232_500, calls: 20, runs: 8 }],
+      recent: [{ at: "2026-11-10T05:00:00Z", workflowId: "w1", workflowName: "회의록 요약", model: "claude-sonnet-5-5", credential: "system", input: 1_000, output: 200, cache: 5_000 }],
+    },
+    { ...EMPTY_PROVIDER("openai"), input: 34_567, calls: 10, runs: 4, usd: 0.456, topModel: "gpt-5" },
+    EMPTY_PROVIDER("google"),
+  ],
+};
+const useReport = (r: UsageReport) => {
+  const spy = vi.spyOn(api, "usageReport").mockResolvedValue(r);
+  onTestFinished(() => void spy.mockRejectedValue("no command"));
+  return spy;
+};
+const usagePage = () => within(document.getElementById("settings-usage")!);
+
+test("usage_page_overview_tiles_and_heatmap", async () => {
+  useReport(REPORT);
   await renderShell("usage");
   expect(pages()).toEqual(["usage"]);
-  const page = within(document.getElementById("settings-usage")!);
-  expect(page.getByText("AI 사용량")).toBeTruthy();
-  expect(page.getByRole("tab", { name: "오늘" })).toBeTruthy();
-  expect(page.getByText("$1.85")).toBeTruthy();
+  const page = usagePage();
+  expect(page.getByText("내 PC 실행 통계와 Claude·OpenAI·Google 토큰 분석 및 구독 사용량.")).toBeTruthy();
+  // 요약 타일 3개
+  const tile = (name: string) => within(page.getByRole("group", { name }));
+  expect(tile("실행한 워크플로우").getByText("12")).toBeTruthy();
+  expect(tile("실행 시간 합계").getByText("2h 14m")).toBeTruthy();
+  expect(tile("AI 호출 수").getByText("30")).toBeTruthy();
+  expect(page.getByText("2026년 10월 1일 이후 추적 중")).toBeTruthy();
+  // 개요
+  expect(page.getByRole("button", { name: /개요/ })).toBeTruthy();
+  expect(page.getByText("사용량 개요")).toBeTruthy();
+  expect(page.getByText("3분 전 업데이트됨")).toBeTruthy();
+  expect(tile("총 토큰").getByText("1.2M")).toBeTruthy();
+  expect(tile("예상 비용").getByText("$3.46")).toBeTruthy();
+  expect(tile("예상 비용").getByText("구독 호출은 금액에 넣지 않아요")).toBeTruthy();
+  expect(tile("활성 일수").getByText("5")).toBeTruthy();
+  expect(tile("캐시 비율").getByText("81%")).toBeTruthy();
+  // 일일 강도 — 42칸, 최고 날
+  const heatmap = within(page.getByRole("figure", { name: "일일 강도" }));
+  expect(heatmap.getAllByTestId("heat-cell")).toHaveLength(42);
+  expect(heatmap.getByText("최고: 11월 10일")).toBeTruthy();
+  expect(heatmap.getByText("적음")).toBeTruthy();
+  // 토큰 구성 — 범례 숫자
+  const comp = within(page.getByRole("figure", { name: "토큰 구성" }));
+  expect(comp.getByText("캐시 읽기")).toBeTruthy();
+  expect(comp.getByText("1M")).toBeTruthy();
+  expect(comp.getByText("34.6k")).toBeTruthy();
+  // 공급자 카드 3장
+  expect(page.getAllByRole("article").map((a) => a.getAttribute("aria-label"))).toEqual(["Claude", "OpenAI", "Google"]);
+  const claude = within(page.getByRole("article", { name: "Claude" }));
+  expect(claude.getByText("활성")).toBeTruthy();
+  expect(claude.getByText("claude-sonnet-5-5")).toBeTruthy();
+  expect(within(page.getByRole("article", { name: "Google" })).queryByText("활성")).toBeNull();
+});
+
+test("usage_page_provider_switch_shows_breakdown", async () => {
+  useReport(REPORT);
+  vi.spyOn(api, "subscriptionUsage").mockResolvedValueOnce({
+    state: "ok",
+    windows: [{ kind: "five_hour", usedPct: 34, resetsAt: inHours(13) }],
+    checkedAt: new Date().toISOString(),
+    accountEmail: "me@claude.dev",
+  });
+  await renderShell("usage");
+  const page = usagePage();
+  await act(async () => fireEvent.click(page.getByRole("button", { name: /개요/ })));
+  await act(async () => fireEvent.click(page.getByRole("option", { name: /Claude/ })));
+  expect(page.getByText("Claude 사용량")).toBeTruthy();
+  expect(page.getByText("최근 30일")).toBeTruthy();
+  const tile = (name: string) => within(page.getByRole("group", { name }));
+  expect(tile("입력 토큰").getByText("200k")).toBeTruthy();
+  expect(tile("출력 토큰").getByText("30k")).toBeTruthy();
+  expect(tile("캐시 읽기").getByText("1M")).toBeTruthy();
+  expect(tile("캐시 쓰기").getByText("2.5k")).toBeTruthy();
+  expect(tile("캐시 재사용률").getByText("83%")).toBeTruthy();
+  expect(tile("캐시 읽기 없는 호출").getByText("25%")).toBeTruthy();
+  expect(tile("실행 / 호출").getByText("8 / 20")).toBeTruthy();
+  expect(tile("예상 비용").getByText("$3.00")).toBeTruthy();
+  // 구독 사용량 — 기본 계정 창
+  const subs = within(page.getByRole("region", { name: "구독 사용량" }));
+  expect(subs.getByText("34% 사용 · 13시간 0분 뒤 초기화")).toBeTruthy();
+  // 일일 사용량·모델별·워크플로우별·최근 실행
+  expect(within(page.getByRole("figure", { name: "일일 사용량" })).getAllByTestId("day-bar")).toHaveLength(1);
+  const models = within(page.getByRole("table", { name: "모델별" }));
+  expect(models.getByText("claude-sonnet-5-5")).toBeTruthy();
+  expect(models.getByText("1.2M")).toBeTruthy();
+  expect(within(page.getByRole("table", { name: "워크플로우별" })).getByText("회의록 요약")).toBeTruthy();
+  const recent = within(page.getByRole("table", { name: "최근 실행" }));
+  expect(recent.getAllByRole("row")).toHaveLength(2);
+  expect(recent.getByText("이 Mac의 로그인")).toBeTruthy();
+  expect(recent.getByText("5k")).toBeTruthy();
+  // 다른 공급자로 — 구독이 없으면 구독 사용량을 숨긴다.
+  await act(async () => fireEvent.click(page.getByRole("button", { name: /Claude/ })));
+  await act(async () => fireEvent.click(page.getByRole("option", { name: /Google/ })));
+  expect(page.getByText("Google 사용량")).toBeTruthy();
+  expect(page.queryByRole("region", { name: "구독 사용량" })).toBeNull();
+});
+
+test("usage_page_empty_state", async () => {
+  useReport(EMPTY_REPORT);
+  await renderShell("usage");
+  const page = usagePage();
+  expect(page.queryByText(/추적 중/)).toBeNull();
+  expect(within(page.getByRole("group", { name: "실행한 워크플로우" })).getByText("0")).toBeTruthy();
+  // 0으로 채운 차트 대신 빈 상태 문구
+  expect(within(page.getByRole("figure", { name: "일일 강도" })).queryAllByTestId("heat-cell")).toEqual([]);
+  expect(within(page.getByRole("figure", { name: "일일 강도" })).getByText("최근 6주 동안 AI 호출이 없어요.")).toBeTruthy();
+  expect(within(page.getByRole("figure", { name: "토큰 구성" })).getByText("최근 30일 동안 AI 호출이 없어요.")).toBeTruthy();
+  expect(page.getAllByText("최근 30일 사용 없음")).toHaveLength(3);
+  await act(async () => fireEvent.click(page.getByRole("button", { name: /개요/ })));
+  await act(async () => fireEvent.click(page.getByRole("option", { name: /OpenAI/ })));
+  expect(within(page.getByRole("figure", { name: "일일 사용량" })).queryAllByTestId("day-bar")).toEqual([]);
+  expect(page.queryByRole("table", { name: "최근 실행" })).toBeNull();
+  expect(page.getAllByText("최근 30일 동안 AI 호출이 없어요.").length).toBeGreaterThan(0);
 });
 
 test("notifications_page_has_toggles_and_test", async () => {
@@ -168,14 +321,19 @@ test("deep_link_opens_ai_page", async () => {
   expect(screen.getByTestId("settings-crumb").textContent).toBe("AI 제공자 계정");
   cleanup();
 
-  // 상태 줄 팝오버 [AI 설정 열기] → AI 제공자 페이지만.
+  // 상태 줄 팝오버 [계정 관리…] → AI 제공자 페이지만, [사용량 세부 정보 및 기록] → 통계 및 사용량.
   await act(async () => {
     render(<App />);
   });
-  await act(async () => fireEvent.click(screen.getByText(/오늘 API 예상/)));
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "AI 설정 열기" })));
+  const openPop = () => act(async () => fireEvent.click(within(screen.getByRole("contentinfo")).getByRole("button", { name: /^사용/ })));
+  await openPop();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /^계정 관리…/ })));
   expect(pages()).toEqual(["ai"]);
   expect(title()).toBe("AI 제공자 계정");
+  await openPop();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /사용량 세부 정보 및 기록/ })));
+  expect(pages()).toEqual(["usage"]);
+  expect(title()).toBe("통계 및 사용량");
 });
 
 test("search_narrows_menu_and_switches_page", async () => {
@@ -265,7 +423,7 @@ test("google_box_contains_antigravity_and_gemini_keys", async () => {
   const s = sub("Google");
   expect(s.getByText("Google Antigravity 구독 — 연결 상태와 사용량만 보여요")).toBeTruthy();
   expect(s.queryByRole("button", { name: "계정 연결" })).toBeNull();
-  expect(s.getByRole("button", { name: "사용량 새로 고침" })).toBeTruthy();
+  expect(s.queryByRole("button", { name: "사용량 새로 고침" })).toBeNull();
   expect(keys("Google").getByLabelText("Gemini API 키")).toBeTruthy();
   // 열지 못하면 박스 안에 오류.
   await act(async () => fireEvent.click(box("Google").getByRole("button", { name: /키 받기/ })));
@@ -287,8 +445,9 @@ test("subscription_card_shows_login_hint_when_not_logged_in", async () => {
   expect(codex.getByRole("button", { name: "복사됨" })).toBeTruthy();
 });
 
-test("subscription_card_shows_email_and_windows", async () => {
-  const load = vi.spyOn(api, "subscriptionUsage").mockResolvedValue({
+test("ai_providers_page_has_no_usage", async () => {
+  useCreds(creds([OPENAI_KEY, WORK_KEY]));
+  vi.spyOn(api, "subscriptionUsage").mockResolvedValueOnce({
     state: "ok",
     windows: [
       { kind: "five_hour", usedPct: 34, resetsAt: inHours(58) },
@@ -297,22 +456,6 @@ test("subscription_card_shows_email_and_windows", async () => {
     checkedAt: new Date(Date.now() - 3 * 60_000 - 5_000).toISOString(),
     accountEmail: "me@claude.dev",
   });
-  await renderShell("ai");
-  const claude = sub("Claude");
-  expect(claude.getByText("연결됨")).toBeTruthy();
-  expect(claude.getByText("me@claude.dev")).toBeTruthy();
-  expect(claude.getByText("66% 남음 · 2일 10시간 뒤 초기화")).toBeTruthy();
-  expect(claude.getByText("90% 남음 · 4일 4시간 뒤 초기화")).toBeTruthy();
-  expect(claude.getByText("3분 전에 조회")).toBeTruthy();
-  const calls = load.mock.calls.length;
-  await act(async () => fireEvent.click(claude.getByRole("button", { name: "사용량 새로 고침" })));
-  expect(load.mock.calls.length).toBe(calls + 1);
-});
-
-const row = (c: ReturnType<typeof box>, name: string) => within(c.getByRole("listitem", { name }));
-
-test("api_card_lists_keys_with_last4_and_default", async () => {
-  useCreds(creds([OPENAI_KEY, WORK_KEY]));
   const sum = vi.spyOn(api, "usageSummary").mockResolvedValue({
     totalUsd: 1.85,
     totalInput: 100_000,
@@ -326,6 +469,25 @@ test("api_card_lists_keys_with_last4_and_default", async () => {
   });
   onTestFinished(() => void sum.mockRejectedValue("no command"));
   await renderShell("ai");
+  const page = document.getElementById("settings-ai")!;
+  const claude = sub("Claude");
+  // 계정·연결 상태는 남는다.
+  expect(claude.getByText("연결됨")).toBeTruthy();
+  expect(claude.getByText("me@claude.dev")).toBeTruthy();
+  expect(claude.getByRole("button", { name: "계정 연결" })).toBeTruthy();
+  expect(keys("OpenAI").getByText("…1234")).toBeTruthy();
+  expect(keys("OpenAI").getByRole("button", { name: "키 추가" })).toBeTruthy();
+  // 사용량은 통계 및 사용량으로 옮겼다.
+  expect(within(page).queryAllByRole("progressbar")).toEqual([]);
+  expect(within(page).queryByRole("button", { name: "사용량 새로 고침" })).toBeNull();
+  expect(page.textContent).not.toMatch(/남음|전에 조회|예상 \$|토큰|가격표 기준/);
+});
+
+const row = (c: ReturnType<typeof box>, name: string) => within(c.getByRole("listitem", { name }));
+
+test("api_card_lists_keys_with_last4_and_default", async () => {
+  useCreds(creds([OPENAI_KEY, WORK_KEY]));
+  await renderShell("ai");
   const openai = keys("OpenAI");
   expect(openai.getByText("…1234")).toBeTruthy();
   expect(openai.getByText("…9876")).toBeTruthy();
@@ -333,8 +495,6 @@ test("api_card_lists_keys_with_last4_and_default", async () => {
   expect(row(openai, "기본").queryByRole("button", { name: "기본으로" })).toBeNull();
   expect(row(openai, "기본").getByTestId("default-badge")).toBeTruthy();
   expect(row(openai, "회사").queryByTestId("default-badge")).toBeNull();
-  expect(row(openai, "회사").getByText(/예상 \$1\.85/)).toBeTruthy();
-  expect(row(openai, "기본").getByText(/예상 \$0\.00/)).toBeTruthy();
   expect(document.getElementById("settings-ai")!.textContent).not.toMatch(/sk-/);
 });
 

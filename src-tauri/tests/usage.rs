@@ -171,3 +171,251 @@ fn old_run_without_usage_reads() {
     assert_eq!((s.total_input, s.unpriced_calls), (0, 0));
     assert!(s.by_source.is_empty() && s.by_day.is_empty());
 }
+
+// ── usage_report ──
+
+use ieum_desktop_lib::usage::report;
+use std::collections::HashMap;
+
+fn cached(source: &str, model: &str, input: u64, output: u64, read: u64, write: u64) -> AiUsage {
+    let mut u = usage(source, model, input, output);
+    u.cache_read_tokens = Some(read);
+    u.cache_write_tokens = Some(write);
+    u
+}
+
+fn names() -> HashMap<String, String> {
+    HashMap::from([("w1".to_string(), "요약".to_string())])
+}
+
+fn provider<'a>(v: &'a Value, id: &str) -> &'a Value {
+    v["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["provider"] == id)
+        .unwrap()
+}
+
+#[test]
+fn usage_report_groups_providers_and_days() {
+    let mut first = run(
+        "w1",
+        "2026-11-11T14:30:00.000Z",
+        &[usage("anthropic", "claude-x", 1_000_000, 0)],
+    );
+    first.finished_at = "2026-11-11T14:31:30.000Z".into();
+    let runs = vec![
+        // 31일 전 — 범위 밖이지만 추적 시작·합계에는 든다.
+        run(
+            "w1",
+            "2026-10-01T00:00:00.000Z",
+            &[usage("anthropic", "claude-x", 9, 9)],
+        ),
+        first,
+        run(
+            "w2",
+            "2026-11-11T15:30:00.000Z",
+            &[
+                usage("openai", "gpt-x", 1_000_000, 0),
+                usage("cli:claude", "sonnet", 100, 50),
+                usage("cli:codex", "gpt-5", 10, 5),
+                usage("gemini", "gemini-x", 7, 3),
+            ],
+        ),
+        run("w1", "2026-11-12T01:00:00.000Z", &[]),
+    ];
+    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["trackingSince"], "2026-10-01T00:00:00.000Z");
+    assert_eq!(v["totals"]["runs"], 4);
+    assert_eq!(v["totals"]["runSeconds"], 90);
+    assert_eq!(v["totals"]["aiCalls"], 6);
+    assert_eq!(v["overview"]["totalTokens"], 2_000_175);
+    assert_eq!(v["overview"]["usd"], 3.0);
+    // cli:claude·cli:codex·gemini-x(표에 없음)
+    assert_eq!(v["overview"]["unpricedCalls"], 3);
+    // 한국 시각 11-11 23:30, 11-12 00:30 → 두 날.
+    assert_eq!(v["overview"]["activeDays"], 2);
+    let ids: Vec<_> = v["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["provider"].clone())
+        .collect();
+    assert_eq!(ids, vec!["claude", "openai", "google"]);
+    let c = provider(&v, "claude");
+    assert_eq!(
+        (c["input"].clone(), c["calls"].clone(), c["runs"].clone()),
+        (json!(1_000_100), json!(2), json!(2))
+    );
+    assert_eq!(c["usd"], 1.0);
+    assert_eq!(c["unpricedCalls"], 1);
+    assert_eq!(c["topModel"], "claude-x");
+    assert_eq!(
+        c["byDay"],
+        json!([
+            {"date": "2026-11-11", "input": 1_000_000, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+            {"date": "2026-11-12", "input": 100, "output": 50, "cacheRead": 0, "cacheWrite": 0},
+        ])
+    );
+    assert_eq!(
+        c["byModel"],
+        json!([
+            {"model": "claude-x", "tokens": 1_000_000, "calls": 1},
+            {"model": "sonnet", "tokens": 150, "calls": 1},
+        ])
+    );
+    assert_eq!(
+        c["byWorkflow"],
+        json!([
+            {"workflowId": "w1", "name": "요약", "tokens": 1_000_000, "calls": 1, "runs": 1},
+            {"workflowId": "w2", "name": null, "tokens": 150, "calls": 1, "runs": 1},
+        ])
+    );
+    let o = provider(&v, "openai");
+    assert_eq!(
+        (o["calls"].clone(), o["output"].clone()),
+        (json!(2), json!(5))
+    );
+    assert_eq!(provider(&v, "google")["topModel"], "gemini-x");
+}
+
+#[test]
+fn usage_report_cache_ratios() {
+    let runs = vec![run(
+        "w1",
+        "2026-11-12T01:00:00.000Z",
+        &[
+            cached("anthropic", "claude-x", 100, 10, 300, 50),
+            cached("anthropic", "claude-x", 100, 10, 0, 50),
+        ],
+    )];
+    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let v = serde_json::to_value(&r).unwrap();
+    // 캐시 읽기 ÷ (입력 + 캐시 읽기) = 300 / 500
+    assert_eq!(v["overview"]["cacheShare"], 0.6);
+    assert_eq!(
+        v["overview"]["composition"],
+        json!({"input": 200, "output": 20, "cacheRead": 300, "cacheWrite": 100})
+    );
+    let c = provider(&v, "claude");
+    assert_eq!(c["cacheReuse"], 0.6);
+    assert_eq!(c["noCacheCallShare"], 0.5);
+    assert_eq!(c["recent"][0]["cache"], 300);
+    // 호출이 없는 공급자는 0.
+    assert_eq!(provider(&v, "openai")["cacheReuse"], 0.0);
+}
+
+#[test]
+fn usage_report_recent_is_latest_10() {
+    let runs: Vec<StoredRun> = (0..12)
+        .map(|i| {
+            run(
+                "w1",
+                &format!("2026-11-12T{i:02}:00:00.000Z"),
+                &[usage("anthropic", &format!("m{i}"), 1, 1)],
+            )
+        })
+        .collect();
+    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let v = serde_json::to_value(&r).unwrap();
+    let recent = provider(&v, "claude")["recent"].as_array().unwrap().clone();
+    assert_eq!(recent.len(), 10);
+    assert_eq!(recent[0]["model"], "m11");
+    assert_eq!(recent[9]["model"], "m2");
+    assert_eq!(recent[0]["workflowName"], "요약");
+    assert_eq!(recent[0]["credential"], "default");
+    assert_eq!(recent[0]["at"], "2026-11-12T11:00:00.000Z");
+}
+
+#[test]
+fn usage_report_empty_store() {
+    let r = report(
+        &[],
+        &HashMap::new(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["trackingSince"], Value::Null);
+    assert_eq!(
+        v["totals"],
+        json!({"runs": 0, "runSeconds": 0, "aiCalls": 0})
+    );
+    assert_eq!(v["overview"]["totalTokens"], 0);
+    assert_eq!(v["overview"]["cacheShare"], 0.0);
+    assert_eq!(v["overview"]["heat"].as_array().unwrap().len(), 42);
+    for p in v["providers"].as_array().unwrap() {
+        assert_eq!(p["calls"], 0);
+        assert_eq!(p["topModel"], Value::Null);
+        for k in ["byDay", "byModel", "byWorkflow", "recent"] {
+            assert_eq!(p[k], json!([]), "{k}");
+        }
+    }
+    assert!(!v["updatedAt"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn usage_report_heat_covers_42_days() {
+    let runs = vec![
+        // 한국 시각 10-03 — 42일 창의 첫날.
+        run(
+            "w1",
+            "2026-10-02T16:00:00.000Z",
+            &[usage("anthropic", "claude-x", 5, 0)],
+        ),
+        // 10-02 — 창 밖.
+        run(
+            "w1",
+            "2026-10-02T14:00:00.000Z",
+            &[usage("anthropic", "claude-x", 7, 0)],
+        ),
+        run(
+            "w1",
+            "2026-11-13T00:00:00.000Z",
+            &[cached("openai", "gpt-x", 1, 2, 3, 4)],
+        ),
+    ];
+    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let v = serde_json::to_value(&r).unwrap();
+    let heat = v["overview"]["heat"].as_array().unwrap();
+    assert_eq!(heat.len(), 42);
+    assert_eq!(heat[0], json!({"date": "2026-10-03", "tokens": 5}));
+    assert_eq!(heat[41], json!({"date": "2026-11-13", "tokens": 10}));
+    assert_eq!(
+        heat.iter()
+            .map(|d| d["tokens"].as_u64().unwrap())
+            .sum::<u64>(),
+        15
+    );
+    // 10-03은 30일 창 밖 — 개요 합계에는 안 든다.
+    assert_eq!(v["overview"]["totalTokens"], 10);
+}
+
+/// 실행 기록 1만 건 — 읽기 + 집계 시간. `cargo test -p ieum-desktop --test usage -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn usage_report_10k_timing() {
+    let t = tempfile::tempdir().unwrap();
+    let store = ieum_desktop_lib::store::Store::new(t.path().to_path_buf());
+    for i in 0..10_000u64 {
+        let day = 1 + i % 28;
+        let r = run(
+            &format!("w{}", i % 20),
+            &format!("2026-10-{day:02}T{:02}:00:00.000Z", i % 24),
+            &[
+                cached("anthropic", "claude-x", 1000, 200, 500, 100),
+                usage("openai", "gpt-x", 300, 50),
+            ],
+        );
+        store.save_run(&r).unwrap();
+    }
+    let start = std::time::Instant::now();
+    let runs = store.all_runs().unwrap();
+    let read = start.elapsed();
+    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let total = start.elapsed();
+    assert_eq!(r.totals.runs, 10_000);
+    println!("10k runs: all_runs {read:?}, all_runs+report {total:?}");
+}

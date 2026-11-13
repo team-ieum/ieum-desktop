@@ -1,4 +1,4 @@
-import { Copy, Plus, RefreshCw, ShieldAlert } from "lucide-react";
+import { Copy, Plus, ShieldAlert } from "lucide-react";
 import { useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import {
   api,
@@ -12,11 +12,9 @@ import {
   type KeyState,
   type PlanUsage,
   type SubKind,
-  type UsageSummary,
 } from "../../api";
 import { ProviderLogo, type LogoId } from "../../assets/providers";
 import { t, type Key } from "../../i18n";
-import { formatReset, formatTokens, formatUsd } from "../../usage/format";
 import { GHOST, matches, QueryContext } from "./Row";
 
 // 키 받기 주소는 Rust 고정값(open_provider_console) — 화면은 주소를 들고 있지 않는다.
@@ -102,33 +100,6 @@ export const subStateText = (p: PlanUsage | null | undefined) => t(STATE_TEXT[su
 const StateChip = ({ plan }: { plan: PlanUsage | null | undefined }) => (
   <span className={`shrink-0 rounded-full px-2.5 py-0.5 typo-caption1_semibold ${STATE_CLASS[subState(plan)]}`}>{subStateText(plan)}</span>
 );
-
-/** "66% 남음 · 2일 10시간 뒤 초기화" */
-export const leftText = (w: PlanUsage["windows"][number], now: Date) =>
-  `${Math.max(0, Math.min(100, Math.round(100 - w.usedPct)))}% ${t("usage.left")} · ${t("usage.resetsIn").replace("{time}", formatReset(w.resetsAt, now))}`;
-
-/** 구독 창별 남은 비율 막대·초기화 시각. */
-function PlanBars({ plan }: { plan: PlanUsage }) {
-  const now = new Date();
-  return (
-    <ul className="flex flex-col gap-2.5">
-      {plan.windows.map((w) => {
-        const left = Math.max(0, Math.min(100, Math.round(100 - w.usedPct)));
-        return (
-          <li key={w.kind}>
-            <div className="flex justify-between gap-2 typo-caption1_medium text-neutral-700">
-              <span>{t(`usage.window.${w.kind}`)}</span>
-              <span className="tabular-nums text-neutral-500">{leftText(w, now)}</span>
-            </div>
-            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-100" role="progressbar" aria-label={t(`usage.window.${w.kind}`)} aria-valuenow={left} aria-valuemin={0} aria-valuemax={100}>
-              <div className="h-full rounded-full bg-main-blue" style={{ width: `${left}%` }} />
-            </div>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
 
 type Part = { title: string; desc: string; texts: string[]; body: ReactNode };
 
@@ -323,7 +294,7 @@ function CredRow({
 
 const loginHint = (cmd: string) => t("settings.loginHint").replace("{cmd}", cmd);
 
-/** 계정 하나의 연결 상태 — 이메일·창별 남은 비율, 로그인 전이면(이 Mac의 로그인만) 터미널 명령 안내. */
+/** 계정 하나의 연결 상태 — 이메일·연결 알약, 로그인 전이면(이 Mac의 로그인만) 터미널 명령 안내. */
 function PlanInfo({ plan, email, cmd }: { plan: PlanUsage | null | undefined; email?: string | null; cmd?: string }) {
   const state = subState(plan);
   const [before, after] = t("settings.loginHint").split("{cmd}");
@@ -334,7 +305,6 @@ function PlanInfo({ plan, email, cmd }: { plan: PlanUsage | null | undefined; em
         {shown && <span className="min-w-0 truncate typo-caption1_medium text-neutral-700">{shown}</span>}
         <StateChip plan={plan} />
       </div>
-      {state === "ok" && plan && plan.windows.length > 0 && <PlanBars plan={plan} />}
       {state === "login" && cmd && (
         <div className="flex flex-wrap items-center gap-2">
           <p className="typo-caption1_regular text-neutral-600">
@@ -455,21 +425,14 @@ const subTexts = (s: (typeof SUBS)[number], view: CredentialsView | null | undef
     ...keys.map((k) => subStateText(plans[k])),
     loginHint(s.cmd),
     t("settings.copyCmd"),
-    t("settings.refreshUsage"),
     ...(s.id === "antigravity" ? [] : [t("settings.connectAccount"), t("settings.disconnect")]),
     ...accounts.flatMap((m) => [credLabel(m), m.email ?? ""]),
     ...keys.flatMap((k) => (plans[k]?.accountEmail ? [plans[k]!.accountEmail!] : [])),
   ];
 };
 
-/** "N분 전에 조회" — 기본 계정 기준. */
-function Checked({ plan }: { plan: PlanUsage | null | undefined }) {
-  const checked = plan?.state === "ok" && plan.checkedAt ? Date.parse(plan.checkedAt) : NaN;
-  if (Number.isNaN(checked)) return null;
-  return <span className="typo-caption2_regular text-neutral-400">{t("usage.checkedAgo").replace("{time}", formatReset(new Date().toISOString(), new Date(checked)))}</span>;
-}
-
-/** Claude·Codex 구독 — 계정 목록(이름표·이메일·창별 사용량)과 [계정 연결]. Antigravity는 지금 로그인 하나만. */
+/** Claude·Codex 구독 — 계정 목록(이름표·이메일·연결 상태)과 [계정 연결]. Antigravity는 지금 로그인 하나만.
+ *  사용량은 설정 › 통계 및 사용량. */
 function SubscriptionBody({
   sub,
   view,
@@ -483,29 +446,9 @@ function SubscriptionBody({
   onRefresh: () => void;
   refreshCreds: () => void;
 }) {
-  const refreshButton = (
-    <button type="button" className={GHOST} onClick={onRefresh}>
-      <RefreshCw className="size-4" aria-hidden="true" />
-      {t("settings.refreshUsage")}
-    </button>
-  );
-  if (sub.id === "antigravity") {
-    const plan = plans[planKey("antigravity")];
-    return (
-      <>
-        <PlanInfo plan={plan} cmd={sub.cmd} />
-        {plan !== undefined && (
-          <div className="flex flex-wrap items-center gap-2">
-            {refreshButton}
-            <Checked plan={plan} />
-          </div>
-        )}
-      </>
-    );
-  }
+  if (sub.id === "antigravity") return <PlanInfo plan={plans[planKey("antigravity")]} cmd={sub.cmd} />;
   const kind = sub.id;
   const accounts = accountsOf(view, kind);
-  const def = accounts.find((m) => m.isDefault);
   const refreshAll = () => {
     refreshCreds();
     onRefresh();
@@ -535,12 +478,6 @@ function SubscriptionBody({
         <p className="typo-caption1_regular text-neutral-500">{t("settings.noAccounts")}</p>
       )}
       <ConnectFlow kind={kind} systemHidden={!!view && !accounts.some((m) => m.id === SYSTEM)} refresh={refreshAll} />
-      {accounts.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2">
-          {refreshButton}
-          <Checked plan={def && plans[planKey(kind, def.id)]} />
-        </div>
-      )}
     </>
   );
 }
@@ -567,17 +504,8 @@ function KeyBadge({ state }: { state?: KeyState }) {
 
 const BADGE_TEXT: Record<KeyState, Key> = { stored: "settings.keyStored", missing: "settings.keyMissing", error: "settings.keyError" };
 
-/** "이번 달 12.3만 토큰 · 예상 $1.85" — 키 하나 기준. 못 읽으면 빈 상태 문구. */
-const monthText = (usage: UsageSummary | null, p: ApiProvider, id: string) => {
-  if (!usage) return t("usage.empty");
-  const s = usage.byCredential.find((x) => x.source === p && x.credential === id);
-  return t("usage.month")
-    .replace("{tokens}", formatTokens(s ? s.input + s.output : 0))
-    .replace("{usd}", formatUsd(s ? s.usd : 0));
-};
-
 /** Anthropic·OpenAI·Gemini 키 목록 + [키 추가]. 키 입력란은 보내기 전에 비운다(키를 상태에 남기지 않는다). */
-function ApiKeyBody({ p, keys, state, usage, refresh }: { p: (typeof PROVIDERS)[number]; keys: ApiKeyMeta[]; state?: KeyState; usage?: UsageSummary | null; refresh: () => void }) {
+function ApiKeyBody({ p, keys, state, refresh }: { p: (typeof PROVIDERS)[number]; keys: ApiKeyMeta[]; state?: KeyState; refresh: () => void }) {
   const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState("");
   const [draft, setDraft] = useState("");
@@ -602,12 +530,7 @@ function ApiKeyBody({ p, keys, state, usage, refresh }: { p: (typeof PROVIDERS)[
               key={k.id}
               kind={p.id}
               m={k}
-              info={
-                <div className="flex flex-wrap gap-x-3 typo-caption1_regular text-neutral-500">
-                  {k.last4 && <span className="font-mono">…{k.last4}</span>}
-                  {usage !== undefined && <span>{monthText(usage, p.id, k.id)}</span>}
-                </div>
-              }
+              info={k.last4 && <span className="typo-caption1_regular font-mono text-neutral-500">…{k.last4}</span>}
               removeLabel={t("common.delete")}
               confirmLabel={t("common.confirmDelete")}
               confirmText={t("settings.deleteKeyConfirm")}
@@ -685,13 +608,11 @@ export function AiProvidersPane({
   plans,
   refreshPlan,
   refreshCreds,
-  usage,
 }: {
   view: CredentialsView | null | undefined;
   plans: Plans;
   refreshPlan: (id: SubId) => void;
   refreshCreds: () => void;
-  usage?: UsageSummary | null;
 }) {
   const keychain = view ? keyStates(view) : null;
   return (
@@ -709,17 +630,12 @@ export function AiProvidersPane({
               },
               {
                 ...apiHead,
-                body: <ApiKeyBody p={b.api} keys={view?.apiKeys[b.api.id] ?? []} state={keychain?.[b.api.id]} usage={usage} refresh={refreshCreds} />,
+                body: <ApiKeyBody p={b.api} keys={view?.apiKeys[b.api.id] ?? []} state={keychain?.[b.api.id]} refresh={refreshCreds} />,
               },
             ]}
           />
         );
       })}
-      {usage && (
-        <p className="typo-caption2_regular text-neutral-400">
-          {t("usage.asOf").replace("{date}", usage.asOf)} · {t("usage.onlyIeum")}
-        </p>
-      )}
     </div>
   );
 }

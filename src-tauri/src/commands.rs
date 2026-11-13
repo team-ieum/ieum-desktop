@@ -19,7 +19,7 @@ use crate::pricing;
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::sub_usage::{AntigravityUsageClient, SubscriptionUsage};
 use crate::supervisor::WorkflowEntry;
-use crate::usage::{self, UsageSummary};
+use crate::usage::{self, UsageReport, UsageSummary};
 use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
 use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
 use crate::web::workflows::{WebWorkflow, WebWorkflowSummary};
@@ -106,6 +106,25 @@ pub async fn usage_summary(
     let from = usage::range_start(&range, now)?;
     let runs = sup.store().all_runs()?;
     Ok(usage::summarize(&runs, from, now, pricing::table()))
+}
+
+/// 활성 계정의 통계 및 사용량 화면 — 합계·최근 30일 개요·공급자별 분석(로컬 시각대).
+#[tauri::command]
+pub async fn usage_report(active: State<'_, Active>) -> Result<UsageReport, String> {
+    let sup = active.sup().await?;
+    let store = sup.store();
+    let runs = store.all_runs()?;
+    let names = store
+        .list_workflows()?
+        .into_iter()
+        .map(|w| (w.id, w.name))
+        .collect();
+    Ok(usage::report(
+        &runs,
+        &names,
+        chrono::Local::now(),
+        pricing::table(),
+    ))
 }
 
 #[tauri::command]

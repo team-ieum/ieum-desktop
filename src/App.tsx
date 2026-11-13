@@ -111,8 +111,12 @@ export default function App() {
       if (view.page !== "settings") setBack(view);
       setView({ page: "settings", section: "ai" });
     });
-  // 상태 줄 팝오버 → 대시보드 AI 사용량 카드.
-  const openUsage = () => leave(() => setView({ page: "dashboard" }));
+  // 상태 줄 팝오버 → 설정 › 통계 및 사용량.
+  const openUsage = () =>
+    leave(() => {
+      if (view.page !== "settings") setBack(view);
+      setView({ page: "settings", section: "usage" });
+    });
 
   if (!ready) return null;
 

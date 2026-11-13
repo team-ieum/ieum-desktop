@@ -1,7 +1,5 @@
 import { ArrowLeft, BarChart3, Bell, Bot, CircleUserRound, Keyboard, Search, ShieldCheck, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, type UsageSummary } from "../../api";
-import { UsageCard } from "../../dashboard/UsageCard";
 import { t, type Key } from "../../i18n";
 import { ROW, ROW_OFF, ROW_ON, SIDE, TOP_ROW } from "../../shell/Sidebar";
 import { useCredentials } from "../../stores/credentials";
@@ -11,6 +9,7 @@ import { AiProvidersPane, aiTexts, usePlans } from "./AiPane";
 import { GeneralPane, generalTexts } from "./GeneralPane";
 import { AdvancedPane, MacosPane, macosTexts, notificationTexts, NotificationsPane, ShortcutsPane, shortcutTexts, useAdvancedTexts } from "./PermissionsPane";
 import { matches, QueryContext } from "./Row";
+import { UsagePane, usageTexts } from "./UsagePane";
 
 export type SettingsSection = "account" | "ai" | "usage" | "general" | "notifications" | "shortcuts" | "macos" | "advanced";
 type Id = SettingsSection;
@@ -27,7 +26,6 @@ const SECTIONS: { id: Id; group: Key; label: Key; icon: LucideIcon; badge?: Key 
 ];
 /** 자체 테두리 박스가 있는 페이지 — 나머지는 한 박스로 감싼다. */
 const OWN_BOXES: Id[] = ["ai", "general", "usage"];
-const USAGE_TEXTS = () => [t("usage.title"), t("usage.range.today"), t("usage.range.week"), t("usage.range.month"), t("usage.estimated"), t("usage.bySource"), t("usage.byWorkflow")];
 const KEYCAP = "grid h-5 min-w-5 place-items-center rounded border border-[#cde9f4] bg-main-light-blue px-1 font-mono text-[11px] font-semibold text-main-deep-blue/70";
 
 /** 설정 페이지 — 셸 사이드바 대신 설정 전용 사이드바(돌아가기·검색·묶음 메뉴)와 본문. `header`는 본문 위 앱 머리줄. */
@@ -39,14 +37,11 @@ export function SettingsShell({ onBack, version, initial = "account", header }: 
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<Id>(initial);
   const { plans, refresh: refreshPlan } = usePlans(view);
-  // undefined = 읽는 중, null = 못 읽음(Rust 명령이 아직 없을 때도)
-  const [usage, setUsage] = useState<UsageSummary | null | undefined>(undefined);
   const search = useRef<HTMLInputElement>(null);
   const advancedTexts = useAdvancedTexts();
 
   const refresh = useCallback(() => {
     useCredentials.getState().load().catch((e) => setLoadError(String(e)));
-    api.usageSummary("month").then(setUsage, () => setUsage(null));
   }, []);
   useEffect(refresh, [refresh]);
 
@@ -67,7 +62,7 @@ export function SettingsShell({ onBack, version, initial = "account", header }: 
   const texts: Record<Id, string[]> = {
     account: account ? [account.email, t("settings.loggedInAs"), t("settings.logout"), ...(expired ? [t("settings.sessionExpired"), t("settings.reloginHint"), t("settings.relogin")] : [])] : [],
     ai: aiTexts(plans, view),
-    usage: USAGE_TEXTS(),
+    usage: usageTexts(),
     general: generalTexts(version),
     notifications: notificationTexts(),
     shortcuts: shortcutTexts(),
@@ -81,8 +76,8 @@ export function SettingsShell({ onBack, version, initial = "account", header }: 
 
   const panes: Record<Id, ReactNode> = {
     account: <AccountPane />,
-    ai: <AiProvidersPane view={view} plans={plans} refreshPlan={refreshPlan} refreshCreds={refresh} usage={usage} />,
-    usage: <UsageCard hidden={false} />,
+    ai: <AiProvidersPane view={view} plans={plans} refreshPlan={refreshPlan} refreshCreds={refresh} />,
+    usage: <UsagePane view={view} plans={plans} refreshPlans={() => refreshPlan()} />,
     general: <GeneralPane version={version} />,
     notifications: <NotificationsPane />,
     shortcuts: <ShortcutsPane />,
@@ -159,7 +154,8 @@ export function SettingsShell({ onBack, version, initial = "account", header }: 
             )}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-[640px] pt-6 pb-10">
+            {/* 통계 및 사용량은 표·차트가 있어 넓게. */}
+            <div className={`mx-auto pt-6 pb-10 ${shown?.id === "usage" ? "max-w-[880px] px-8" : "max-w-[640px]"}`}>
               {loadError && <p className="mb-4 typo-caption1_semibold text-danger-700">{loadError}</p>}
               {shown ? (
                 <section key={shown.id} id={`settings-${shown.id}`}>

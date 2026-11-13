@@ -224,6 +224,7 @@ pub fn run() {
             commands::list_runs,
             commands::get_run,
             commands::usage_summary,
+            commands::usage_report,
             commands::undo_run,
             commands::detect_providers,
             commands::list_credentials,
