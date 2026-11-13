@@ -60,9 +60,15 @@ impl Suggestion {
             self.company.to_string(),
             self.from_id.clone(),
             self.window_kind.to_string(),
-            self.resets_at.clone(),
+            // 분 단위로 — 서버가 조회마다 소수점 초를 다르게 줘도 같은 창으로 본다.
+            reset_ms(&self.resets_at).map_or_else(|| self.resets_at.clone(), |ms| (ms / 60_000).to_string()),
         )
     }
+}
+
+/// RFC 3339 → 밀리초. 못 읽으면 None.
+fn reset_ms(s: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.timestamp_millis())
 }
 
 /// 기본 계정이 한도에 닿았고 여유 있는 다른 계정이 있으면, 판정 대상 최댓값이 가장 낮은 계정을 권한다.
@@ -74,12 +80,13 @@ pub fn suggest(
     if default.plan.state != "ok" {
         return None;
     }
-    // 한도에 닿은 창이 여럿이면 가장 늦게 풀리는 것(RFC 3339 같은 오프셋이면 문자열 비교로 충분).
+    // 한도에 닿은 창이 여럿이면 가장 늦게 풀리는 것(오프셋이 달라도 시각으로 비교).
     let full = gating_windows(&default.plan)
         .filter(|w| w.used_pct >= 100.0)
-        .max_by(|a, b| a.resets_at.cmp(&b.resets_at))?;
+        .max_by_key(|w| reset_ms(&w.resets_at))?;
     let (to, to_used_pct) = others
         .iter()
+        .filter(|c| c.id != default.id)
         .filter(|c| c.plan.state == "ok" && gating_windows(&c.plan).all(|w| w.used_pct < 100.0))
         .map(|c| (c, max_used(&c.plan)))
         .min_by(|a, b| a.1.total_cmp(&b.1))?;

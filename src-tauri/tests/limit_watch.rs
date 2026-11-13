@@ -123,15 +123,10 @@ fn suggest_not_repeated_for_same_key() {
         &[cand("b", plan("ok", &[("five_hour", 3.0)]))],
     )
     .unwrap();
-    assert_eq!(
-        s.key(),
-        (
-            "claude".into(),
-            "me".into(),
-            "five_hour".into(),
-            RESET.into()
-        )
-    );
+    let k = s.key();
+    assert_eq!((k.0.as_str(), k.1.as_str(), k.2.as_str()), ("claude", "me", "five_hour"));
+    // 초기화 시각은 분 단위(epoch 분).
+    assert_eq!(k.3, (chrono::DateTime::parse_from_rfc3339(RESET).unwrap().timestamp() / 60).to_string());
     let mut seen = Seen::default();
     assert!(seen.first_time(&s));
     assert!(!seen.first_time(&s));
@@ -153,4 +148,38 @@ fn suggest_again_after_reset() {
         ..s
     };
     assert!(seen.first_time(&later));
+}
+
+#[test]
+fn suggest_key_ignores_subsecond_jitter() {
+    let def = cand("me", plan("ok", &[("five_hour", 100.0)]));
+    let s = suggest("claude", &def, &[cand("b", plan("ok", &[("five_hour", 3.0)]))]).unwrap();
+    let mut seen = Seen::default();
+    assert!(seen.first_time(&ieum_desktop_lib::limit_watch::Suggestion {
+        resets_at: "2026-11-13T05:00:00.123+00:00".into(),
+        ..s.clone()
+    }));
+    // 같은 창, 소수점 초·오프셋 표기만 다름 → 다시 권하지 않는다.
+    assert!(!seen.first_time(&ieum_desktop_lib::limit_watch::Suggestion {
+        resets_at: "2026-11-13T05:00:00.456Z".into(),
+        ..s
+    }));
+}
+
+#[test]
+fn suggest_skips_self_and_ignores_model_windows_of_others() {
+    let def = cand("me", plan("ok", &[("five_hour", 100.0)]));
+    let others = [
+        // 기본 계정 자신이 목록에 섞여 와도 권하지 않는다.
+        cand("me", plan("ok", &[("five_hour", 0.0)])),
+        // 모델 전용 창이 100이어도 후보, 최댓값에서도 뺀다.
+        cand("b", plan("ok", &[("five_hour", 12.4), ("seven_day_model", 100.0)])),
+    ];
+    let s = suggest("claude", &def, &others).unwrap();
+    assert_eq!(s.to_id, "b");
+    assert_eq!(s.to_used_pct, 12.4);
+    let v = serde_json::to_value(&s).unwrap();
+    for k in ["company", "fromId", "fromLabel", "toId", "toLabel", "toUsedPct", "windowKind", "resetsAt"] {
+        assert!(v.get(k).is_some(), "{k}");
+    }
 }
