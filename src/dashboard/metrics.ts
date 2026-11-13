@@ -19,6 +19,8 @@ const pad = (h: number | string) => String(h).padStart(2, "0");
 const day = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 
 export function localSide(runs: RunSummary[], workflows: WorkflowEntry[], live: Record<string, Live>, now: Date): Side {
+  // 채팅 빌더의 노드 테스트 실행은 합계에 넣지 않는다.
+  runs = runs.filter((r) => r.trigger !== "test");
   const today = day(now);
   const y = new Date(now);
   y.setDate(y.getDate() - 1);

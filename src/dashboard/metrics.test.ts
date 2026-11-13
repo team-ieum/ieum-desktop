@@ -55,6 +55,19 @@ test("local_side_no_finished_runs_rate_null", () => {
   expect(s.changePct).toBeNull();
 });
 
+// 채팅 빌더의 노드 테스트 실행은 대시보드 합계에 넣지 않는다.
+test("local_side_ignores_test_runs", () => {
+  const runs = [
+    run({ startedAt: at(12, 9), finishedAt: at(12, 9, 2) }),
+    run({ startedAt: at(12, 10), status: "failed", trigger: "test" }),
+  ];
+  const s = localSide(runs, [wf("w1", true)], {}, NOW);
+  expect(s.todayRuns).toBe(1);
+  expect(s.successRate).toBe(1);
+  expect(Object.values(s.hourly).reduce((a, b) => a + b, 0)).toBe(1);
+  expect(s.stats.errored).toBe(0);
+});
+
 test("local_side_errored_uses_latest_run", () => {
   const runs = [
     run({ workflowId: "a", startedAt: at(12, 8), status: "failed" }),

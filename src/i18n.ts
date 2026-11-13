@@ -65,6 +65,7 @@ const ko = {
   "dashboard.run.running": "실행 중",
   "dashboard.trigger.watch": "폴더 감시",
   "dashboard.trigger.manual": "수동",
+  "dashboard.trigger.test": "테스트",
   "dashboard.trigger.schedule": "스케줄",
   "dashboard.trigger.webhook": "웹훅",
 
@@ -672,6 +673,7 @@ const en: Record<Key, string> = {
   "dashboard.run.running": "Running",
   "dashboard.trigger.watch": "Folder watch",
   "dashboard.trigger.manual": "Manual",
+  "dashboard.trigger.test": "Test",
   "dashboard.trigger.schedule": "Schedule",
   "dashboard.trigger.webhook": "Webhook",
 
