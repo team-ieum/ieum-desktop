@@ -2,6 +2,7 @@ pub mod account;
 pub mod active;
 pub mod commands;
 pub mod credentials;
+pub mod limit_watch;
 pub mod notify;
 pub mod permissions;
 pub mod plan_usage;
