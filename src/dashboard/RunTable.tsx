@@ -1,6 +1,7 @@
-import { Ban, CheckCircle2, ChevronRight, CircleX, File, Globe, Laptop, Loader2, ShieldX, Undo2 } from "lucide-react";
+import { Ban, CheckCircle2, ChevronLeft, ChevronRight, CircleX, File, Globe, Laptop, Loader2, Search, ShieldX, Undo2 } from "lucide-react";
 import type { RunSummary, WebDashboardExecution } from "../api";
 import { t, type Key } from "../i18n";
+import { Dropdown } from "../usage/parts";
 import { formatDuration, formatRelative } from "./format";
 
 export type Row = {
@@ -64,6 +65,112 @@ const TRIGGER: Record<string, Key> = {
   EVENT: "dashboard.trigger.webhook",
 };
 const triggerText = (v: string) => (TRIGGER[v] ? t(TRIGGER[v]) : v);
+
+// --- 필터·쪽 나누기(대시보드 최근 실행 로그·실행 기록 공용). 화면 상태만, 저장 안 함. ---
+export const PAGE_SIZE = 10;
+export type StatusFilter = "all" | Row["status"];
+/** trigger는 화면 이름(MANUAL·manual이 같은 "수동")으로 고른다. */
+export type Filters = { status: StatusFilter; trigger: string; q: string };
+export const NO_FILTERS: Filters = { status: "all", trigger: "all", q: "" };
+/** cancelled·rejected는 내 PC만 나온다. */
+export const statusOptions = (withLocal: boolean): StatusFilter[] =>
+  withLocal ? ["all", "success", "error", "running", "cancelled", "rejected"] : ["all", "success", "error", "running"];
+/** 받은 행에 있는 트리거만. */
+export const triggerOptions = (rows: Row[]) => [...new Set(rows.flatMap((r) => (r.trigger === null ? [] : [triggerText(r.trigger)])))];
+export const filterRows = (rows: Row[], f: Filters) => {
+  const q = f.q.trim().toLowerCase();
+  return rows.filter(
+    (r) =>
+      (f.status === "all" || r.status === f.status) &&
+      (f.trigger === "all" || (r.trigger !== null && triggerText(r.trigger) === f.trigger)) &&
+      (!q || r.workflowName.toLowerCase().includes(q)),
+  );
+};
+const filterStatusText = (s: StatusFilter) => (s === "all" ? t("runs.allStatus") : s === "error" ? t("history.filterError") : statusText(s));
+
+/** 표 머리 오른쪽 — [상태 ⌄] [트리거 ⌄] [이름 검색]. */
+export function RunFilters({ value, onChange, statuses, triggers }: { value: Filters; onChange: (f: Filters) => void; statuses: StatusFilter[]; triggers: string[] }) {
+  const trig = ["all", ...triggers.filter((x) => x !== "all"), ...(value.trigger !== "all" && !triggers.includes(value.trigger) ? [value.trigger] : [])];
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <Dropdown
+        label={t("dashboard.col.status")}
+        items={statuses.map((id) => ({ id, name: filterStatusText(id), icon: null }))}
+        sel={value.status}
+        onSel={(status) => onChange({ ...value, status })}
+      />
+      <Dropdown
+        label={t("dashboard.col.trigger")}
+        items={trig.map((id) => ({ id, name: id === "all" ? t("runs.allTriggers") : id, icon: null }))}
+        sel={value.trigger}
+        onSel={(trigger) => onChange({ ...value, trigger })}
+      />
+      <label className="relative inline-flex h-8 w-48 items-center">
+        <Search className="pointer-events-none absolute left-2.5 size-3.5 text-neutral-400" aria-hidden="true" />
+        <input
+          type="search"
+          aria-label={t("runs.search")}
+          placeholder={t("runs.search")}
+          value={value.q}
+          onChange={(e) => onChange({ ...value, q: e.target.value })}
+          className="h-full w-full rounded-lg border border-[#cde9f4] bg-white pr-2.5 pl-8 typo-caption1_medium text-neutral-700 outline-none placeholder:text-neutral-400 focus:border-main-blue"
+        />
+      </label>
+    </div>
+  );
+}
+
+/** 필터 결과 0건. */
+export function RunsNoMatch({ onClear }: { onClear: () => void }) {
+  return (
+    <div className="flex flex-col items-center gap-3 px-5 py-8">
+      <p className="typo-body2_regular text-neutral-500">{t("history.noMatch")}</p>
+      <button type="button" className="rounded-lg border border-neutral-200 bg-white px-3 py-1.5 typo-body3_semibold text-neutral-700 hover:bg-neutral-50" onClick={onClear}>
+        {t("runs.clear")}
+      </button>
+    </div>
+  );
+}
+
+/** 표 아래 — "N–M / 총 K건" [이전] 쪽 번호 [다음]. `more` = 커서에 더 있음(총수 모름). page는 0부터. */
+export function Pager({ page, total, more = false, onPage }: { page: number; total: number; more?: boolean; onPage: (p: number) => void }) {
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const last = more ? Math.max(pages, page + 2) : pages;
+  const from = Math.max(0, Math.min(page - 2, last - 5));
+  const nums = Array.from({ length: Math.min(5, last) }, (_, i) => from + i);
+  const range = (more ? t("runs.rangeMore") : t("runs.range"))
+    .replace("{from}", String(total === 0 ? 0 : page * PAGE_SIZE + 1))
+    .replace("{to}", String(Math.min(total, (page + 1) * PAGE_SIZE)))
+    .replace("{total}", String(total));
+  const btn = "inline-flex h-8 min-w-8 items-center justify-center gap-1 rounded-lg px-2 typo-body3_semibold disabled:opacity-40";
+  return (
+    <div className="flex items-center justify-between gap-4 border-t border-neutral-200 bg-neutral-50 px-5 py-2.5">
+      <span className="typo-caption1_medium tabular-nums text-neutral-500">{range}</span>
+      <nav className="flex items-center gap-1" aria-label={t("runs.pages")}>
+        <button type="button" className={`${btn} text-neutral-600 hover:bg-white`} disabled={page === 0} onClick={() => onPage(page - 1)}>
+          <ChevronLeft className="size-4" aria-hidden="true" />
+          {t("runs.prev")}
+        </button>
+        {nums.map((p) => (
+          <button
+            key={p}
+            type="button"
+            aria-label={t("runs.page").replace("{n}", String(p + 1))}
+            aria-current={p === page ? "page" : undefined}
+            className={`${btn} tabular-nums ${p === page ? "bg-main-deep-blue text-white" : "text-neutral-600 hover:bg-white"}`}
+            onClick={() => onPage(p)}
+          >
+            {p + 1}
+          </button>
+        ))}
+        <button type="button" className={`${btn} text-neutral-600 hover:bg-white`} disabled={page >= last - 1} onClick={() => onPage(page + 1)}>
+          {t("runs.next")}
+          <ChevronRight className="size-4" aria-hidden="true" />
+        </button>
+      </nav>
+    </div>
+  );
+}
 
 const displayId = (id: string) => `RUN-${id.replace(/-/g, "").slice(0, 8).toUpperCase()}`;
 

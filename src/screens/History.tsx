@@ -1,7 +1,7 @@
 import { ArrowLeft, ArrowRight, ChevronDown, History as HistoryIcon, Laptop, Loader2, Undo2, Workflow as WorkflowIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type RunStatus, type StoredRun, type UndoReport } from "../api";
-import { localRow, RunTable, type Row } from "../dashboard/RunTable";
+import { localRow, PAGE_SIZE, Pager, RunsNoMatch, RunTable, type Row } from "../dashboard/RunTable";
 import { nodeTitle } from "../editor/Canvas";
 import { locale, t } from "../i18n";
 import { useRuns } from "../stores/runs";
@@ -192,7 +192,6 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
   );
 }
 
-const PAGE = 20;
 type Filter = "all" | "success" | "error" | "running";
 const FILTERS: Filter[] = ["all", "success", "error", "running"];
 const DOT: Record<Filter, string> = { all: "", success: "bg-main-blue", error: "bg-danger-600", running: "" };
@@ -205,7 +204,7 @@ export function History({ initialRun = null }: { initialRun?: string | null }) {
   const [openId, setOpenId] = useState<string | null>(initialRun);
   const [filter, setFilter] = useState<Filter>("all");
   const [workflow, setWorkflow] = useState("");
-  const [limit, setLimit] = useState(PAGE);
+  const [page, setPage] = useState(0);
 
   useEffect(() => {
     void load();
@@ -220,7 +219,7 @@ export function History({ initialRun = null }: { initialRun?: string | null }) {
   // 거부(rejected)는 빨간 알약이라 "오류"에, 중단(cancelled)은 "전체"에만.
   const match = (r: Row, f: Filter) => r.status === f || (f === "error" && r.status === "rejected");
   const rows = filter === "all" ? byWorkflow : byWorkflow.filter((r) => match(r, filter));
-  const shown = rows.slice(0, limit);
+  const shown = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   return (
     <section className="flex flex-col gap-4 px-6 py-6">
@@ -253,7 +252,7 @@ export function History({ initialRun = null }: { initialRun?: string | null }) {
               }`}
               onClick={() => {
                 setFilter(f);
-                setLimit(PAGE);
+                setPage(0);
               }}
             >
               {f === "running" ? (
@@ -277,7 +276,7 @@ export function History({ initialRun = null }: { initialRun?: string | null }) {
             value={workflow}
             onChange={(e) => {
               setWorkflow(e.target.value);
-              setLimit(PAGE);
+              setPage(0);
             }}
           >
             <option value="">{t("history.allWorkflows")}</option>
@@ -298,25 +297,19 @@ export function History({ initialRun = null }: { initialRun?: string | null }) {
         ) : (
           <>
             {rows.length === 0 ? (
-              <p className="px-5 py-8 text-center typo-body2_regular text-neutral-500">{t("history.noMatch")}</p>
+              <RunsNoMatch
+                onClear={() => {
+                  setFilter("all");
+                  setWorkflow("");
+                  setPage(0);
+                }}
+              />
             ) : (
-              <RunTable rows={shown} showSource={false} history onOpen={(r) => setOpenId(r.id)} />
+              <>
+                <RunTable rows={shown} showSource={false} history onOpen={(r) => setOpenId(r.id)} />
+                <Pager page={page} total={rows.length} onPage={setPage} />
+              </>
             )}
-            <div className="flex items-center justify-between border-t border-neutral-200 bg-neutral-50 px-5 py-3">
-              <span className="typo-caption1_medium text-neutral-400">
-                {t("history.shown").replace("{total}", String(rows.length)).replace("{n}", String(shown.length))}
-              </span>
-              {shown.length < rows.length && (
-                <button
-                  type="button"
-                  className="inline-flex items-center gap-1.5 typo-body2_semibold text-neutral-600 hover:text-main-deep-blue"
-                  onClick={() => setLimit((l) => l + PAGE)}
-                >
-                  {t("history.more")}
-                  <ChevronDown className="size-4" aria-hidden="true" />
-                </button>
-              )}
-            </div>
           </>
         )}
       </div>

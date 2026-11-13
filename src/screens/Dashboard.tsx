@@ -4,7 +4,21 @@ import { api, type WebDashboardExecution, type WebDashboardSummary, type WebErro
 import type { HeroSide } from "../dashboard/Hero";
 import { Hero } from "../dashboard/Hero";
 import { localSide, merge, webSide, type Source } from "../dashboard/metrics";
-import { localRow, RunTable, webRow, type Row } from "../dashboard/RunTable";
+import {
+  filterRows,
+  localRow,
+  NO_FILTERS,
+  PAGE_SIZE,
+  Pager,
+  RunFilters,
+  RunsNoMatch,
+  RunTable,
+  statusOptions,
+  triggerOptions,
+  webRow,
+  type Filters,
+  type Row,
+} from "../dashboard/RunTable";
 import { StatusCards } from "../dashboard/StatusCards";
 import { UsageCard } from "../dashboard/UsageCard";
 import { t } from "../i18n";
@@ -31,7 +45,6 @@ const closeBanner = () => {
 };
 
 const TABS: { id: Source; icon?: typeof Laptop }[] = [{ id: "all" }, { id: "local", icon: Laptop }, { id: "web", icon: Globe }];
-const MAX_ROWS = 20;
 // 연결 문제일 때만 "연결 안 됨" — 만료는 따로 [다시 로그인].
 const offline = (e: unknown) => ["NETWORK", "SERVER"].includes((e as Partial<WebError> | null)?.code ?? "");
 
@@ -48,6 +61,11 @@ export function Dashboard({ onOpenRun, onUsage, onAccounts }: { onOpenRun: (runI
   const [banner, setBanner] = useState(() => !bannerClosed());
   const [summary, setSummary] = useState<WebDashboardSummary | null>(null);
   const [execs, setExecs] = useState<WebDashboardExecution[]>([]);
+  /** 웹 다음 쪽 커서 — null이면 끝. */
+  const [next, setNext] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [page, setPage] = useState(0);
   const [webFail, setWebFail] = useState<unknown>(null);
   const webOff = webFail !== null && offline(webFail);
 
@@ -57,7 +75,10 @@ export function Dashboard({ onOpenRun, onUsage, onAccounts }: { onOpenRun: (runI
     // 실패하면(만료 포함) 웹 쪽만 비운다.
     guard(api.dashboardSummary()).then(setSummary, (e) => setWebFail(e ?? "failed"));
     guard(api.dashboardExecutions(null)).then(
-      (p) => setExecs(p.content),
+      (p) => {
+        setExecs(p.content);
+        setNext(p.hasNext ? p.nextCursor : null);
+      },
       () => setExecs([]),
     );
   }, [load, loadWorkflows, guard]);
@@ -77,12 +98,36 @@ export function Dashboard({ onOpenRun, onUsage, onAccounts }: { onOpenRun: (runI
         : [{ label: t("dashboard.tab.web"), side: web }];
   const m = merge(source === "web" && web ? web : local, source === "all" ? web : null);
 
-  const rows: Row[] = [
-    ...(source !== "web" ? runs.map((r) => localRow(r, name(r.workflowId))) : []),
-    ...(source !== "local" ? execs.map(webRow) : []),
-  ]
-    .sort((a, b) => Date.parse(b.at || "0") - Date.parse(a.at || "0"))
-    .slice(0, MAX_ROWS);
+  const time = (r: Row) => Date.parse(r.at || "0") || 0;
+  const webRows = source !== "local" ? execs.map(webRow) : [];
+  const all: Row[] = [...(source !== "web" ? runs.map((r) => localRow(r, name(r.workflowId))) : []), ...webRows].sort((a, b) => time(b) - time(a));
+  const rows = filterRows(all, filters);
+  const shown = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  // BE는 상태·트리거 거르기를 안 받아 받은 것에서 거른다 — 이 쪽이 덜 찼거나, (전체 탭) 이 쪽 끝이 받은 웹보다 오래됐으면 다음 커서만 더 받는다.
+  // ponytail: 드문 필터는 맞는 행이 찰 때까지 커서를 끝까지 따라간다 — 느리면 BE에 status·trigger 쿼리를 추가.
+  const webOldest = webRows.length ? Math.min(...webRows.map(time)) : Infinity;
+  const needMore = next !== null && !fetching && source !== "local" && (shown.length < PAGE_SIZE || time(shown[shown.length - 1]) < webOldest);
+  useEffect(() => {
+    if (!needMore || next === null) return;
+    setFetching(true);
+    guard(api.dashboardExecutions(next))
+      .then(
+        (p) => {
+          setExecs((e) => [...e, ...p.content]);
+          setNext(p.hasNext ? p.nextCursor : null);
+        },
+        () => setNext(null),
+      )
+      .finally(() => setFetching(false));
+  }, [needMore, next, guard]);
+  const pickSource = (id: Source) => {
+    setSource(id);
+    setPage(0);
+  };
+  const changeFilters = (f: Filters) => {
+    setFilters(f);
+    setPage(0);
+  };
 
   const open = (r: Row) =>
     r.source === "local"
@@ -94,7 +139,7 @@ export function Dashboard({ onOpenRun, onUsage, onAccounts }: { onOpenRun: (runI
     if (!step) return;
     e.preventDefault();
     const next = TABS[(TABS.findIndex((x) => x.id === source) + step + TABS.length) % TABS.length].id;
-    setSource(next);
+    pickSource(next);
     document.getElementById(`dashboard-tab-${next}`)?.focus();
   };
 
@@ -136,7 +181,7 @@ export function Dashboard({ onOpenRun, onUsage, onAccounts }: { onOpenRun: (runI
                 className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-4 typo-body3_semibold ${
                   source === id ? "bg-main-deep-blue text-white shadow-[0_1px_2px_rgba(16,24,40,.08)]" : "text-neutral-600"
                 }`}
-                onClick={() => setSource(id)}
+                onClick={() => pickSource(id)}
               >
                 {Icon && <Icon className="size-3.5" aria-hidden="true" />}
                 {t(`dashboard.tab.${id}`)}
@@ -177,8 +222,20 @@ export function Dashboard({ onOpenRun, onUsage, onAccounts }: { onOpenRun: (runI
             <div className="overflow-hidden rounded-brand-md border border-neutral-200 bg-neutral-white shadow-sm">
               <div className="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-3.5">
                 <h3 className="typo-body2_semibold text-neutral-900">{t("dashboard.recent")}</h3>
+                {all.length > 0 && (
+                  <RunFilters value={filters} onChange={changeFilters} statuses={statusOptions(source !== "web")} triggers={triggerOptions(all)} />
+                )}
               </div>
-              <RunTable rows={rows} showSource={source === "all"} onOpen={open} />
+              {all.length > 0 && rows.length === 0 ? (
+                fetching ? (
+                  <p className="px-5 py-8 text-center typo-body2_regular text-neutral-500">{t("common.loading")}</p>
+                ) : (
+                  <RunsNoMatch onClear={() => changeFilters(NO_FILTERS)} />
+                )
+              ) : (
+                <RunTable rows={shown} showSource={source === "all"} onOpen={open} />
+              )}
+              {rows.length > 0 && <Pager page={page} total={rows.length} more={next !== null && source !== "local"} onPage={setPage} />}
             </div>
           </>
         )}

@@ -37,7 +37,7 @@ test("history_table_shows_trigger_column", async () => {
   expect(screen.getByText("폴더 감시")).toBeTruthy();
   expect(screen.getByText("—")).toBeTruthy();
   expect(screen.getAllByText("3개")).toHaveLength(2);
-  expect(screen.getByText("2개 중 2개 표시")).toBeTruthy();
+  expect(screen.getByText("1–2 / 총 2건")).toBeTruthy();
   vi.restoreAllMocks();
 });
 
