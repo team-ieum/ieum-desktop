@@ -36,7 +36,7 @@ const MAX_ROWS = 20;
 const offline = (e: unknown) => ["NETWORK", "SERVER"].includes((e as Partial<WebError> | null)?.code ?? "");
 
 /** 내 PC 행 = 그 실행 상세. 웹 행 = 웹 워크플로우를 브라우저로. */
-export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
+export function Dashboard({ onOpenRun, onUsage, onAccounts }: { onOpenRun: (runId: string) => void; onUsage: () => void; onAccounts: () => void }) {
   const [source, setSource] = useState<Source>("all");
   const { runs, live, load } = useRuns();
   const workflows = useWorkflows((s) => s.list);
@@ -173,7 +173,7 @@ export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void })
           <>
             <Hero todayRuns={m.todayRuns} hourly={m.hourly} sides={sides} />
             <StatusCards stats={m.stats} />
-            <UsageCard hidden={source === "web"} />
+            <UsageCard hidden={source === "web"} onUsage={onUsage} onAccounts={onAccounts} />
             <div className="overflow-hidden rounded-brand-md border border-neutral-200 bg-neutral-white shadow-sm">
               <div className="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-3.5">
                 <h3 className="typo-body2_semibold text-neutral-900">{t("dashboard.recent")}</h3>

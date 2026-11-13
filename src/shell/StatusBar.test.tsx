@@ -4,6 +4,7 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { api, type CliAccountMeta, type CredentialsView, type PlanUsage, type UsageSummary } from "../api";
 import { setLang } from "../i18n";
 import { useCredentials } from "../stores/credentials";
+import { usePlanStore } from "../stores/plans";
 import { StatusBar } from "./StatusBar";
 
 const summary = (totalUsd: number): UsageSummary => ({
@@ -39,6 +40,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   useCredentials.setState({ view: null });
+  usePlanStore.setState({ plans: {} });
 });
 
 /** Claude 계정 둘(기본 = 이 Mac), Codex 없음, Antigravity 로그인 전. */

@@ -1,16 +1,24 @@
+import { ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type UsageRange, type UsageSummary } from "../api";
+import { ProviderLogo } from "../assets/providers";
 import { t } from "../i18n";
 import { PROVIDERS } from "../screens/settings/AiPane";
+import { connectedSubs } from "../shell/UsagePopover";
+import { useCredentials } from "../stores/credentials";
+import { useDefaultPlans } from "../stores/plans";
 import { useWorkflows } from "../stores/workflows";
 import { formatTokens, formatUsd } from "../usage/format";
+import { WindowMeter } from "../usage/parts";
 
 const RANGES: UsageRange[] = ["today", "week", "month"];
 const tokens = (x: { input: number; output: number }) => x.input + x.output;
 
-/** 대시보드 "AI 사용량" — 내 PC AI 노드가 쓴 토큰·예상 금액. 웹 이음 탭에서는 그리지 않는다. */
-export function UsageCard({ hidden }: { hidden: boolean }) {
+/** 대시보드 "AI 사용량" — API 칸(내 PC AI 노드가 쓴 토큰·예상 금액, 기간 탭)과 구독 칸(기본 계정 창별 사용, 상태 줄과 같은 스토어). 웹 이음 탭에서는 그리지 않는다. */
+export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; onUsage: () => void; onAccounts: () => void }) {
   const [range, setRange] = useState<UsageRange>("today");
+  const view = useCredentials((s) => s.view);
+  const { plans } = useDefaultPlans(view);
   // undefined = 읽는 중, null = 못 읽음
   const [sum, setSum] = useState<UsageSummary | null | undefined>(undefined);
   const workflows = useWorkflows((s) => s.list);
@@ -29,6 +37,8 @@ export function UsageCard({ hidden }: { hidden: boolean }) {
   }, [hidden, range]);
 
   if (hidden) return null;
+  const now = new Date();
+  const subs = connectedSubs(view, plans);
   const total = sum ? tokens({ input: sum.totalInput, output: sum.totalOutput }) : 0;
   const name = (id: string) => workflows.find((w) => w.id === id)?.name ?? t("history.deletedWorkflow");
 
@@ -36,6 +46,13 @@ export function UsageCard({ hidden }: { hidden: boolean }) {
     <div className="overflow-hidden rounded-brand-md border border-neutral-200 bg-neutral-white shadow-sm">
       <div className="flex items-center justify-between gap-4 border-b border-neutral-200 px-5 py-3.5">
         <h3 className="typo-body2_semibold text-neutral-900">{t("usage.title")}</h3>
+        <button type="button" className="inline-flex items-center gap-0.5 typo-caption1_semibold text-main-blue hover:underline" onClick={onUsage}>
+          {t("usage.seeMore")}
+          <ChevronRight className="size-3.5" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="flex items-center justify-between gap-4 px-5 pt-3">
+        <h4 className="typo-caption1_semibold tracking-[.04em] text-main-gray">{t("usage.apiSection")}</h4>
         <div role="tablist" className="inline-flex rounded-lg border border-neutral-200 bg-neutral-100 p-0.5">
           {RANGES.map((r) => (
             <button
@@ -113,6 +130,34 @@ export function UsageCard({ hidden }: { hidden: boolean }) {
           {t("usage.estimated")} · {t("usage.asOf").replace("{date}", sum.asOf)}
         </p>
       )}
+      <section aria-label={t("usage.subSection")} className="border-t border-neutral-200 px-5 py-4">
+        <h4 className="mb-3 typo-caption1_semibold tracking-[.04em] text-main-gray">{t("usage.subSection")}</h4>
+        {subs.length ? (
+          <div className="grid grid-cols-3 gap-4">
+            {subs.map(({ sub: s, plan }) => (
+              <div key={s.id} role="group" aria-label={s.name} className="rounded-lg border border-neutral-100 bg-main-light-blue/30 p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <ProviderLogo id={s.logo} size={18} />
+                  <span className="typo-body3_semibold text-main-deep-blue">{s.name}</span>
+                  {plan.accountEmail && <span className="min-w-0 truncate typo-caption1_regular text-neutral-500">{plan.accountEmail}</span>}
+                </div>
+                <div className="flex flex-col gap-2.5">
+                  {plan.windows.map((w) => (
+                    <WindowMeter key={w.kind} w={w} now={now} inline />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="typo-caption1_regular text-neutral-500">
+            {t("usage.noSubs")}{" "}
+            <button type="button" className="typo-caption1_semibold text-main-blue hover:underline" onClick={onAccounts}>
+              {t("usage.connectSubs")}
+            </button>
+          </p>
+        )}
+      </section>
     </div>
   );
 }

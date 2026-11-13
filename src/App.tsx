@@ -213,7 +213,7 @@ export default function App() {
             )}
             <div className="min-h-0 flex-1 overflow-y-auto">
               {view.page === "dashboard" ? (
-                <Dashboard onOpenRun={(run) => setView({ page: "history", run })} />
+                <Dashboard onOpenRun={(run) => setView({ page: "history", run })} onUsage={openUsage} onAccounts={openAiSettings} />
               ) : view.page === "web" ? (
                 <Web workflow={"workflow" in view ? view.workflow : undefined} onOpen={(id) => setView(id ? { page: "web", workflow: id } : { page: "web" })} />
               ) : view.page === "history" ? (

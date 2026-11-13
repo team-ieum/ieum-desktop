@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, type UsageSummary } from "../api";
 import { ProviderLogo } from "../assets/providers";
 import { t } from "../i18n";
-import { usePlans } from "../screens/settings/AiPane";
 import { useCredentials } from "../stores/credentials";
+import { useDefaultPlans } from "../stores/plans";
 import { formatReset, formatUsd } from "../usage/format";
 import { hot, resetText, usedOf, usedText } from "../usage/parts";
 import { connectedSubs, UsagePopover } from "./UsagePopover";
@@ -14,7 +14,7 @@ const REFRESH_MS = 60_000;
 /** 창 맨 아래 줄 — "사용" + 구독 회사마다 [로고 N% 남은 시간](가장 빡빡한 창). 구독이 없으면 오늘 API 예상 금액. 누르면 사용량 팝오버. */
 export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSettings: () => void }) {
   const view = useCredentials((s) => s.view);
-  const { plans, refresh } = usePlans(view, true);
+  const { plans, refresh } = useDefaultPlans(view);
   // undefined = 아직, null = 못 읽음
   const [today, setToday] = useState<UsageSummary | null | undefined>(undefined);
   const [open, setOpen] = useState(false);
@@ -26,7 +26,7 @@ export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSett
     void loadToday();
   }, []);
 
-  // 구독은 usePlans가 처음 읽는다. 창이 안 보이면 멈추고, 다시 보이면 바로 새로 읽는다.
+  // 구독은 useDefaultPlans가 처음 읽는다(대시보드와 같은 스토어). 창이 안 보이면 멈추고, 다시 보이면 바로 새로 읽는다.
   useEffect(() => {
     const load = () => {
       if (document.visibilityState !== "visible") return;

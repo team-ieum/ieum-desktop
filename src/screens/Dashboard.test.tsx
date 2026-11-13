@@ -56,7 +56,7 @@ afterEach(() => {
 
 const mount = async () => {
   await act(async () => {
-    render(<Dashboard onOpenRun={() => {}} />);
+    render(<Dashboard onOpenRun={() => {}} onUsage={() => {}} onAccounts={() => {}} />);
   });
 };
 
@@ -114,7 +114,7 @@ test("dashboard_row_space_opens_and_web_failure_logged", async () => {
   vi.spyOn(api, "openWebWorkflow").mockRejectedValue({ code: "NETWORK" });
   const log = vi.spyOn(console, "error").mockImplementation(() => {});
   await act(async () => {
-    render(<Dashboard onOpenRun={onOpenRun} />);
+    render(<Dashboard onOpenRun={onOpenRun} onUsage={() => {}} onAccounts={() => {}} />);
   });
   fireEvent.keyDown(screen.getByRole("button", { name: /RUN-7F3A21C9/ }), { key: " " });
   expect(onOpenRun).toHaveBeenCalledWith("7f3a21c9-0000");
