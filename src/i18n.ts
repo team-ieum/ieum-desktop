@@ -437,6 +437,19 @@ const ko = {
   "assistant.tab.terminal": "터미널",
   "assistant.tab.chat": "채팅",
 
+  // 캔버스 동기화(B)
+  "sync.reloaded": "채팅이 워크플로우를 바꿔서 화면을 다시 불러왔어요.",
+  "sync.undoFailed": "테스트가 옮긴 파일을 되돌리지 못했어요",
+  "finish.title": "워크플로우를 켤까요?",
+  "finish.folder": "감시할 폴더",
+  "finish.actions": "파일에 일어날 일",
+  "finish.action.local.file_move": "옮기기 → {target}",
+  "finish.action.local.file_rename": "이름 바꾸기 → {target}",
+  "finish.action.local.file_trash": "휴지통으로",
+  "finish.accept": "켜기",
+  "finish.decline": "아직",
+  "finish.mark": "확인 필요",
+
   "canvas.true": "참",
   "canvas.otherwise": "그 외",
 
@@ -1044,6 +1057,19 @@ const en: Record<Key, string> = {
   "assistant.close": "Close IEUM Assistant",
   "assistant.tab.terminal": "Terminal",
   "assistant.tab.chat": "Chat",
+
+  // 캔버스 동기화(B)
+  "sync.reloaded": "The assistant changed this workflow, so the canvas was reloaded.",
+  "sync.undoFailed": "Couldn't put back files moved by the test",
+  "finish.title": "Turn on this workflow?",
+  "finish.folder": "Folder to watch",
+  "finish.actions": "What happens to files",
+  "finish.action.local.file_move": "Move → {target}",
+  "finish.action.local.file_rename": "Rename → {target}",
+  "finish.action.local.file_trash": "Move to Trash",
+  "finish.accept": "Turn on",
+  "finish.decline": "Not yet",
+  "finish.mark": "Needs confirmation",
 
   "canvas.true": "True",
   "canvas.otherwise": "Otherwise",

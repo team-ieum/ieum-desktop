@@ -59,6 +59,9 @@
     "allow-get-chat",
     "allow-pending-finish",
     "allow-confirm-finish",
+    "allow-set-editing",
+    "allow-finish-notice",
+    "allow-undo-failed-notice",
     "dialog:allow-open"
   ]
 }

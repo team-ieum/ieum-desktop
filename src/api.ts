@@ -142,7 +142,7 @@ export interface Settings {
 export type UpdateCheck = { status: "dev" } | { status: "latest" } | { status: "installed"; version: string };
 export type SystemSettingsPane = "files" | "notifications" | "login_items";
 /** 시스템 알림 클릭으로 열 화면(Rust `notify::Target`). */
-export type OpenTarget = { kind: "run"; runId: string } | { kind: "history" };
+export type OpenTarget = { kind: "run"; runId: string } | { kind: "history" } | { kind: "workflow"; id: string };
 /** 계정 = 서버 + 이메일. */
 export interface AccountId {
   email: string;
@@ -467,6 +467,12 @@ export const api = {
   /** 확인 카드의 [켜기]/[아직] — 워크플로우를 켜는 유일한 길. */
   confirmFinish: (workflowId: string, accept: boolean) =>
     invoke<BuilderReply>("confirm_finish", { workflowId, accept }),
+  /** 편집기의 미저장 편집 표시 — 켜져 있는 동안 빌더의 고치는 동작은 `USER_EDITING`으로 거절된다. */
+  setEditing: (workflowId: string, editing: boolean) => invoke<void>("set_editing", { workflowId, editing }),
+  /** 완료 확인 대기 알림 — 그 편집 화면이 떠 있고(`onScreen`) 창이 앞이면 Rust가 보내지 않는다. */
+  finishNotice: (workflowId: string, onScreen: boolean) => invoke<void>("finish_notice", { workflowId, onScreen }),
+  /** 테스트 되돌리기 실패 알림 — 판정은 `finishNotice`와 같다. */
+  undoFailedNotice: (workflowId: string, onScreen: boolean) => invoke<void>("undo_failed_notice", { workflowId, onScreen }),
   onWorkflowChanged: (cb: (p: { id: string; updatedAt: string }) => void): Promise<UnlistenFn> =>
     listen<{ id: string; updatedAt: string }>("workflow-changed", (e) => cb(e.payload)),
   onFinishPending: (cb: (p: { id: string; name: string }) => void): Promise<UnlistenFn> =>

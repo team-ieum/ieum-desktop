@@ -20,7 +20,7 @@ function lastMode(): AssistantMode {
 }
 
 /** 캔버스 우상단 마스코트 버튼 + 떠 있는 패널(캔버스를 밀지 않는다). 한 번 연 뒤에는 닫아도 숨기기만 한다 — 터미널 세션이 살아 있어야 한다. */
-export function AssistantPanel({ workflowId }: { workflowId: string }) {
+export function AssistantPanel({ workflowId, onOpenChange }: { workflowId: string; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState(false);
   const [mode, setMode] = useState<AssistantMode>(lastMode);
@@ -39,6 +39,7 @@ export function AssistantPanel({ workflowId }: { workflowId: string }) {
         onClick={() => {
           setOpen(true);
           setOpened(true);
+          onOpenChange?.(true);
         }}
         aria-label={t("assistant.open")}
         title={t("assistant.open")}
@@ -76,7 +77,10 @@ export function AssistantPanel({ workflowId }: { workflowId: string }) {
             </div>
             <button
               type="button"
-              onClick={() => setOpen(false)}
+              onClick={() => {
+                setOpen(false);
+                onOpenChange?.(false);
+              }}
               aria-label={t("assistant.close")}
               title={t("assistant.close")}
               className="grid size-8 shrink-0 place-items-center rounded-[10px] text-neutral-500 transition-colors hover:bg-neutral-100"

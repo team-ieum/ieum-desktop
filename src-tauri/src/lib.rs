@@ -1,10 +1,12 @@
 pub mod account;
 pub mod active;
 pub mod builder_host;
+pub mod channel;
 pub mod commands;
 pub mod credentials;
 pub mod notify;
 pub mod permissions;
+pub mod pick;
 pub mod plan_usage;
 pub mod pricing;
 pub mod store;
@@ -204,7 +206,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(crate::sub_usage::agy_usage_cli),
         crate::plan_usage::CACHE_TTL,
     ));
-    app.manage(builder_host::no_pick());
+    app.manage(pick::system_pick(app.handle().clone()));
     tray::create(app)?;
     check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
@@ -292,6 +294,9 @@ pub fn run() {
             commands::pending_finish,
             commands::confirm_finish,
             // ── 캔버스 채팅 B(통로·동기화) — 여기 아래에 추가 ──
+            commands::set_editing,
+            commands::finish_notice,
+            commands::undo_failed_notice,
             // ── 캔버스 채팅 C(터미널 term_*) — 여기 아래에 추가 ──
             // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
         ])

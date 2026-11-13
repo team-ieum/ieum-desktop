@@ -2,10 +2,15 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import App from "./App";
-import { api } from "./api";
+import { api, type OpenTarget, type WorkflowEntry } from "./api";
 import { useWeb } from "./stores/web";
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.2.0") }));
+
+let finishPending: (p: { id: string; name: string }) => void;
+let undoFailed: (p: { id: string; runId: string }) => void;
+let openTarget: (t: OpenTarget) => void;
+const LOCAL_W1: WorkflowEntry = { id: "w1", name: "정리", enabled: false, updatedAt: "2026-11-13T00:00:00Z", watch: "off", watchMessage: null, workflow: { nodes: [], edges: [] } };
 
 const ACCOUNT = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" };
 
@@ -21,7 +26,12 @@ beforeAll(() => {
   };
   vi.spyOn(api, "getSettings").mockResolvedValue({ language: "ko", autostart: false, firstRunDone: true, serverUrl: "", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true });
   vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
-  vi.spyOn(api, "onOpenTarget").mockResolvedValue(() => {});
+  vi.spyOn(api, "onOpenTarget").mockImplementation(async (cb) => ((openTarget = cb), () => {}));
+  vi.spyOn(api, "onWorkflowChanged").mockResolvedValue(() => {});
+  vi.spyOn(api, "onFinishPending").mockImplementation(async (cb) => ((finishPending = cb), () => {}));
+  vi.spyOn(api, "onTestUndoFailed").mockImplementation(async (cb) => ((undoFailed = cb), () => {}));
+  vi.spyOn(api, "pendingFinish").mockResolvedValue(null);
+  vi.spyOn(api, "setEditing").mockResolvedValue();
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);
@@ -194,4 +204,41 @@ test("recent_web_item_opens_that_workflow", async () => {
   expect(get).toHaveBeenCalledWith(id);
   expect(screen.getByTestId("crumb").textContent).toBe("웹 이음");
   expect(screen.getByRole("heading", { name: "웹 흐름" })).toBeTruthy();
+});
+
+test("finish_pending_asks_rust_to_notify_and_notification_opens_editor", async () => {
+  const notice = vi.spyOn(api, "finishNotice").mockResolvedValue();
+  vi.mocked(api.listWorkflows).mockResolvedValue([LOCAL_W1]);
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => finishPending({ id: "w1", name: "정리" }));
+  expect(notice).toHaveBeenCalledWith("w1", false); // 대시보드에 있다
+  await act(async () => openTarget({ kind: "workflow", id: "w1" })); // 알림 클릭
+  expect((screen.getByLabelText("워크플로우 이름") as HTMLInputElement).value).toBe("정리");
+  await act(async () => finishPending({ id: "w1", name: "정리" }));
+  expect(notice).toHaveBeenLastCalledWith("w1", true); // 이제 그 편집 화면
+  vi.mocked(api.listWorkflows).mockResolvedValue([]);
+});
+
+test("pending_confirmation_marks_sidebar_even_after_restart", async () => {
+  vi.mocked(api.listWorkflows).mockResolvedValue([LOCAL_W1]);
+  vi.mocked(api.pendingFinish).mockResolvedValue({ hash: "h", folder: "/h/in", actions: [] });
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByText("확인 필요")).toBeTruthy(); // 처음 읽은 목록마다 한 번 묻는다
+  vi.mocked(api.listWorkflows).mockResolvedValue([]);
+  vi.mocked(api.pendingFinish).mockResolvedValue(null);
+});
+
+test("test_undo_failure_asks_rust_to_notify", async () => {
+  const notice = vi.spyOn(api, "undoFailedNotice").mockResolvedValue();
+  vi.mocked(api.listWorkflows).mockResolvedValue([LOCAL_W1]);
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => undoFailed({ id: "w1", runId: "r1" }));
+  expect(notice).toHaveBeenCalledWith("w1", false); // 대시보드에 있다 → Rust가 알림을 보낸다
+  vi.mocked(api.listWorkflows).mockResolvedValue([]);
 });
