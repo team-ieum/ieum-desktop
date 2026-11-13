@@ -83,6 +83,10 @@ test("dashboard_usage_shows_subscription_windows", async () => {
   const onUsage = vi.fn();
   await mountCard(onUsage);
   expect(screen.getByText("API 사용량")).toBeTruthy();
+  // API 칸과 구독 칸은 같은 행에 나란히
+  const row = screen.getByRole("region", { name: "API 사용량" }).parentElement!;
+  expect(row.dataset.layout).toBe("split");
+  expect(screen.getByRole("region", { name: "구독 사용량" }).parentElement).toBe(row);
   const subs = within(screen.getByRole("region", { name: "구독 사용량" }));
   const claude = within(subs.getByRole("group", { name: "Claude" }));
   expect(claude.getByText("me@claude.dev")).toBeTruthy();
