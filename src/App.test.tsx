@@ -221,6 +221,27 @@ test("finish_pending_asks_rust_to_notify_and_notification_opens_editor", async (
   vi.mocked(api.listWorkflows).mockResolvedValue([]);
 });
 
+test("workflow_first_saved_from_new_canvas_counts_as_on_screen", async () => {
+  const notice = vi.spyOn(api, "finishNotice").mockResolvedValue();
+  vi.spyOn(api, "saveWorkflow").mockImplementation(async (wf) => ({ ...wf, id: "w9", updatedAt: "v1" }));
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /새 캔버스/ })));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "IEUM Assistant 열기" }))); // 선저장 → w9
+  const panel = document.querySelector('aside[aria-label="IEUM Assistant"]');
+  expect(panel).toBeTruthy();
+  await act(async () => finishPending({ id: "w9", name: "새 워크플로우" }));
+  expect(notice).toHaveBeenLastCalledWith("w9", true); // 카드가 이 화면에 떠 있다
+  // 알림을 눌러도 이미 그 편집 화면 — 다시 마운트하지 않는다(터미널 세션 자리가 그대로).
+  await act(async () => openTarget({ kind: "workflow", id: "w9" }));
+  expect(document.querySelector('aside[aria-label="IEUM Assistant"]')).toBe(panel);
+  // 편집기를 떠나면 더는 그 화면이 아니다.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "실행 기록" })));
+  await act(async () => finishPending({ id: "w9", name: "새 워크플로우" }));
+  expect(notice).toHaveBeenLastCalledWith("w9", false);
+});
+
 test("pending_confirmation_marks_sidebar_even_after_restart", async () => {
   vi.mocked(api.listWorkflows).mockResolvedValue([LOCAL_W1]);
   vi.mocked(api.pendingFinish).mockResolvedValue({ hash: "h", folder: "/h/in", actions: [] });

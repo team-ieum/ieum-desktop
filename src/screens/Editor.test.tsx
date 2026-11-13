@@ -196,6 +196,43 @@ test("rejected_autosave_waits_for_the_next_edit", async () => {
   expect(saveSpy).toHaveBeenCalledTimes(2);
 });
 
+test("rejected_autosave_edit_still_asks_before_leaving", async () => {
+  vi.useFakeTimers();
+  vi.spyOn(api, "saveWorkflow").mockRejectedValue("거부");
+  const onDirty = vi.fn();
+  useWorkflows.setState({ list: [entry([N("a", 0)], "v1")] });
+  await act(async () => render(<Editor id="w1" onBack={() => {}} onOpenRuns={() => {}} onDirty={onDirty} />));
+  await openAssistant();
+  await rename("하나");
+  expect(onDirty).toHaveBeenLastCalledWith(false); // 곧 자동 저장된다 — 묻지 않는다
+  await tick(AUTOSAVE_MS);
+  expect(screen.getByText("거부")).toBeTruthy();
+  expect(onDirty).toHaveBeenLastCalledWith(true); // 저장되지 못한 편집 — 떠날 때 묻는다
+  await rename("둘"); // 다시 고치면 자동 저장이 다시 맡는다
+  expect(onDirty).toHaveBeenLastCalledWith(false);
+});
+
+test("edits_on_new_workflow_whose_first_save_failed_ask_before_leaving", async () => {
+  vi.spyOn(api, "saveWorkflow").mockRejectedValue("저장 실패");
+  const onDirty = vi.fn();
+  await act(async () => render(<Editor id={null} onBack={() => {}} onOpenRuns={() => {}} onDirty={onDirty} />));
+  await openAssistant(); // 선저장 실패 → id가 없어 자동 저장이 돌지 않는다
+  await rename("고침");
+  expect(onDirty).toHaveBeenLastCalledWith(true);
+});
+
+test("editor_reports_the_id_it_shows", async () => {
+  vi.spyOn(api, "saveWorkflow").mockImplementation(async (wf) => ({ ...wf, id: "w9", updatedAt: "v1" }));
+  vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
+  const onIdChange = vi.fn();
+  const r = await act(async () => render(<Editor id={null} onBack={() => {}} onOpenRuns={() => {}} onIdChange={onIdChange} />));
+  expect(onIdChange).toHaveBeenLastCalledWith("");
+  await openAssistant(); // 선저장으로 id가 생긴다
+  expect(onIdChange).toHaveBeenLastCalledWith("w9");
+  r.unmount();
+  expect(onIdChange).toHaveBeenLastCalledWith(""); // 떠나면 비운다
+});
+
 test("remote_change_replaces_canvas_and_clears_deleted_selection", async () => {
   vi.useFakeTimers();
   const saveSpy = vi.spyOn(api, "saveWorkflow").mockImplementation(async (wf) => ({ ...wf, updatedAt: "v3" }));

@@ -1,5 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type WebWorkflowSummary } from "./api";
 import { AuthScreen } from "./auth/AuthScreen";
 import { t } from "./i18n";
@@ -67,11 +67,13 @@ export default function App() {
 
   // 빌더가 보내는 일: 완료 확인 대기·워크플로우 변경·테스트 되돌리기 실패.
   // 시스템 알림은 화면이 묻고 Rust가 정한다 — 어느 화면인지는 여기만 알고, 창이 앞인지는 Rust만 믿을 수 있다.
-  const viewNow = useRef(view);
-  viewNow.current = view;
+  // 편집기가 지금 보여 주는 워크플로우 id("" = 편집기가 없거나 아직 저장 전). 새 캔버스는 view.editor가 null인 채
+  // 선저장으로 id가 생기므로 view로는 알 수 없다.
+  const editorId = useRef("");
+  const onEditorId = useCallback((id: string) => void (editorId.current = id), []);
   useEffect(() => {
     if (gated) return;
-    const onScreen = (id: string) => "editor" in viewNow.current && viewNow.current.editor === id;
+    const onScreen = (id: string) => editorId.current === id;
     const subs = [
       api.onFinishPending((p) => {
         void refreshPending(p.id);
@@ -103,6 +105,8 @@ export default function App() {
   // 시스템 알림 클릭 → 그 실행 상세(대시보드와 같은 기록 화면)·실행 기록·그 워크플로우의 편집 화면.
   useEffect(() => {
     const un = api.onOpenTarget((t) => {
+      // 이미 그 편집 화면이면 그대로 둔다 — 다시 마운트하면 터미널 세션 자리가 사라진다.
+      if (t.kind === "workflow" && editorId.current === t.id) return;
       const go = () =>
         setView(t.kind === "workflow" ? { page: "local", editor: t.id } : t.kind === "run" ? { page: "history", run: t.runId } : { page: "history" });
       if (dirty && askDiscard) setPending(() => go);
@@ -253,6 +257,7 @@ export default function App() {
                   onBack={() => leave(toList)}
                   onOpenRuns={(id) => leave(() => openRuns(id))}
                   onDirty={setDirty}
+                  onIdChange={onEditorId}
                 />
               ) : "run" in view ? (
                 <RunView workflowId={view.run} onBack={toList} onEdit={openEditor} />

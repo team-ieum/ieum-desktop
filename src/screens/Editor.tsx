@@ -141,12 +141,15 @@ export function Editor({
   onBack,
   onOpenRuns,
   onDirty,
+  onIdChange,
 }: {
   id: string | null;
   onBack: () => void;
   onOpenRuns: (id: string) => void;
   /** 저장본과 다른지 — 화면을 떠날 때 확인 줄을 띄우는 데 쓴다. */
   onDirty?: (dirty: boolean) => void;
+  /** 지금 보여 주는 워크플로우 id — 새 캔버스는 선저장 뒤에 생긴다. 아직 없거나 편집기를 떠나면 "". */
+  onIdChange?: (id: string) => void;
 }) {
   const entry = useWorkflows((s) => s.list.find((w) => w.id === id));
   const save = useWorkflows((s) => s.save);
@@ -165,11 +168,17 @@ export function Editor({
   const edited = dirty && draft !== placed.current;
   const now = useRef({ draft, base, dirty, edited, assist });
   now.current = { draft, base, dirty, edited, assist };
-  // 자동 저장 중엔 떠날 때 "버릴까요"를 묻지 않는다.
+  // 자동 저장이 맡은 편집은 떠날 때 "버릴까요"를 묻지 않는다. 자동 저장이 맡지 못하는 편집
+  // (저장이 거부된 내용 그대로이거나, 선저장이 실패해 id가 없는 새 워크플로우)은 묻는다 — 조용히 사라지면 안 된다.
+  const askOnLeave = dirty && (!assist || !draft.id || draft === rejected.current);
   useEffect(() => {
-    onDirty?.(dirty && !assist);
+    onDirty?.(askOnLeave);
     return () => onDirty?.(false);
-  }, [dirty, assist, onDirty]);
+  }, [askOnLeave, onDirty]);
+  useEffect(() => {
+    onIdChange?.(draft.id);
+    return () => onIdChange?.("");
+  }, [draft.id, onIdChange]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [techInfo, setTechInfo] = useState(false);
   const [errors, setErrors] = useState<ValidationError[]>([]);
