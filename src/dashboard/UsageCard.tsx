@@ -9,7 +9,7 @@ import { useCredentials } from "../stores/credentials";
 import { useDefaultPlans } from "../stores/plans";
 import { useWorkflows } from "../stores/workflows";
 import { formatTokens, formatUsd } from "../usage/format";
-import { hot, usedOf, WindowMeter } from "../usage/parts";
+import { Dropdown, hot, usedOf, WindowMeter } from "../usage/parts";
 
 const RANGES: UsageRange[] = ["today", "week", "month"];
 const tokens = (x: { input: number; output: number }) => x.input + x.output;
@@ -155,29 +155,20 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
           )}
         </section>
         <section aria-label={t("usage.subSection")} className="px-5 pt-3 pb-4">
-          <div className="mb-4 flex h-8 items-center justify-between gap-3">
-            <h4 className="typo-caption1_semibold tracking-[.04em] text-main-gray">{t("usage.subSection")}</h4>
-            {subs.length > 1 && (
-              <div role="tablist" aria-label={t("usage.subSection")} className="inline-flex min-w-0 rounded-lg border border-neutral-200 bg-neutral-100 p-0.5">
-                {subs.map(({ sub: s, w }) => {
-                  const on = s.id === current?.sub.id;
-                  const pct = usedOf(w);
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={on}
-                      className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 typo-caption1_semibold ${on ? "bg-main-deep-blue text-white" : "text-neutral-600"}`}
-                      onClick={() => pick(s.id)}
-                    >
-                      <ProviderLogo id={s.logo} size={14} />
-                      {s.name}
-                      <span className={`tabular-nums typo-caption2_regular ${on ? (hot(pct) ? "text-danger-700 rounded bg-white px-1" : "text-white/70") : hot(pct) || "text-neutral-400"}`}>{pct}%</span>
-                    </button>
-                  );
-                })}
-              </div>
+          <div className="mb-3 flex h-8 items-center justify-between gap-3">
+            <h4 className="shrink-0 whitespace-nowrap typo-caption1_semibold tracking-[.04em] text-main-gray">{t("usage.subSection")}</h4>
+            {subs.length > 1 && current && (
+              <Dropdown
+                label={t("usage.subSection")}
+                sel={current.sub.id}
+                onSel={pick}
+                items={subs.map(({ sub: s, w }) => ({
+                  id: s.id,
+                  name: s.name,
+                  icon: <ProviderLogo id={s.logo} size={16} />,
+                  note: <span className={`tabular-nums ${hot(usedOf(w)) || "text-neutral-500"}`}>{usedOf(w)}%</span>,
+                }))}
+              />
             )}
           </div>
           {current ? (

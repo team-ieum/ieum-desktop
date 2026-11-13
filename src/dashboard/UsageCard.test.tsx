@@ -69,13 +69,13 @@ const OK: PlanUsage = {
 const OUT: PlanUsage = { state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null };
 
 /** 기본: Claude 기본 계정만 연결, Codex 없음, Antigravity 로그인 전. `codex`를 주면 Codex 기본 계정도 연결. */
-const mockSubs = (claude: PlanUsage = OK, codex?: PlanUsage) => {
+const mockSubs = (claude: PlanUsage = OK, codex?: PlanUsage, agyPlan: PlanUsage = OUT) => {
   const view = codex ? { ...VIEW, codexAccounts: [{ ...SYS, email: "me@openai.dev" }] } : VIEW;
   useCredentials.setState({ view });
   vi.spyOn(api, "listCredentials").mockResolvedValue(view);
   vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
   const sub = vi.spyOn(api, "subscriptionUsage").mockImplementation(async (k) => (k === "claude" ? claude : (codex ?? OUT)));
-  const agy = vi.spyOn(api, "antigravityPlanUsage").mockResolvedValue(OUT);
+  const agy = vi.spyOn(api, "antigravityPlanUsage").mockResolvedValue(agyPlan);
   return { sub, agy };
 };
 const mountCard = async (onUsage = () => {}, onAccounts = () => {}) => {
@@ -139,40 +139,71 @@ test("subscription_usage_fetched_once_for_bar_and_dashboard", async () => {
 });
 
 const plan = (pct: number): PlanUsage => ({ ...OK, windows: [{ kind: "session", usedPct: pct, resetsAt: inHours(4) }], accountEmail: "me@openai.dev" });
-const subTabs = () => within(screen.getByRole("tablist", { name: "구독 사용량" }));
+const subRegion = () => within(screen.getByRole("region", { name: "구독 사용량" }));
+const picker = () => subRegion().getByRole("button", { name: /^구독 사용량:/ });
+const openPicker = async () => {
+  await act(async () => fireEvent.click(picker()));
+  return within(screen.getByRole("listbox", { name: "구독 사용량" }));
+};
 
-test("dashboard_subscription_tabs_show_one_at_a_time", async () => {
+test("dashboard_subscription_dropdown_shows_one_at_a_time", async () => {
   mockSubs(OK, plan(40));
   await mountCard();
-  const subs = within(screen.getByRole("region", { name: "구독 사용량" }));
   // Claude(91%)가 기본, 카드는 하나만
-  expect(subs.getByRole("group", { name: "Claude" })).toBeTruthy();
-  expect(subs.queryByRole("group", { name: "Codex" })).toBeNull();
-  await act(async () => fireEvent.click(subTabs().getByRole("tab", { name: /Codex/ })));
-  expect(subs.getByRole("group", { name: "Codex" })).toBeTruthy();
-  expect(subs.queryByRole("group", { name: "Claude" })).toBeNull();
-  // 고른 탭은 다시 열어도 그대로
+  expect(picker().getAttribute("aria-label")).toBe("구독 사용량: Claude");
+  expect(subRegion().getByRole("group", { name: "Claude" })).toBeTruthy();
+  expect(subRegion().queryByRole("group", { name: "Codex" })).toBeNull();
+  const menu = await openPicker();
+  await act(async () => fireEvent.click(menu.getByRole("option", { name: /Codex/ })));
+  // 고르면 닫히고 그 카드만
+  expect(screen.queryByRole("listbox", { name: "구독 사용량" })).toBeNull();
+  expect(subRegion().getByRole("group", { name: "Codex" })).toBeTruthy();
+  expect(subRegion().queryByRole("group", { name: "Claude" })).toBeNull();
+  // 고른 구독은 다시 열어도 그대로
   cleanup();
   await mountCard();
-  expect(subTabs().getByRole("tab", { name: /Codex/ }).getAttribute("aria-selected")).toBe("true");
+  expect(picker().getAttribute("aria-label")).toBe("구독 사용량: Codex");
 });
 
-test("default_tab_is_tightest_window", async () => {
+test("default_pick_is_tightest_window", async () => {
   mockSubs(OK, plan(95));
   await mountCard();
-  const codex = subTabs().getByRole("tab", { name: /Codex/ });
-  expect(codex.getAttribute("aria-selected")).toBe("true");
-  expect(subTabs().getByRole("tab", { name: /Claude/ }).getAttribute("aria-selected")).toBe("false");
-  // 탭에도 최대 %, 80% 넘으면 빨강
-  expect(within(codex).getByText("95%").className).toContain("text-danger-700");
-  expect(within(screen.getByRole("region", { name: "구독 사용량" })).getByRole("group", { name: "Codex" })).toBeTruthy();
+  // 버튼에도 최대 %, 80% 넘으면 빨강
+  expect(picker().getAttribute("aria-label")).toBe("구독 사용량: Codex");
+  expect(within(picker()).getByText("95%").className).toContain("text-danger-700");
+  expect(subRegion().getByRole("group", { name: "Codex" })).toBeTruthy();
+  const menu = await openPicker();
+  expect(menu.getByRole("option", { name: /Codex/ }).getAttribute("aria-selected")).toBe("true");
+  expect(menu.getByRole("option", { name: /Claude/ }).getAttribute("aria-selected")).toBe("false");
 });
 
-test("single_subscription_has_no_tabs", async () => {
+test("subscription_dropdown_three_and_keyboard", async () => {
+  mockSubs(OK, plan(40), { ...plan(10), accountEmail: "me@gmail.com" });
+  await mountCard();
+  expect(subRegion().getByRole("heading", { name: "구독 사용량" }).className).toContain("whitespace-nowrap");
+  const menu = await openPicker();
+  expect(menu.getAllByRole("option").map((o) => o.textContent)).toEqual(["Claude91%", "Codex40%", expect.stringMatching(/Antigravity10%$/)]);
+  // 열리면 고른 것(Claude)에 포커스, ↓ 두 번 + Enter로 Antigravity
+  const list = screen.getByRole("listbox", { name: "구독 사용량" });
+  expect(document.activeElement).toBe(menu.getByRole("option", { name: /Claude/ }));
+  await act(async () => fireEvent.keyDown(list, { key: "ArrowDown" }));
+  await act(async () => fireEvent.keyDown(list, { key: "ArrowDown" }));
+  await act(async () => fireEvent.keyDown(document.activeElement!, { key: "Enter" }));
+  expect(subRegion().getByRole("group", { name: "Antigravity" })).toBeTruthy();
+  // Esc·바깥 클릭으로 닫힘
+  await openPicker();
+  await act(async () => fireEvent.keyDown(screen.getByRole("listbox", { name: "구독 사용량" }), { key: "Escape" }));
+  expect(screen.queryByRole("listbox", { name: "구독 사용량" })).toBeNull();
+  await openPicker();
+  await act(async () => fireEvent.mouseDown(document.body));
+  expect(screen.queryByRole("listbox", { name: "구독 사용량" })).toBeNull();
+});
+
+test("single_subscription_has_no_dropdown", async () => {
   mockSubs();
   await mountCard();
-  expect(screen.queryByRole("tablist", { name: "구독 사용량" })).toBeNull();
-  expect(within(screen.getByRole("region", { name: "구독 사용량" })).getByRole("group", { name: "Claude" })).toBeTruthy();
+  expect(subRegion().queryByRole("button", { name: /^구독 사용량:/ })).toBeNull();
+  expect(subRegion().getByRole("group", { name: "Claude" })).toBeTruthy();
 });
 
 test("usage_card_empty_when_unavailable", async () => {

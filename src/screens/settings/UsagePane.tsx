@@ -1,11 +1,11 @@
-import { Bot, Check, ChevronDown, Clock, LayoutGrid, Play, RefreshCw, type LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Bot, Check, Clock, LayoutGrid, Play, RefreshCw, type LucideIcon } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, type CredentialsView, type PlanUsage, type ProviderReport, type TokenParts, type UsageProvider, type UsageReport } from "../../api";
 import { ProviderLogo } from "../../assets/providers";
 import { formatRelative } from "../../dashboard/format";
 import { locale, t, type Key } from "../../i18n";
 import { formatCount, formatHm, formatShare, formatUsd } from "../../usage/format";
-import { credName, WindowMeter } from "../../usage/parts";
+import { credName, Dropdown, WindowMeter, type DropItem } from "../../usage/parts";
 import { accountsOf, BOXES, credLabel, planKey, type Plans } from "./AiPane";
 
 const CARD = "rounded-brand-md border border-[#cde9f4] bg-white p-4";
@@ -57,66 +57,11 @@ function Tile({ icon: Icon, label, value, note }: { icon?: LucideIcon; label: st
 
 /** 오른쪽 위 드롭다운 — 개요 / Claude / OpenAI / Google. */
 function Picker({ sel, onSel }: { sel: Sel; onSel: (s: Sel) => void }) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => !root.current?.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [open]);
-  const items: { id: Sel; name: string; icon: ReactNode }[] = [
+  const items: DropItem<Sel>[] = [
     { id: "overview", name: t("usage.overview"), icon: <LayoutGrid className="size-4 text-main-deep-blue" aria-hidden="true" /> },
     ...BOXES.map((b) => ({ id: b.id, name: b.name, icon: <ProviderLogo id={b.logo} size={18} /> })),
   ];
-  const cur = items.find((i) => i.id === sel)!;
-  return (
-    <div ref={root} className="relative">
-      <button
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#cde9f4] bg-white px-2.5 typo-caption1_semibold text-neutral-700 hover:bg-main-light-blue/50"
-      >
-        {cur.icon}
-        {cur.name}
-        <ChevronDown className="size-3.5 text-neutral-400" aria-hidden="true" />
-      </button>
-      {open && (
-        <ul
-          role="listbox"
-          aria-label={t("usage.analysis")}
-          onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
-          className="absolute right-0 z-20 mt-1 w-44 rounded-lg border border-[#cde9f4] bg-white p-1 shadow-[0_12px_32px_-12px_rgba(41,83,124,.35)]"
-        >
-          {items.map((i) => (
-            <li
-              key={i.id}
-              role="option"
-              aria-selected={i.id === sel}
-              tabIndex={0}
-              onClick={() => {
-                onSel(i.id);
-                setOpen(false);
-              }}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter" && e.key !== " ") return;
-                e.preventDefault();
-                onSel(i.id);
-                setOpen(false);
-              }}
-              className="flex h-8 cursor-pointer items-center gap-2 rounded-md px-2 typo-caption1_semibold text-neutral-700 outline-none hover:bg-main-light-blue focus:bg-main-light-blue"
-            >
-              {i.icon}
-              <span className="flex-1">{i.name}</span>
-              {i.id === sel && <Check className="size-3.5 text-main-blue" aria-hidden="true" />}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
+  return <Dropdown label={t("usage.analysis")} items={items} sel={sel} onSel={onSel} />;
 }
 
 /** 머리 — 제목·"N분 전 업데이트됨"·새로 고침. */
