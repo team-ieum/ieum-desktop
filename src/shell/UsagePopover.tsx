@@ -1,5 +1,5 @@
 import { Check, ChevronRight, KeyRound, RefreshCw } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent, type Ref } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type Ref } from "react";
 import { api, type CredentialsView, type PlanUsage, type UsageSummary } from "../api";
 import { ProviderLogo } from "../assets/providers";
 import { formatRelative } from "../dashboard/format";
@@ -40,7 +40,7 @@ const LINK = "flex h-8 w-full items-center justify-between rounded-lg px-2 typo-
 type Pick = { kind: "claude" | "codex"; fromName: string; to: { id: string; name: string; usedPct: number | null } };
 
 /** 두 번째 패널 — 기본 계정의 창별 막대, 그 회사 계정 목록(체크 = 기본, 다른 계정을 누르면 바꾸기 확인), 계정 관리. */
-function Flyout({ s, plan, view, plans, manage, onSettings, onPick, onEnter }: { s: Sub; plan: PlanUsage; view: CredentialsView | null | undefined; plans: Plans; manage: Ref<HTMLButtonElement>; onSettings: () => void; onPick: (p: Pick) => void; onEnter: () => void }) {
+function Flyout({ s, plan, view, plans, manage, onSettings, onPick, onEnter }: { s: Sub; plan: PlanUsage; view: CredentialsView | null | undefined; plans: Plans; manage: Ref<HTMLButtonElement>; onSettings: () => void; onPick: (p: Pick, from: HTMLButtonElement) => void; onEnter: () => void }) {
   const now = new Date();
   const list = accounts(s, view, plans);
   const listName = t("usage.accountsOf").replace("{name}", s.name);
@@ -62,7 +62,7 @@ function Flyout({ s, plan, view, plans, manage, onSettings, onPick, onEnter }: {
         {list.map((a) => {
           const w = tightest(a.plan);
           const pct = w ? usedOf(w) : null;
-          const pick = a.isDefault || s.id === "antigravity" ? undefined : () => onPick({ kind: s.id as Pick["kind"], fromName, to: { id: a.key, name: a.name, usedPct: pct } });
+          const pick = a.isDefault || s.id === "antigravity" ? undefined : (e: MouseEvent<HTMLButtonElement>) => onPick({ kind: s.id as Pick["kind"], fromName, to: { id: a.key, name: a.name, usedPct: pct } }, e.currentTarget);
           return (
             <li key={a.key} aria-label={a.name}>
               <button
@@ -97,6 +97,7 @@ export function UsagePopover({ onUsage, onSettings }: { onUsage: () => void; onS
   const [month, setMonth] = useState<UsageSummary | null | undefined>(undefined);
   const [fly, setFly] = useState<SubId | null>(null);
   const [pick, setPick] = useState<Pick | null>(null);
+  const pickFrom = useRef<HTMLButtonElement | null>(null);
   const [switched, setSwitched] = useState(0);
   // 바꾼 뒤 새 기본 계정 기준으로 사용량을 새로 읽는다(자격 목록이 바뀐 다음 렌더에서).
   useEffect(() => {
@@ -138,6 +139,7 @@ export function UsagePopover({ onUsage, onSettings }: { onUsage: () => void; onS
       list[next]?.focus();
     } else if (e.key === "ArrowRight" && i >= 0) {
       e.preventDefault();
+      stopHover();
       flyByKey.current = true;
       setFly(subs[i].sub.id);
     } else if (e.key === "ArrowLeft" && fly) {
@@ -207,11 +209,27 @@ export function UsagePopover({ onUsage, onSettings }: { onUsage: () => void; onS
           <ChevronRight className="size-3.5" aria-hidden="true" />
         </button>
       </div>
-      {open && <Flyout s={open.sub} plan={open.plan} view={view} plans={plans} manage={manage} onSettings={onSettings} onPick={setPick} onEnter={stopHover} />}
+      {open && (
+        <Flyout
+          s={open.sub}
+          plan={open.plan}
+          view={view}
+          plans={plans}
+          manage={manage}
+          onSettings={onSettings}
+          onPick={(p, from) => {
+            pickFrom.current = from;
+            setPick(p);
+          }}
+          onEnter={stopHover}
+        />
+      )}
       {pick && (
         <SwitchAccountDialog
           {...pick}
           onClose={(ok) => {
+            // 창을 연 계정 버튼으로 포커스를 돌린다(기본이 돼 aria-disabled여도 포커스는 받는다).
+            pickFrom.current?.focus();
             setPick(null);
             if (ok) setSwitched((n) => n + 1);
           }}

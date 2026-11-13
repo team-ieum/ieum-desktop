@@ -23,6 +23,10 @@ export function SwitchAccountDialog({
   const title = t("usage.switch.title").replace("{company}", NAME[kind]);
   const line =
     `${fromName} → ${to.name}` + (to.usedPct === null ? "" : ` (${t("usage.used").replace("{pct}", String(to.usedPct))})`);
+  // 바꾸는 중에는 닫지 않는다(결과가 오면 닫히거나 오류가 남는다).
+  const cancel = () => {
+    if (!busy) onClose(false);
+  };
   const go = async () => {
     setBusy(true);
     setErr(false);
@@ -36,7 +40,7 @@ export function SwitchAccountDialog({
     }
   };
   return (
-    <div className="fixed inset-0 z-[60] grid place-items-center bg-neutral-900/20" onMouseDown={() => onClose(false)}>
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-neutral-900/20" onMouseDown={cancel}>
       <div
         role="dialog"
         aria-modal="true"
@@ -46,7 +50,7 @@ export function SwitchAccountDialog({
         onKeyDown={(e) => {
           // 팝오버(화살표)·상태 줄(Esc 닫기)로 새지 않게.
           e.stopPropagation();
-          if (e.key === "Escape") onClose(false);
+          if (e.key === "Escape") cancel();
         }}
       >
         <div className="typo-body3_semibold text-main-deep-blue">{title}</div>
@@ -58,7 +62,7 @@ export function SwitchAccountDialog({
           </p>
         )}
         <div className="mt-4 flex justify-end gap-2">
-          <button type="button" className={`${BTN} text-neutral-600 hover:bg-neutral-100`} onClick={() => onClose(false)}>
+          <button type="button" className={`${BTN} text-neutral-600 hover:bg-neutral-100`} onClick={cancel}>
             {t("common.cancel")}
           </button>
           <button autoFocus type="button" disabled={busy} className={`${BTN} bg-main-blue text-white hover:bg-main-deep-blue disabled:opacity-50`} onClick={go}>

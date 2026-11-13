@@ -101,3 +101,48 @@ test("hover_switch_waits_150ms", async () => {
   await act(async () => vi.advanceTimersByTime(1));
   expect(screen.getByRole("region", { name: "Codex" })).toBeTruthy();
 });
+
+test("confirm_close_returns_focus_to_account", async () => {
+  await mount();
+  vi.spyOn(api, "setDefaultCredential").mockResolvedValue();
+  await hoverRow(/^Claude/);
+  const fly = within(screen.getByRole("region", { name: "Claude" }));
+  const work = fly.getByRole("button", { name: /회사/ });
+  const dlg = () => within(screen.getByRole("dialog", { name: /바꿀까요/ }));
+  // 취소
+  await act(async () => fireEvent.click(work));
+  await act(async () => fireEvent.click(dlg().getByRole("button", { name: "취소" })));
+  expect(document.activeElement).toBe(work);
+  // Esc
+  await act(async () => fireEvent.click(work));
+  await act(async () => fireEvent.keyDown(dlg().getByRole("button", { name: "취소" }), { key: "Escape" }));
+  expect(confirm()).toBeNull();
+  expect(document.activeElement).toBe(work);
+  // 바꾸기 — 그 줄이 기본(aria-disabled)이 돼도 포커스는 받는다.
+  vi.spyOn(api, "listCredentials").mockResolvedValue({ ...VIEW, claudeAccounts: [{ ...SYS, isDefault: false }, { ...WORK, isDefault: true }] });
+  await act(async () => fireEvent.click(work));
+  await act(async () => fireEvent.click(dlg().getByRole("button", { name: "바꾸기" })));
+  expect(confirm()).toBeNull();
+  const now = within(screen.getByRole("region", { name: "Claude" })).getByRole("button", { name: /회사/ });
+  expect(now.getAttribute("aria-disabled")).toBe("true");
+  expect(document.activeElement).toBe(now);
+});
+
+test("switch_failure_keeps_dialog_and_busy_blocks_close", async () => {
+  await mount();
+  let fail!: (e: unknown) => void;
+  vi.spyOn(api, "setDefaultCredential").mockReturnValue(new Promise<void>((_, rej) => (fail = rej)));
+  await hoverRow(/^Claude/);
+  await act(async () => fireEvent.click(within(screen.getByRole("region", { name: "Claude" })).getByRole("button", { name: /회사/ })));
+  const dlg = within(screen.getByRole("dialog", { name: /바꿀까요/ }));
+  await act(async () => fireEvent.click(dlg.getByRole("button", { name: "바꾸기" })));
+  // 바꾸는 중에는 Esc·취소·배경 클릭으로 닫히지 않는다.
+  await act(async () => fireEvent.keyDown(dlg.getByRole("button", { name: "취소" }), { key: "Escape" }));
+  await act(async () => fireEvent.click(dlg.getByRole("button", { name: "취소" })));
+  await act(async () => fireEvent.mouseDown(screen.getByRole("dialog", { name: /바꿀까요/ }).parentElement!));
+  expect(confirm()).toBeTruthy();
+  // 실패하면 창은 남고 오류 문구.
+  await act(async () => fail("keychain"));
+  expect(confirm()).toBeTruthy();
+  expect(dlg.getByRole("alert").textContent).toBe("문제가 생겼어요");
+});
