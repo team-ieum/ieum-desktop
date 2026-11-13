@@ -431,6 +431,12 @@ const ko = {
   "editor.group.ai": "AI",
   "editor.group.flow": "흐름",
   "editor.localHint": "내 PC 노드는 이 PC에서 실행돼요",
+
+  "assistant.open": "IEUM Assistant 열기",
+  "assistant.close": "IEUM Assistant 닫기",
+  "assistant.tab.terminal": "터미널",
+  "assistant.tab.chat": "채팅",
+
   "canvas.true": "참",
   "canvas.otherwise": "그 외",
 
@@ -1033,6 +1039,12 @@ const en: Record<Key, string> = {
   "editor.group.ai": "AI",
   "editor.group.flow": "Flow",
   "editor.localHint": "Local nodes run on this PC",
+
+  "assistant.open": "Open IEUM Assistant",
+  "assistant.close": "Close IEUM Assistant",
+  "assistant.tab.terminal": "Terminal",
+  "assistant.tab.chat": "Chat",
+
   "canvas.true": "True",
   "canvas.otherwise": "Otherwise",
 

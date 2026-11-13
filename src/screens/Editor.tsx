@@ -2,6 +2,7 @@ import { Play, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type StoredWorkflow, type ValidationError, type WfNode, type WorkflowEntry } from "../api";
 import { Canvas, LocalBadge, nodeTitle, StatusIcon } from "../editor/Canvas";
+import { AssistantPanel } from "../editor/chat/AssistantPanel";
 import { ConfigPanel } from "../editor/ConfigPanel";
 import { Palette } from "../editor/Palette";
 import { Toolbar } from "../editor/Toolbar";
@@ -252,6 +253,7 @@ export function Editor({
           />
         </div>
         <PaletteButton onAdd={add} />
+        <AssistantPanel workflowId={draft.id} />
         {selected && (
           <SidePanel
             label={selected.label || nodeTitle(selected.event)}

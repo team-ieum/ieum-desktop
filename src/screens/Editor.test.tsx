@@ -102,3 +102,8 @@ test("tech_info_toggle_shows_event_ids", async () => {
   await act(async () => fireEvent.click(sw));
   expect(screen.queryByText(PALETTE[0])).toBeNull();
 });
+
+test("editor_shows_assistant_button", async () => {
+  await open();
+  expect(screen.getByRole("button", { name: "IEUM Assistant 열기" })).toBeTruthy();
+});

@@ -357,6 +357,31 @@ export interface PlanUsage {
   accountEmail: string | null;
 }
 
+// ── 캔버스 채팅(ieum-local builder) ──
+export interface BuilderReply {
+  ok: boolean;
+  code?: string;
+  message?: string;
+  data?: unknown;
+}
+
+export interface PendingFinish {
+  hash: string;
+  folder: string;
+  actions: { nodeId: string; event: string; label: string; target: string | null }[];
+}
+
+export interface ChatFile {
+  messages: { role: "user" | "assistant"; text: string; at: string }[];
+  state: {
+    outline: string[];
+    baseline: Record<string, string> | null;
+    tests: Record<string, { hash: string; status: "success" | "failed" | "skipped" }>;
+    pendingFinish: PendingFinish | null;
+  };
+  usage: { at: string; usage: unknown }[];
+}
+
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
   saveWorkflow: (wf: StoredWorkflow) => invoke<StoredWorkflow>("save_workflow", { wf }),
@@ -436,4 +461,16 @@ export const api = {
   /** 이 Mac의 CLI 로그인(`system`)을 IEUM에서 숨기기·되살리기 — CLI 로그아웃은 하지 않는다. */
   setSystemHidden: (kind: SubKind, hidden: boolean) => invoke<void>("set_system_hidden", { kind, hidden }),
   antigravityPlanUsage: () => invoke<PlanUsage>("antigravity_plan_usage"),
+  // ── 캔버스 채팅 ──
+  getChat: (workflowId: string) => invoke<ChatFile>("get_chat", { workflowId }),
+  pendingFinish: (workflowId: string) => invoke<PendingFinish | null>("pending_finish", { workflowId }),
+  /** 확인 카드의 [켜기]/[아직] — 워크플로우를 켜는 유일한 길. */
+  confirmFinish: (workflowId: string, accept: boolean) =>
+    invoke<BuilderReply>("confirm_finish", { workflowId, accept }),
+  onWorkflowChanged: (cb: (p: { id: string; updatedAt: string }) => void): Promise<UnlistenFn> =>
+    listen<{ id: string; updatedAt: string }>("workflow-changed", (e) => cb(e.payload)),
+  onFinishPending: (cb: (p: { id: string; name: string }) => void): Promise<UnlistenFn> =>
+    listen<{ id: string; name: string }>("finish-pending", (e) => cb(e.payload)),
+  onTestUndoFailed: (cb: (p: { id: string; runId: string }) => void): Promise<UnlistenFn> =>
+    listen<{ id: string; runId: string }>("test-undo-failed", (e) => cb(e.payload)),
 };
