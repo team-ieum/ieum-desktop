@@ -261,6 +261,25 @@ test("disconnect_added_account_deletes_after_confirm", async () => {
   expect(del).toHaveBeenCalledWith("claude", "abcd1234");
 });
 
+test("next_and_remove_disabled_while_pending", async () => {
+  // 응답 전 연타 — 보이지 않는 대기 폴더·두 번째 삭제가 생기지 않는다.
+  const begin = vi.spyOn(api, "beginCliAccount").mockClear().mockReturnValue(new Promise(() => {}));
+  const del = vi.spyOn(api, "deleteCredential").mockClear().mockReturnValue(new Promise(() => {}));
+  useCreds(creds([], { claudeAccounts: [SYS, WORK] }));
+  await renderShell();
+  const claude = card("Claude (구독)");
+  await act(async () => fireEvent.click(claude.getByRole("button", { name: "계정 연결" })));
+  await act(async () => fireEvent.change(claude.getByLabelText("새 계정 이름표"), { target: { value: "회사2" } }));
+  await act(async () => fireEvent.click(claude.getByRole("button", { name: "다음" })));
+  await act(async () => fireEvent.submit(claude.getByLabelText("새 계정 이름표")));
+  expect(begin).toHaveBeenCalledTimes(1);
+  const work = row(claude, "회사");
+  await act(async () => fireEvent.click(work.getByRole("button", { name: "연결 해제" })));
+  await act(async () => fireEvent.click(work.getByRole("button", { name: "연결 해제" })));
+  await act(async () => fireEvent.click(work.getByRole("button", { name: "연결 해제" })));
+  expect(del).toHaveBeenCalledTimes(1);
+});
+
 test("disconnect_system_hides_not_logout", async () => {
   const del = vi.spyOn(api, "deleteCredential").mockClear().mockResolvedValue();
   const hide = vi.spyOn(api, "setSystemHidden").mockClear().mockResolvedValue();

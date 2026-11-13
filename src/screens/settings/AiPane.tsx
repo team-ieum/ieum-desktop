@@ -213,9 +213,12 @@ function CredRow({
   const [mode, setMode] = useState<"idle" | "rename" | "remove">("idle");
   const [draft, setDraft] = useState("");
   const { error, run } = useRun(refresh);
+  const [busy, setBusy] = useState(false);
   const label = credLabel(m);
   const act = async (call: Promise<unknown>) => {
+    setBusy(true);
     if (await run(call)) setMode("idle");
+    setBusy(false);
   };
   return (
     <li aria-label={label} className="flex flex-col gap-2 border-b border-neutral-100 pb-3 last:border-0 last:pb-0">
@@ -273,7 +276,7 @@ function CredRow({
       {mode === "remove" && (
         <div className="flex flex-wrap items-center gap-2 rounded-[10px] bg-danger-100 px-3 py-2">
           <span className="min-w-0 flex-1 typo-caption1_semibold text-danger-700">{confirmText}</span>
-          <button type="button" className={DANGER} onClick={() => void act(onRemove())}>
+          <button type="button" className={`${DANGER} disabled:opacity-40`} disabled={busy} onClick={() => void act(onRemove())}>
             {confirmLabel}
           </button>
           <button type="button" className={GHOST} onClick={() => setMode("idle")}>
@@ -328,9 +331,13 @@ function ConnectFlow({ kind, systemHidden, refresh }: { kind: SubKind; systemHid
     setNotice(null);
     setLabel("");
   };
+  // 응답 전 연타는 보이지 않는 대기 폴더를 하나 더 만든다 — 끝날 때까지 막는다.
   const begin = async () => {
+    if (busy) return;
+    setBusy(true);
     const r = api.beginCliAccount(kind, label.trim());
     if (await run(r)) setPending(await r);
+    setBusy(false);
   };
   const confirm = async () => {
     if (!pending) return;
@@ -379,7 +386,7 @@ function ConnectFlow({ kind, systemHidden, refresh }: { kind: SubKind; systemHid
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
               />
-              <button type="submit" className={SAVE} disabled={!label.trim()}>
+              <button type="submit" className={SAVE} disabled={!label.trim() || busy}>
                 {t("settings.next")}
               </button>
               <button type="button" className={GHOST} onClick={close}>
