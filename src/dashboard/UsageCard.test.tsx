@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { api, type CliAccountMeta, type CredentialsView, type PlanUsage, type UsageSummary } from "../api";
 import { setLang } from "../i18n";
 import { StatusBar } from "../shell/StatusBar";
@@ -26,6 +26,11 @@ afterEach(() => {
   vi.restoreAllMocks();
   useCredentials.setState({ view: null });
   usePlanStore.setState({ plans: {} });
+});
+// 이 환경의 localStorage는 온전하지 않다 — 테스트마다 빈 메모리 저장소를 꽂는다.
+beforeEach(() => {
+  const m = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) });
 });
 
 test("usage_card_hidden_on_web_tab", async () => {
@@ -63,12 +68,13 @@ const OK: PlanUsage = {
 };
 const OUT: PlanUsage = { state: "not_logged_in", windows: [], checkedAt: "", accountEmail: null };
 
-/** Claude 기본 계정만 연결, Codex 없음, Antigravity 로그인 전. */
-const mockSubs = (claude: PlanUsage = OK) => {
-  useCredentials.setState({ view: VIEW });
-  vi.spyOn(api, "listCredentials").mockResolvedValue(VIEW);
+/** 기본: Claude 기본 계정만 연결, Codex 없음, Antigravity 로그인 전. `codex`를 주면 Codex 기본 계정도 연결. */
+const mockSubs = (claude: PlanUsage = OK, codex?: PlanUsage) => {
+  const view = codex ? { ...VIEW, codexAccounts: [{ ...SYS, email: "me@openai.dev" }] } : VIEW;
+  useCredentials.setState({ view });
+  vi.spyOn(api, "listCredentials").mockResolvedValue(view);
   vi.spyOn(api, "usageSummary").mockResolvedValue(SUMMARY);
-  const sub = vi.spyOn(api, "subscriptionUsage").mockImplementation(async (k) => (k === "claude" ? claude : OUT));
+  const sub = vi.spyOn(api, "subscriptionUsage").mockImplementation(async (k) => (k === "claude" ? claude : (codex ?? OUT)));
   const agy = vi.spyOn(api, "antigravityPlanUsage").mockResolvedValue(OUT);
   return { sub, agy };
 };
@@ -130,6 +136,43 @@ test("subscription_usage_fetched_once_for_bar_and_dashboard", async () => {
   expect(within(screen.getByRole("region", { name: "구독 사용량" })).getByText("17% 사용 · 13시간 20분 뒤 초기화")).toBeTruthy();
   expect(sub).toHaveBeenCalledTimes(1);
   expect(agy).toHaveBeenCalledTimes(1);
+});
+
+const plan = (pct: number): PlanUsage => ({ ...OK, windows: [{ kind: "session", usedPct: pct, resetsAt: inHours(4) }], accountEmail: "me@openai.dev" });
+const subTabs = () => within(screen.getByRole("tablist", { name: "구독 사용량" }));
+
+test("dashboard_subscription_tabs_show_one_at_a_time", async () => {
+  mockSubs(OK, plan(40));
+  await mountCard();
+  const subs = within(screen.getByRole("region", { name: "구독 사용량" }));
+  // Claude(91%)가 기본, 카드는 하나만
+  expect(subs.getByRole("group", { name: "Claude" })).toBeTruthy();
+  expect(subs.queryByRole("group", { name: "Codex" })).toBeNull();
+  await act(async () => fireEvent.click(subTabs().getByRole("tab", { name: /Codex/ })));
+  expect(subs.getByRole("group", { name: "Codex" })).toBeTruthy();
+  expect(subs.queryByRole("group", { name: "Claude" })).toBeNull();
+  // 고른 탭은 다시 열어도 그대로
+  cleanup();
+  await mountCard();
+  expect(subTabs().getByRole("tab", { name: /Codex/ }).getAttribute("aria-selected")).toBe("true");
+});
+
+test("default_tab_is_tightest_window", async () => {
+  mockSubs(OK, plan(95));
+  await mountCard();
+  const codex = subTabs().getByRole("tab", { name: /Codex/ });
+  expect(codex.getAttribute("aria-selected")).toBe("true");
+  expect(subTabs().getByRole("tab", { name: /Claude/ }).getAttribute("aria-selected")).toBe("false");
+  // 탭에도 최대 %, 80% 넘으면 빨강
+  expect(within(codex).getByText("95%").className).toContain("text-danger-700");
+  expect(within(screen.getByRole("region", { name: "구독 사용량" })).getByRole("group", { name: "Codex" })).toBeTruthy();
+});
+
+test("single_subscription_has_no_tabs", async () => {
+  mockSubs();
+  await mountCard();
+  expect(screen.queryByRole("tablist", { name: "구독 사용량" })).toBeNull();
+  expect(within(screen.getByRole("region", { name: "구독 사용량" })).getByRole("group", { name: "Claude" })).toBeTruthy();
 });
 
 test("usage_card_empty_when_unavailable", async () => {

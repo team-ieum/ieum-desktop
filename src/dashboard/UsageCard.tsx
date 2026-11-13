@@ -3,22 +3,30 @@ import { useEffect, useState } from "react";
 import { api, type UsageRange, type UsageSummary } from "../api";
 import { ProviderLogo } from "../assets/providers";
 import { t } from "../i18n";
-import { PROVIDERS } from "../screens/settings/AiPane";
+import { PROVIDERS, type SubId } from "../screens/settings/AiPane";
 import { connectedSubs } from "../shell/UsagePopover";
 import { useCredentials } from "../stores/credentials";
 import { useDefaultPlans } from "../stores/plans";
 import { useWorkflows } from "../stores/workflows";
 import { formatTokens, formatUsd } from "../usage/format";
-import { WindowMeter } from "../usage/parts";
+import { hot, usedOf, WindowMeter } from "../usage/parts";
 
 const RANGES: UsageRange[] = ["today", "week", "month"];
 const tokens = (x: { input: number; output: number }) => x.input + x.output;
+const PICK_KEY = "ieum.dashboardSub";
 
 /** 대시보드 "AI 사용량" — 왼쪽 API 칸(내 PC AI 노드가 쓴 토큰·예상 금액, 기간 탭), 오른쪽 구독 칸(기본 계정 창별 사용, 상태 줄과 같은 스토어). 웹 이음 탭에서는 그리지 않는다. */
 export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; onUsage: () => void; onAccounts: () => void }) {
   const [range, setRange] = useState<UsageRange>("today");
   const view = useCredentials((s) => s.view);
   const { plans } = useDefaultPlans(view);
+  const [picked, setPicked] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(PICK_KEY);
+    } catch {
+      return null;
+    }
+  });
   // undefined = 읽는 중, null = 못 읽음
   const [sum, setSum] = useState<UsageSummary | null | undefined>(undefined);
   const workflows = useWorkflows((s) => s.list);
@@ -39,6 +47,16 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
   if (hidden) return null;
   const now = new Date();
   const subs = connectedSubs(view, plans);
+  // 고른 구독, 없거나 사라졌으면 가장 빡빡한 창을 가진 구독
+  const current = subs.find((x) => x.sub.id === picked) ?? subs.reduce<(typeof subs)[number] | undefined>((a, x) => (!a || x.w.usedPct > a.w.usedPct ? x : a), undefined);
+  const pick = (id: SubId) => {
+    setPicked(id);
+    try {
+      localStorage.setItem(PICK_KEY, id);
+    } catch {
+      // 기억 못 해도 이번 화면에서는 고른 대로.
+    }
+  };
   const total = sum ? tokens({ input: sum.totalInput, output: sum.totalOutput }) : 0;
   const name = (id: string) => workflows.find((w) => w.id === id)?.name ?? t("history.deletedWorkflow");
 
@@ -137,23 +155,43 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
           )}
         </section>
         <section aria-label={t("usage.subSection")} className="px-5 pt-3 pb-4">
-          <h4 className="mb-3 flex h-8 items-center typo-caption1_semibold tracking-[.04em] text-main-gray">{t("usage.subSection")}</h4>
-          {subs.length ? (
-            <div className="flex flex-col gap-3">
-              {subs.map(({ sub: s, plan }) => (
-                <div key={s.id} role="group" aria-label={s.name} className="rounded-lg border border-neutral-100 bg-main-light-blue/30 p-3">
-                  <div className="mb-2 flex items-center gap-2">
-                    <ProviderLogo id={s.logo} size={18} />
-                    <span className="typo-body3_semibold text-main-deep-blue">{s.name}</span>
-                    {plan.accountEmail && <span className="min-w-0 truncate typo-caption1_regular text-neutral-500">{plan.accountEmail}</span>}
-                  </div>
-                  <div className="flex flex-col gap-2.5">
-                    {plan.windows.map((w) => (
-                      <WindowMeter key={w.kind} w={w} now={now} inline />
-                    ))}
-                  </div>
-                </div>
-              ))}
+          <div className="mb-4 flex h-8 items-center justify-between gap-3">
+            <h4 className="typo-caption1_semibold tracking-[.04em] text-main-gray">{t("usage.subSection")}</h4>
+            {subs.length > 1 && (
+              <div role="tablist" aria-label={t("usage.subSection")} className="inline-flex min-w-0 rounded-lg border border-neutral-200 bg-neutral-100 p-0.5">
+                {subs.map(({ sub: s, w }) => {
+                  const on = s.id === current?.sub.id;
+                  const pct = usedOf(w);
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      className={`inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 typo-caption1_semibold ${on ? "bg-main-deep-blue text-white" : "text-neutral-600"}`}
+                      onClick={() => pick(s.id)}
+                    >
+                      <ProviderLogo id={s.logo} size={14} />
+                      {s.name}
+                      <span className={`tabular-nums typo-caption2_regular ${on ? (hot(pct) ? "text-danger-700 rounded bg-white px-1" : "text-white/70") : hot(pct) || "text-neutral-400"}`}>{pct}%</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {current ? (
+            <div role="group" aria-label={current.sub.name} className="rounded-lg border border-neutral-100 bg-main-light-blue/30 px-4 py-3.5">
+              <div className="mb-3 flex items-center gap-2">
+                <ProviderLogo id={current.sub.logo} size={18} />
+                <span className="typo-body3_semibold text-main-deep-blue">{current.sub.name}</span>
+                {current.plan.accountEmail && <span className="min-w-0 truncate typo-caption1_regular text-neutral-500">{current.plan.accountEmail}</span>}
+              </div>
+              <div className="flex flex-col gap-3">
+                {current.plan.windows.map((w) => (
+                  <WindowMeter key={w.kind} w={w} now={now} inline />
+                ))}
+              </div>
             </div>
           ) : (
             <p className="typo-caption1_regular text-neutral-500">
