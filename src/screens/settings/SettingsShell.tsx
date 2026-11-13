@@ -46,10 +46,6 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
     api.usageSummary("month").then(setUsage, () => setUsage(null));
   }, [refreshCreds]);
   useEffect(refresh, [refresh]);
-  // 상태 줄에서 들어오면 그 묶음으로.
-  useEffect(() => {
-    if (initial !== "account") document.getElementById(`settings-${initial}`)?.scrollIntoView?.({ block: "start" });
-  }, [initial]);
 
   // ⌘F = 설정 검색
   useEffect(() => {
@@ -63,8 +59,8 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // 줄 이름·설명·버튼 문구 — Row가 숨기는 기준과 같다. 묶음 이름이 맞으면 그 묶음의 줄은 다 보이고,
-  // 줄이 하나도 안 남는 묶음은 메뉴·본문에서 뺀다.
+  // 줄 이름·설명·버튼 문구 — Row가 숨기는 기준과 같다. 메뉴 이름이 맞으면 그 페이지의 줄은 다 보이고,
+  // 줄이 하나도 안 남는 메뉴는 목록에서 뺀다.
   const texts: Record<Id, string[]> = {
     account: account ? [account.email, `${t("settings.loggedInAs")} · ${serverHost(account.serverUrl)}`, t("settings.logout")] : [],
     general: [t("settings.language"), t("settings.lang.system"), t("settings.lang.ko"), t("settings.lang.en")],
@@ -90,18 +86,22 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
   };
   const titleHit = (s: (typeof SECTIONS)[number]) => matches(q, t(s.label));
   const visible = SECTIONS.filter((s) => titleHit(s) || texts[s.id].some((x) => matches(q, x)));
-  // 검색으로 선택한 묶음이 숨으면 위 경로는 남은 첫 묶음을 가리킨다.
+  // 메뉴마다 한 페이지. 검색으로 고른 메뉴가 숨으면 남은 첫 메뉴의 페이지(검색어를 지우면 고른 페이지로).
   const shown = visible.find((s) => s.id === sel) ?? visible[0];
-
-  const pick = (id: Id) => {
-    setSel(id);
-    document.getElementById(`settings-${id}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-  };
 
   const panes: Record<Id, ReactNode> = {
     account: <AccountPane />,
     general: <GeneralPane />,
-    permissions: <PermissionsPane providers={providers} keychain={keychain} onAi={() => pick("ai")} />,
+    permissions: (
+      <PermissionsPane
+        providers={providers}
+        keychain={keychain}
+        onAi={() => {
+          setQ("");
+          setSel("ai");
+        }}
+      />
+    ),
     ai: <AiProvidersPane view={view} plans={plans} refreshPlan={refreshPlan} refreshCreds={refresh} usage={usage} />,
   };
 
@@ -132,7 +132,7 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
               )}
               <button
                 type="button"
-                onClick={() => pick(s.id)}
+                onClick={() => setSel(s.id)}
                 aria-current={shown?.id === s.id ? "true" : undefined}
                 className={`flex h-10 w-full items-center gap-2.5 rounded-xl px-3.5 text-sm transition-colors ${shown?.id === s.id ? NAV_ON : NAV_OFF}`}
               >
@@ -161,16 +161,17 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto max-w-[640px] pt-6 pb-10">
             {loadError && <p className="mb-4 typo-caption1_semibold text-danger-700">{loadError}</p>}
-            {visible.length === 0 && <p className="typo-body3_regular text-neutral-500">{t("settings.noMatch")}</p>}
-            {visible.map((s) => (
-              <section key={s.id} id={`settings-${s.id}`} className="mb-6 scroll-mt-6">
-                <h3 className="mb-2.5 typo-body1_bold text-main-deep-blue">{t(s.label)}</h3>
-                <QueryContext.Provider value={titleHit(s) ? "" : q}>
-                  {/* AI 제공자는 카드마다 테두리가 있다. */}
-                  {s.id === "ai" ? panes.ai : <div className="rounded-brand-md border border-[#cde9f4] bg-white px-5">{panes[s.id]}</div>}
+            {shown ? (
+              <section key={shown.id} id={`settings-${shown.id}`}>
+                <h2 className="mb-4 typo-title3_bold text-main-deep-blue">{t(shown.label)}</h2>
+                <QueryContext.Provider value={titleHit(shown) ? "" : q}>
+                  {/* AI 제공자는 박스마다 테두리가 있다. */}
+                  {shown.id === "ai" ? panes.ai : <div className="rounded-brand-md border border-[#cde9f4] bg-white px-5">{panes[shown.id]}</div>}
                 </QueryContext.Provider>
               </section>
-            ))}
+            ) : (
+              <p className="typo-body3_regular text-neutral-500">{t("settings.noMatch")}</p>
+            )}
           </div>
         </div>
       </main>

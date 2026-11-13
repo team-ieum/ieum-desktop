@@ -55,6 +55,11 @@ test("status_bar_opens_usage_popover_not_settings", async () => {
   await act(async () => fireEvent.click(screen.getByText("Claude 66% · 2일 10시간")));
   expect(onSettings).not.toHaveBeenCalled();
   const pop = within(screen.getByRole("dialog", { name: "AI 사용량" }));
+  // 공급자 박스 셋, 각각 구독 기본·API 기본 한 줄씩.
+  expect(pop.getAllByRole("listitem").map((li) => li.getAttribute("aria-label"))).toEqual(["Claude", "OpenAI", "Google"]);
+  const openai = within(pop.getByRole("listitem", { name: "OpenAI" }));
+  expect(openai.getByText("로그인 필요")).toBeTruthy();
+  expect(openai.getByText("이번 달 예상 $1.50")).toBeTruthy();
   expect(pop.getByText("66% 남음 · 2일 10시간 뒤 초기화")).toBeTruthy();
   expect(pop.getByText("로그인 필요")).toBeTruthy();
   expect(pop.getByText("확인 불가")).toBeTruthy();

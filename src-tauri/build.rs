@@ -43,6 +43,7 @@ const COMMANDS: &[&str] = &[
     "subscription_usage",
     "antigravity_plan_usage",
     "open_system_settings",
+    "open_provider_console",
     "send_test_notification",
 ];
 

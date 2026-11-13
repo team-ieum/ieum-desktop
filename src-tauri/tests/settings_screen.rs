@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use ieum_desktop_lib::commands::{web_editor_url, web_workflow_url};
+use ieum_desktop_lib::commands::{provider_console_url, web_editor_url, web_workflow_url};
 use ieum_desktop_lib::credentials::AccountCredentials;
 use ieum_local::ai::KeyStore;
 use ieum_local::ai::keys::KeyError;
@@ -82,4 +82,23 @@ fn web_workflow_url_rejects_non_uuid() {
         );
     }
     assert!(web_workflow_url("https://evil.example", ID).is_err());
+}
+
+#[test]
+fn provider_console_url_only_known() {
+    assert_eq!(
+        provider_console_url("anthropic").unwrap(),
+        "https://console.anthropic.com/settings/keys"
+    );
+    assert_eq!(
+        provider_console_url("openai").unwrap(),
+        "https://platform.openai.com/api-keys"
+    );
+    assert_eq!(
+        provider_console_url("gemini").unwrap(),
+        "https://aistudio.google.com/apikey"
+    );
+    for bad in ["", "Anthropic", "https://evil.example", "claude", "gemini "] {
+        assert!(provider_console_url(bad).is_err(), "{bad}");
+    }
 }

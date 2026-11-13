@@ -255,6 +255,7 @@ pub fn run() {
             commands::subscription_usage,
             commands::antigravity_plan_usage,
             commands::open_system_settings,
+            commands::open_provider_console,
             commands::send_test_notification,
         ])
         .build(tauri::generate_context!())

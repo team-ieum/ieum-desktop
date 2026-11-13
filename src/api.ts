@@ -362,6 +362,8 @@ export const api = {
   /** 설치·사용 안내 문서를 기본 브라우저로(Rust 명령은 Task 5). */
   openHelp: () => invoke<void>("open_help"),
   openSystemSettings: (pane: SystemSettingsPane) => invoke<void>("open_system_settings", { pane }),
+  /** 공급자 키 발급 화면을 기본 브라우저로 — 주소는 Rust의 고정값. */
+  openProviderConsole: (provider: ApiProvider) => invoke<void>("open_provider_console", { provider }),
   /** 앞 여부·알림 토글과 무관하게 "알림이 켜졌어요". */
   sendTestNotification: () => invoke<void>("send_test_notification"),
   /** 시스템 알림을 누르면 열 화면. */

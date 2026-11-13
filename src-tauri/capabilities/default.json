@@ -50,6 +50,7 @@
     "allow-subscription-usage",
     "allow-antigravity-plan-usage",
     "allow-open-system-settings",
+    "allow-open-provider-console",
     "allow-send-test-notification",
     "dialog:allow-open"
   ]

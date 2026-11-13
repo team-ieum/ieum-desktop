@@ -319,6 +319,21 @@ pub fn open_help() -> Result<(), String> {
     open_url(HELP_URL)
 }
 
+/// 공급자 키 발급 화면 주소 — 정해진 세 곳만. 화면이 준 주소는 받지 않는다.
+pub fn provider_console_url(provider: &str) -> Result<&'static str, String> {
+    match provider {
+        "anthropic" => Ok("https://console.anthropic.com/settings/keys"),
+        "openai" => Ok("https://platform.openai.com/api-keys"),
+        "gemini" => Ok("https://aistudio.google.com/apikey"),
+        _ => Err("모르는 공급자예요.".into()),
+    }
+}
+
+#[tauri::command]
+pub fn open_provider_console(provider: String) -> Result<(), String> {
+    open_url(provider_console_url(&provider)?)
+}
+
 /// 정해진 시스템 설정 창만 연다(`files`·`notifications`·`login_items`).
 #[tauri::command]
 pub fn open_system_settings(app: AppHandle, pane: String) -> Result<(), String> {

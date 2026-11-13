@@ -19,10 +19,11 @@ import { t, type Key } from "../../i18n";
 import { formatReset, formatTokens, formatUsd } from "../../usage/format";
 import { GHOST, matches, QueryContext } from "./Row";
 
-export const PROVIDERS: { id: ApiProvider; name: string; url: string; logo: LogoId }[] = [
-  { id: "anthropic", name: "Anthropic", url: "https://console.anthropic.com/settings/keys", logo: "anthropic" },
-  { id: "openai", name: "OpenAI", url: "https://platform.openai.com/api-keys", logo: "openai" },
-  { id: "gemini", name: "Gemini", url: "https://aistudio.google.com/apikey", logo: "gemini" },
+// 키 받기 주소는 Rust 고정값(open_provider_console) — 화면은 주소를 들고 있지 않는다.
+export const PROVIDERS: { id: ApiProvider; name: string; logo: LogoId }[] = [
+  { id: "anthropic", name: "Anthropic", logo: "anthropic" },
+  { id: "openai", name: "OpenAI", logo: "openai" },
+  { id: "gemini", name: "Gemini", logo: "gemini" },
 ];
 
 export type SubId = "claude" | "codex" | "antigravity";
@@ -32,8 +33,15 @@ export const SUBS: { id: SubId; name: string; cmd: string; logo: LogoId }[] = [
   { id: "antigravity", name: "Antigravity", cmd: "agy", logo: "antigravity" },
 ];
 
+/** 회사별 박스 — 구독 하나 + API 키 하나. */
+export type BoxId = "claude" | "openai" | "google";
+export const BOXES: { id: BoxId; name: string; logo: LogoId; sub: (typeof SUBS)[number]; api: (typeof PROVIDERS)[number] }[] = [
+  { id: "claude", name: "Claude", logo: "claude", sub: SUBS[0], api: PROVIDERS[0] },
+  { id: "openai", name: "OpenAI", logo: "openai", sub: SUBS[1], api: PROVIDERS[1] },
+  { id: "google", name: "Google", logo: "gemini", sub: SUBS[2], api: PROVIDERS[2] },
+];
+
 export const cliName = (id: string) => (id === "claude" ? t("choice.provider.cli:claude") : id);
-export const subName = (name: string) => t("settings.subName").replace("{name}", name);
 export const apiName = (name: string) => `${name} API`;
 
 export const SYSTEM = "system";
@@ -122,21 +130,45 @@ function PlanBars({ plan }: { plan: PlanUsage }) {
   );
 }
 
-/** 공급자 카드 틀 — 로고·이름·한 줄 설명, 오른쪽 위 `aside`. 설정 검색에 안 맞으면 숨는다. */
-function Card({ name, desc, logo, aside, texts, children }: { name: string; desc: string; logo: LogoId; aside?: ReactNode; texts: string[]; children: ReactNode }) {
+type Part = { title: string; desc: string; texts: string[]; body: ReactNode };
+
+/** 회사 박스 — 로고·이름·한 줄 설명, 오른쪽 위 [키 받기 ↗], 안에 "구독"·"API 키" 칸.
+ *  박스 머리가 검색에 맞으면 칸 전부, 아니면 맞는 칸만. 남는 칸이 없으면 박스째 숨는다. */
+function Box({ box, parts }: { box: (typeof BOXES)[number]; parts: Part[] }) {
   const q = useContext(QueryContext);
-  if (!matches(q, name, desc, ...texts)) return null;
+  const [error, setError] = useState<string | null>(null);
+  const desc = t(`settings.boxDesc.${box.id}`);
+  const head = matches(q, box.name, desc);
+  const shown = parts.filter((p) => head || matches(q, p.title, p.desc, ...p.texts));
+  if (!shown.length) return null;
+  const openConsole = () => {
+    setError(null);
+    api.openProviderConsole(box.api.id).catch((e) => setError(String(e)));
+  };
   return (
-    <article aria-label={name} className="rounded-brand-md border border-[#cde9f4] bg-white p-4">
+    <article aria-label={box.name} className="rounded-brand-md border border-[#cde9f4] bg-white p-4">
       <div className="flex items-start gap-3">
-        <ProviderLogo id={logo} />
+        <ProviderLogo id={box.logo} />
         <div className="min-w-0 flex-1">
-          <div className="typo-body2_semibold text-neutral-800">{name}</div>
+          <div className="typo-body2_semibold text-neutral-800">{box.name}</div>
           <div className="mt-0.5 typo-caption1_regular text-neutral-500">{desc}</div>
         </div>
-        {aside}
+        <button type="button" className={SMALL} onClick={openConsole}>
+          {t("settings.getKey")} ↗
+        </button>
       </div>
-      <div className="mt-3 flex flex-col gap-3 pl-12">{children}</div>
+      {error && <p className="mt-2 pl-12 typo-caption1_semibold text-danger-700">{error}</p>}
+      <div className="mt-3 flex flex-col gap-4 pl-12">
+        {shown.map((p) => (
+          <section key={p.title} aria-label={p.title} className="flex flex-col gap-3 border-t border-neutral-100 pt-3 first:border-0 first:pt-0">
+            <div>
+              <h4 className="typo-caption1_semibold tracking-[.04em] text-main-gray">{p.title}</h4>
+              <p className="mt-0.5 typo-caption1_regular text-neutral-500">{p.desc}</p>
+            </div>
+            {p.body}
+          </section>
+        ))}
+      </div>
     </article>
   );
 }
@@ -438,7 +470,7 @@ function Checked({ plan }: { plan: PlanUsage | null | undefined }) {
 }
 
 /** Claude·Codex 구독 — 계정 목록(이름표·이메일·창별 사용량)과 [계정 연결]. Antigravity는 지금 로그인 하나만. */
-export function SubscriptionCard({
+function SubscriptionBody({
   sub,
   view,
   plans,
@@ -451,7 +483,6 @@ export function SubscriptionCard({
   onRefresh: () => void;
   refreshCreds: () => void;
 }) {
-  const head = { name: subName(sub.name), desc: t(`settings.subDesc.${sub.id}`), logo: sub.logo, texts: subTexts(sub, view, plans) };
   const refreshButton = (
     <button type="button" className={GHOST} onClick={onRefresh}>
       <RefreshCw className="size-4" aria-hidden="true" />
@@ -461,7 +492,7 @@ export function SubscriptionCard({
   if (sub.id === "antigravity") {
     const plan = plans[planKey("antigravity")];
     return (
-      <Card {...head}>
+      <>
         <PlanInfo plan={plan} cmd={sub.cmd} />
         {plan !== undefined && (
           <div className="flex flex-wrap items-center gap-2">
@@ -469,7 +500,7 @@ export function SubscriptionCard({
             <Checked plan={plan} />
           </div>
         )}
-      </Card>
+      </>
     );
   }
   const kind = sub.id;
@@ -480,7 +511,7 @@ export function SubscriptionCard({
     onRefresh();
   };
   return (
-    <Card {...head}>
+    <>
       {accounts.length ? (
         <ul className="flex flex-col gap-3">
           {accounts.map((m) => {
@@ -510,7 +541,7 @@ export function SubscriptionCard({
           <Checked plan={def && plans[planKey(kind, def.id)]} />
         </div>
       )}
-    </Card>
+    </>
   );
 }
 
@@ -546,12 +577,11 @@ const monthText = (usage: UsageSummary | null, p: ApiProvider, id: string) => {
 };
 
 /** Anthropic·OpenAI·Gemini 키 목록 + [키 추가]. 키 입력란은 보내기 전에 비운다(키를 상태에 남기지 않는다). */
-export function ApiKeyCard({ p, keys, state, usage, refresh }: { p: (typeof PROVIDERS)[number]; keys: ApiKeyMeta[]; state?: KeyState; usage?: UsageSummary | null; refresh: () => void }) {
+function ApiKeyBody({ p, keys, state, usage, refresh }: { p: (typeof PROVIDERS)[number]; keys: ApiKeyMeta[]; state?: KeyState; usage?: UsageSummary | null; refresh: () => void }) {
   const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState("");
   const [draft, setDraft] = useState("");
   const { error, run } = useRun(refresh);
-  const host = p.url.replace("https://", "");
   const first = keys.length === 0;
   const name = label.trim() || (first ? t("settings.keyDefaultLabel") : "");
   const save = async () => {
@@ -563,21 +593,7 @@ export function ApiKeyCard({ p, keys, state, usage, refresh }: { p: (typeof PROV
     }
   };
   return (
-    <Card
-      name={apiName(p.name)}
-      desc={t("settings.apiDesc")}
-      logo={p.logo}
-      texts={[...(state ? [t(BADGE_TEXT[state])] : []), t("settings.getKey"), host, t("settings.addKey"), ...keys.map(credLabel)]}
-      aside={
-        // 외부 주소를 여는 명령이 없다(임의 URL 명령 금지) — 주소를 보이고 복사만.
-        <span className="shrink-0 text-right typo-caption2_regular text-neutral-500">
-          {t("settings.getKey")} ↗
-          <span className="block select-all font-mono text-neutral-700" title={p.url}>
-            {host}
-          </span>
-        </span>
-      }
-    >
+    <>
       <KeyBadge state={state} />
       {!first && (
         <ul className="flex flex-col gap-3">
@@ -641,32 +657,29 @@ export function ApiKeyCard({ p, keys, state, usage, refresh }: { p: (typeof PROV
             <Plus className="size-4" aria-hidden="true" />
             {t("settings.addKey")}
           </button>
-          <CopyButton text={p.url} label={t("settings.copyUrl")} />
         </div>
       )}
       {error && <p className="typo-caption1_semibold text-danger-700">{error}</p>}
-    </Card>
+    </>
   );
 }
 
-/** 설정 검색에 걸릴 카드 문구 전부. */
-export const aiTexts = (plans: Plans, view: CredentialsView | null | undefined) => {
-  const keychain = view ? keyStates(view) : null;
-  return [
-    ...SUBS.flatMap((s) => [subName(s.name), t(`settings.subDesc.${s.id}`), ...subTexts(s, view, plans)]),
-    ...PROVIDERS.flatMap((p) => [
-      apiName(p.name),
-      t("settings.apiDesc"),
-      t("settings.getKey"),
-      p.url,
-      t("settings.addKey"),
-      ...(view?.apiKeys[p.id] ?? []).map(credLabel),
-      ...(keychain ? [t(BADGE_TEXT[keychain[p.id]])] : []),
-    ]),
-  ];
+const apiTexts = (p: (typeof PROVIDERS)[number], view: CredentialsView | null | undefined) => {
+  const state = view ? keyStates(view)[p.id] : undefined;
+  return [apiName(p.name), t("settings.getKey"), t("settings.addKey"), ...(view?.apiKeys[p.id] ?? []).map(credLabel), ...(state ? [t(BADGE_TEXT[state])] : [])];
 };
 
-/** AI 제공자 — 구독 3장 + API 키 3장. 설정과 온보딩이 같이 쓴다. */
+/** 박스 하나의 칸 제목·설명·검색 문구. 본문은 화면에서 붙인다. */
+const partHeads = (b: (typeof BOXES)[number], view: CredentialsView | null | undefined, plans: Plans) => [
+  { title: t("settings.subscription"), desc: t(`settings.subDesc.${b.sub.id}`), texts: [b.sub.name, ...subTexts(b.sub, view, plans)] },
+  { title: t("settings.apiKey"), desc: t("settings.apiDesc"), texts: apiTexts(b.api, view) },
+];
+
+/** 설정 검색에 걸릴 박스 문구 전부. */
+export const aiTexts = (plans: Plans, view: CredentialsView | null | undefined) =>
+  BOXES.flatMap((b) => [b.name, t(`settings.boxDesc.${b.id}`), ...partHeads(b, view, plans).flatMap((p) => [p.title, p.desc, ...p.texts])]);
+
+/** AI 제공자 — 회사별 박스 3개(구독 + API 키). 설정과 온보딩이 같이 쓴다. */
 export function AiProvidersPane({
   view,
   plans,
@@ -683,12 +696,25 @@ export function AiProvidersPane({
   const keychain = view ? keyStates(view) : null;
   return (
     <div className="flex flex-col gap-3">
-      {SUBS.map((s) => (
-        <SubscriptionCard key={s.id} sub={s} view={view} plans={plans} onRefresh={() => refreshPlan(s.id)} refreshCreds={refreshCreds} />
-      ))}
-      {PROVIDERS.map((p) => (
-        <ApiKeyCard key={p.id} p={p} keys={view?.apiKeys[p.id] ?? []} state={keychain?.[p.id]} usage={usage} refresh={refreshCreds} />
-      ))}
+      {BOXES.map((b) => {
+        const [subHead, apiHead] = partHeads(b, view, plans);
+        return (
+          <Box
+            key={b.id}
+            box={b}
+            parts={[
+              {
+                ...subHead,
+                body: <SubscriptionBody sub={b.sub} view={view} plans={plans} onRefresh={() => refreshPlan(b.sub.id)} refreshCreds={refreshCreds} />,
+              },
+              {
+                ...apiHead,
+                body: <ApiKeyBody p={b.api} keys={view?.apiKeys[b.api.id] ?? []} state={keychain?.[b.api.id]} usage={usage} refresh={refreshCreds} />,
+              },
+            ]}
+          />
+        );
+      })}
       {usage && (
         <p className="typo-caption2_regular text-neutral-400">
           {t("usage.asOf").replace("{date}", usage.asOf)} · {t("usage.onlyIeum")}
