@@ -114,13 +114,23 @@ struct Session {
     /// 같은 워크플로우에 새로 띄운 세션을 옛 읽기 스레드가 지우지 않게.
     generation: u64,
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// 세션마다 따로 잠근다 — 자식이 입력을 읽지 않으면 쓰기가 멈추는데, 그동안 세션 맵을 쥐고 있으면 안 된다.
+    writer: Writer,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     out: Out,
     on_end: OnEnd,
 }
 
+type Writer = Arc<Mutex<Box<dyn Write + Send>>>;
 type Map = Arc<Mutex<HashMap<String, Session>>>;
+
+/// 맵 잠금 밖에서 부른다. 자식이 죽으면(kill) 멈춰 있던 쓰기는 오류로 풀린다.
+fn write_to(writer: &Writer, data: &[u8]) -> Result<(), String> {
+    let mut w = lock(writer);
+    w.write_all(data)
+        .and_then(|_| w.flush())
+        .map_err(|e| e.to_string())
+}
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -197,7 +207,7 @@ impl Terms {
                 tool,
                 generation,
                 master: pair.master,
-                writer,
+                writer: Arc::new(Mutex::new(writer)),
                 child,
                 out: out.clone(),
                 on_end: on_end.clone(),
@@ -249,13 +259,14 @@ impl Terms {
         lock(&self.map).get(workflow_id).map(|s| s.tool)
     }
 
+    /// 자식이 입력을 읽지 않으면 멈출 수 있다 — 맵 잠금은 쥐지 않으므로 그동안에도 kill·다른 세션은 된다.
     pub fn write(&self, workflow_id: &str, data: &[u8]) -> Result<(), String> {
-        let mut map = lock(&self.map);
-        let s = map.get_mut(workflow_id).ok_or(NO_SESSION)?;
-        s.writer
-            .write_all(data)
-            .and_then(|_| s.writer.flush())
-            .map_err(|e| e.to_string())
+        write_to(&self.writer(workflow_id)?, data)
+    }
+
+    fn writer(&self, workflow_id: &str) -> Result<Writer, String> {
+        let map = lock(&self.map);
+        Ok(map.get(workflow_id).ok_or(NO_SESSION)?.writer.clone())
     }
 
     pub fn resize(&self, workflow_id: &str, cols: u16, rows: u16) -> Result<(), String> {
@@ -524,7 +535,9 @@ pub async fn term_write(
     workflow_id: String,
     data: String,
 ) -> Result<(), String> {
-    terms.write(&workflow_id, data.as_bytes())
+    // 멈출 수 있는 쓰기라 런타임 스레드 밖에서.
+    let writer = terms.writer(&workflow_id)?;
+    blocking(move || write_to(&writer, data.as_bytes())).await?
 }
 
 #[tauri::command]

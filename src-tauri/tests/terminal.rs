@@ -296,6 +296,65 @@ fn resize_reaches_the_pty_and_kill_all_ends_everything() {
     assert!(terms.running(W).is_none() && terms.running("w2").is_none());
 }
 
+/// `f`가 3초 안에 돌아오는가(다른 스레드에서 돌린다 — 멈추면 테스트가 같이 멈추지 않게).
+fn returns_in_time(f: impl FnOnce() + Send + 'static) -> bool {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        f();
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(Duration::from_secs(3)).is_ok()
+}
+
+#[test]
+fn stuck_write_does_not_block_kill() {
+    let (t, terms) = (tempfile::tempdir().unwrap(), Arc::new(Terms::default()));
+    // stdin을 읽지 않는 자식 — 입력 큐가 차면 PTY 쓰기가 멈춘다.
+    terms
+        .spawn(
+            W,
+            Tool::Claude,
+            sh("sleep 30", t.path()),
+            collect().0,
+            Box::new(|| {}),
+        )
+        .unwrap();
+    for id in ["w2", "w3"] {
+        terms
+            .spawn(
+                id,
+                Tool::Codex,
+                sh("cat", t.path()),
+                collect().0,
+                Box::new(|| {}),
+            )
+            .unwrap();
+    }
+    let (tx, written) = std::sync::mpsc::channel();
+    let writer = terms.clone();
+    std::thread::spawn(move || {
+        let _ = writer.write(W, &b"xxxxxxx\n".repeat(128 * 1024)); // 1MB
+        let _ = tx.send(());
+    });
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        written.try_recv().is_err(),
+        "쓰기가 멈추지 않았다 — 이 테스트가 아무것도 확인하지 못한다"
+    );
+    // 멈춘 쓰기가 있어도 다른 워크플로우의 동작과 종료는 바로 된다.
+    let other = terms.clone();
+    assert!(returns_in_time(move || other.kill("w2")), "kill이 멈췄다");
+    assert_eq!(terms.running("w2"), None);
+    let all = terms.clone();
+    assert!(returns_in_time(move || all.kill_all()), "kill_all이 멈췄다");
+    assert!(terms.running(W).is_none() && terms.running("w3").is_none());
+    // 자식이 죽으면 멈췄던 쓰기도 풀린다(스레드가 새지 않는다).
+    assert!(
+        written.recv_timeout(Duration::from_secs(3)).is_ok(),
+        "멈춘 쓰기가 풀리지 않았다"
+    );
+}
+
 // ── 세션 환경과 토큰 ──
 
 fn gate(log: &Arc<Mutex<Vec<String>>>) -> Gate {
