@@ -90,6 +90,9 @@ pub struct Settings {
     pub current_account: Option<crate::account::AccountId>,
     /// 알림을 마지막으로 연 시각(RFC3339). 빈 문자열 = 한 번도 안 열어 봄.
     pub notifications_seen_at: String,
+    /// 확인 창 토글. 옛 설정엔 없어 `Default`의 true.
+    pub confirm_delete_workflow: bool,
+    pub confirm_discard_unsaved: bool,
 }
 
 pub const DEFAULT_SERVER_URL: &str = "https://green.kiacms.co.kr";
@@ -107,6 +110,8 @@ impl Default for Settings {
             server_url: DEFAULT_SERVER_URL.into(),
             current_account: None,
             notifications_seen_at: String::new(),
+            confirm_delete_workflow: true,
+            confirm_discard_unsaved: true,
         }
     }
 }

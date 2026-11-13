@@ -4,6 +4,7 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { api, type WfNode, type WorkflowEntry } from "../api";
 import { setLang } from "../i18n";
 import { saveView } from "../list/ListToolbar";
+import { useSettings } from "../stores/settings";
 import { WorkflowList } from "./WorkflowList";
 
 const wf = (id: string, name: string, events: string[]): WorkflowEntry => ({
@@ -60,4 +61,30 @@ test("list_view_toggle_survives_storage_error", async () => {
   expect(list.getAttribute("aria-pressed")).toBe("true");
   // 저장 실패는 삼킨다 — 핸들러 밖으로 던지지 않는다.
   expect(() => saveView("grid")).not.toThrow();
+});
+
+test("delete_asks_unless_confirmation_turned_off", async () => {
+  const del = vi.spyOn(api, "deleteWorkflow").mockResolvedValue();
+  const base = { language: "ko", autostart: false, firstRunDone: true, serverUrl: "", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true } as const;
+  const deleteFirst = async () => {
+    await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "메뉴" })[0]));
+    await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "삭제" })));
+  };
+
+  useSettings.setState({ settings: base });
+  await act(async () => {
+    render(<WorkflowList onOpen={() => {}} />);
+  });
+  await deleteFirst();
+  expect(del).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "정말 삭제" })).toBeTruthy();
+  cleanup();
+
+  useSettings.setState({ settings: { ...base, confirmDeleteWorkflow: false } });
+  await act(async () => {
+    render(<WorkflowList onOpen={() => {}} />);
+  });
+  await deleteFirst();
+  expect(del).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", { name: "정말 삭제" })).toBeNull();
 });

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { t } from "../i18n";
 import { ListPage } from "../list/ListPage";
 import { localCard, WorkflowCard } from "../list/WorkflowCard";
+import { useSettings } from "../stores/settings";
 import { useWorkflows } from "../stores/workflows";
 import { BUTTON } from "./Editor";
 
@@ -10,6 +11,16 @@ export function WorkflowList({ onOpen }: { onOpen: (id: string | null) => void }
   const { list, loaded, error, load, remove } = useWorkflows();
   const [confirming, setConfirming] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // 설정 확인 창에서 끄면 묻지 않고 바로 지운다.
+  const ask = useSettings((s) => s.settings?.confirmDeleteWorkflow !== false);
+  const doRemove = async (id: string) => {
+    try {
+      await remove(id);
+      setRemoveError(null);
+    } catch (e) {
+      setRemoveError(String(e));
+    }
+  };
 
   useEffect(() => {
     void load();
@@ -34,7 +45,7 @@ export function WorkflowList({ onOpen }: { onOpen: (id: string | null) => void }
       cards={loaded ? list.map(localCard) : null}
       empty={t("list.empty")}
       renderCard={(c) => (
-        <WorkflowCard key={c.id} data={c} onOpen={() => onOpen(c.id)} menu={[{ label: t("common.delete"), danger: true, onSelect: () => setConfirming(c.id) }]}>
+        <WorkflowCard key={c.id} data={c} onOpen={() => onOpen(c.id)} menu={[{ label: t("common.delete"), danger: true, onSelect: () => (ask ? setConfirming(c.id) : void doRemove(c.id)) }]}>
           {confirming === c.id && (
             <div className="flex items-center justify-end gap-2">
               <button type="button" className={BUTTON} onClick={() => setConfirming(null)}>
@@ -43,14 +54,9 @@ export function WorkflowList({ onOpen }: { onOpen: (id: string | null) => void }
               <button
                 type="button"
                 className={`${BUTTON} border-danger-300 text-danger-700`}
-                onClick={async () => {
+                onClick={() => {
                   setConfirming(null);
-                  try {
-                    await remove(c.id);
-                    setRemoveError(null);
-                  } catch (e) {
-                    setRemoveError(String(e));
-                  }
+                  void doRemove(c.id);
                 }}
               >
                 {t("common.confirmDelete")}

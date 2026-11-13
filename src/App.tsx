@@ -68,18 +68,20 @@ export default function App() {
   // 편집기에 저장 안 한 변경이 있으면 떠나기 전에 앱 안에서 묻는다.
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState<(() => void) | null>(null);
-  const leave = (go: () => void) => (dirty ? setPending(() => go) : go());
+  // 설정 확인 창에서 끄면 묻지 않고 버리고 나간다.
+  const askDiscard = useSettings((s) => s.settings?.confirmDiscardUnsaved !== false);
+  const leave = (go: () => void) => (dirty && askDiscard ? setPending(() => go) : go());
   const newCanvas = () => leave(() => openEditor(null));
 
   // 시스템 알림 클릭 → 그 실행 상세(대시보드와 같은 기록 화면) 또는 실행 기록.
   useEffect(() => {
     const un = api.onOpenTarget((t) => {
       const go = () => setView(t.kind === "run" ? { page: "history", run: t.runId } : { page: "history" });
-      if (dirty) setPending(() => go);
+      if (dirty && askDiscard) setPending(() => go);
       else go();
     });
     return () => void un.then((f) => f(), () => {});
-  }, [dirty]);
+  }, [dirty, askDiscard]);
 
   // ⌘N = 새 캔버스
   useEffect(() => {

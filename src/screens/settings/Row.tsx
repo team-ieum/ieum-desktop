@@ -11,6 +11,21 @@ export const matches = (q: string, ...texts: string[]) => {
 export const GHOST =
   "inline-flex h-9 shrink-0 items-center gap-1.5 rounded-[10px] border border-neutral-200 bg-white px-4 text-sm font-semibold text-neutral-700 hover:bg-neutral-50 disabled:opacity-40";
 
+/** 제목 + 테두리 박스 묶음. 검색어가 제목에 맞으면 안의 줄은 다 보이고, `texts`(안의 줄 문구) 어디에도 안 맞으면 박스째 숨는다. */
+export function Group({ title, texts, children }: { title: string; texts: string[]; children: ReactNode }) {
+  const q = useContext(QueryContext);
+  const titleHit = matches(q, title);
+  if (!titleHit && !matches(q, ...texts)) return null;
+  return (
+    <div className="mb-6">
+      <h3 className="mb-2 typo-body2_bold text-main-deep-blue">{title}</h3>
+      <div className="rounded-brand-md border border-[#cde9f4] bg-white px-5">
+        <QueryContext.Provider value={titleHit ? "" : q}>{children}</QueryContext.Provider>
+      </div>
+    </div>
+  );
+}
+
 /** 왼쪽 이름·설명, 오른쪽 조작. `below`는 줄 아래로 펼치는 내용(키 입력 등), `also`는 설명·버튼처럼 검색에 걸릴 다른 문구. */
 export function Row({
   title,

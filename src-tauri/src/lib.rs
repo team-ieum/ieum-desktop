@@ -31,27 +31,31 @@ use crate::supervisor::{AppEvent, Emit};
 /// 로그인 자동 시작 때 붙는 인자 — 창 없이 메뉴 막대로만 뜬다.
 const HIDDEN_ARG: &str = "--hidden";
 
-/// 새 버전이 있으면 받아 설치해 둔다(다음 실행부터 적용). 실패는 로그만 — 팝업 없음.
+/// 새 버전이 있으면 받아 설치해 둔다(다음 실행부터 적용). 설치한 버전, 최신이면 None.
 /// 공개키가 자리표시자면 서명 확인에서 실패해 설치되지 않는다.
+pub(crate) async fn install_update(
+    handle: &tauri::AppHandle,
+) -> Result<Option<String>, tauri_plugin_updater::Error> {
+    use tauri_plugin_updater::UpdaterExt;
+    let Some(update) = handle.updater()?.check().await? else {
+        return Ok(None);
+    };
+    update.download_and_install(|_, _| {}, || {}).await?;
+    eprintln!(
+        "[ieum] 새 버전 {}을 설치했어요(다음 실행부터 적용)",
+        update.version
+    );
+    Ok(Some(update.version))
+}
+
+/// 시작할 때 자동 확인. 실패는 로그만 — 팝업 없음.
 fn check_update(app: &App) {
     if cfg!(debug_assertions) {
         return;
     }
     let handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
-        use tauri_plugin_updater::UpdaterExt;
-        let result = async {
-            if let Some(update) = handle.updater()?.check().await? {
-                update.download_and_install(|_, _| {}, || {}).await?;
-                eprintln!(
-                    "[ieum] 새 버전 {}을 설치했어요(다음 실행부터 적용)",
-                    update.version
-                );
-            }
-            Ok::<_, tauri_plugin_updater::Error>(())
-        }
-        .await;
-        if let Err(e) = result {
+        if let Err(e) = install_update(&handle).await {
             eprintln!("[ieum] 업데이트 확인 실패: {e}");
         }
     });
@@ -257,6 +261,7 @@ pub fn run() {
             commands::open_system_settings,
             commands::open_provider_console,
             commands::send_test_notification,
+            commands::check_update_now,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
