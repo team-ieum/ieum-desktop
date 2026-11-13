@@ -7,18 +7,16 @@
 //!   `id_token_email`. 사용량은 Orca처럼 `agy -p /usage --output-format json`(agy 1.1.11+)이 직접 답한다 — 앱은 토큰을 쓰지 않는다.
 
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use reqwest::{Client, Url};
 use serde_json::Value;
-use tokio::sync::Mutex;
 
 use crate::plan_usage::{
-    ClaudeTokenFor, PlanUsage, PlanUsageClient, PlanWindow, TokenRead, TokenSource,
-    claude_account_email, pinned_http, usage,
+    Cache, ClaudeTokenFor, Fetched, PlanUsage, PlanUsageClient, PlanWindow, TokenRead,
+    TokenSource, claude_account_email, pinned_http, retry_after, usage,
 };
 
 pub const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -28,34 +26,6 @@ const AGY_VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 /// agy가 서버에 묻고 답하는 데 실측 6초 — HTTP 5초 상한 대신 CLI 자체 20초 + 프로세스 30초.
 const AGY_USAGE_TIMEOUT: Duration = Duration::from_secs(30);
 const AGY_ENV: &str = "AGY_CLI_DISABLE_AUTO_UPDATE=true";
-
-/// (저장 시각, 결과, 거부라 계속 쓸지) — `PlanUsageClient`와 같은 규칙.
-struct Cache {
-    ttl: Duration,
-    cell: Mutex<Option<(Instant, PlanUsage, bool)>>,
-}
-
-impl Cache {
-    fn new(ttl: Duration) -> Self {
-        Self {
-            ttl,
-            cell: Mutex::new(None),
-        }
-    }
-
-    /// `fresh`면 시간 안이라도 새로 읽는다(거부는 그대로).
-    async fn get(&self, fresh: bool, fetch: impl Future<Output = (PlanUsage, bool)>) -> PlanUsage {
-        let mut cell = self.cell.lock().await;
-        if let Some((at, u, sticky)) = cell.as_ref()
-            && (*sticky || (!fresh && at.elapsed() < self.ttl))
-        {
-            return u.clone();
-        }
-        let (u, sticky) = fetch.await;
-        *cell = Some((Instant::now(), u.clone(), sticky));
-        u
-    }
-}
 
 // ---------- Codex ----------
 
@@ -140,15 +110,16 @@ impl CodexUsageClient {
         self.cache.get(true, self.fetch()).await
     }
 
-    async fn fetch(&self) -> (PlanUsage, bool) {
+    async fn fetch(&self) -> Fetched {
         let src = self.auth.clone();
         let Some(auth) = tokio::task::spawn_blocking(move || src())
             .await
             .ok()
             .flatten()
         else {
-            return (usage("not_logged_in", Vec::new()), false);
+            return (usage("not_logged_in", Vec::new()), false, None);
         };
+        let mut wait = None;
         // 오류(reqwest 포함)는 버린다 — 헤더 값이 섞일 여지를 두지 않는다.
         let body: Option<Value> = async {
             let resp = self
@@ -160,6 +131,7 @@ impl CodexUsageClient {
                 .await
                 .ok()?;
             if !resp.status().is_success() {
+                wait = retry_after(&resp);
                 return None;
             }
             resp.json().await.ok()
@@ -170,7 +142,7 @@ impl CodexUsageClient {
             None => usage("unavailable", Vec::new()),
         };
         u.account_email = auth.email;
-        (u, false)
+        (u, false, wait)
     }
 }
 
@@ -361,13 +333,20 @@ impl AntigravityUsageClient {
         self.cache.get(false, self.fetch()).await
     }
 
-    async fn fetch(&self) -> (PlanUsage, bool) {
+    /// [새로 고침] — 시간 안이라도 새로 읽는다.
+    pub async fn refresh(&self) -> PlanUsage {
+        self.cache.get(true, self.fetch()).await
+    }
+
+    async fn fetch(&self) -> Fetched {
         let login = self.login.clone();
         let email = match tokio::task::spawn_blocking(move || login()).await {
             Ok(TokenRead::Found(e)) => e,
             // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
-            Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true),
-            Ok(TokenRead::Missing) | Err(_) => return (usage("not_logged_in", Vec::new()), false),
+            Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true, None),
+            Ok(TokenRead::Missing) | Err(_) => {
+                return (usage("not_logged_in", Vec::new()), false, None);
+            }
         };
         let run = self.run.clone();
         let mut u = match tokio::task::spawn_blocking(move || run()).await {
@@ -379,7 +358,7 @@ impl AntigravityUsageClient {
             Ok(AgyRun::Failed) | Err(_) => usage("unavailable", Vec::new()),
         };
         u.account_email = Some(email).filter(|e| !e.is_empty());
-        (u, false)
+        (u, false, None)
     }
 }
 

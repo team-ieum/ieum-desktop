@@ -1,6 +1,7 @@
 //! Claude 구독 사용량(창별 사용 비율·초기화 시각). Claude Code가 키체인에 둔 OAuth 토큰으로
 //! `api.anthropic.com`에만 묻는다. 토큰은 로그·오류·반환값 어디에도 넣지 않는다.
 
+use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -14,6 +15,10 @@ use tokio::sync::Mutex;
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const TIMEOUT: Duration = Duration::from_secs(5);
 pub const CACHE_TTL: Duration = Duration::from_secs(60);
+/// 성공값이 있으면 [새로 고침]도 이 간격 안에는 다시 묻지 않는다(연타로 429를 만들지 않게).
+const MIN_REFRESH: Duration = Duration::from_secs(10);
+/// 429 `Retry-After`를 따르되 이보다 오래 기다리진 않는다.
+const MAX_WAIT: Duration = Duration::from_secs(15 * 60);
 const WINDOWS: [&str; 3] = ["five_hour", "seven_day", "seven_day_opus"];
 
 /// 키체인 읽기 결과.
@@ -47,13 +52,82 @@ pub struct PlanUsage {
     pub account_email: Option<String>,
 }
 
+/// 조회 한 번: (결과, 허용 창 거부라 계속 쓸지, 429면 `Retry-After`).
+pub(crate) type Fetched = (PlanUsage, bool, Option<Duration>);
+
+struct Entry {
+    at: Instant,
+    usage: PlanUsage,
+    sticky: bool,
+    /// 429 — 이때까지는 [새로 고침]도 묻지 않는다.
+    wait_until: Option<Instant>,
+}
+
+/// 구독 사용량 캐시 — Claude·Codex·Antigravity 공통.
+/// 조회가 "확인 불가"로 끝나도 직전 성공값을 그대로 둔다(그 값의 `checked_at`이 기준 시각).
+pub(crate) struct Cache {
+    ttl: Duration,
+    cell: Mutex<Option<Entry>>,
+}
+
+impl Cache {
+    pub(crate) fn new(ttl: Duration) -> Self {
+        Self {
+            ttl,
+            cell: Mutex::new(None),
+        }
+    }
+
+    /// `fresh`([새로 고침])면 시간 안이라도 새로 읽는다. 거부·429 대기 중이면 그대로.
+    pub(crate) async fn get(&self, fresh: bool, fetch: impl Future<Output = Fetched>) -> PlanUsage {
+        let mut cell = self.cell.lock().await;
+        if let Some(e) = cell.as_ref() {
+            let ok = e.usage.state == "ok";
+            let keep = if fresh && !ok {
+                Duration::ZERO
+            } else if fresh {
+                MIN_REFRESH.min(self.ttl)
+            } else {
+                self.ttl
+            };
+            let waiting = e.wait_until.is_some_and(|w| Instant::now() < w);
+            if e.sticky || waiting || e.at.elapsed() < keep {
+                return e.usage.clone();
+            }
+        }
+        let (u, sticky, retry_after) = fetch.await;
+        let usage = match cell.take() {
+            Some(e) if u.state == "unavailable" && !sticky && e.usage.state == "ok" => e.usage,
+            _ => u,
+        };
+        let now = Instant::now();
+        *cell = Some(Entry {
+            at: now,
+            usage: usage.clone(),
+            sticky,
+            wait_until: retry_after.map(|d| now + d.clamp(self.ttl, MAX_WAIT)),
+        });
+        usage
+    }
+}
+
+/// 429면 `Retry-After`(초, 없으면 0 — 캐시가 최소 `ttl`로 올린다).
+pub(crate) fn retry_after(resp: &reqwest::Response) -> Option<Duration> {
+    (resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS).then(|| {
+        let secs = resp
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok()?.trim().parse().ok())
+            .unwrap_or(0);
+        Duration::from_secs(secs)
+    })
+}
+
 pub struct PlanUsageClient {
     url: Url,
     http: Client,
     token: TokenSource,
-    ttl: Duration,
-    /// (저장 시각, 결과, 거부라 계속 쓸지)
-    cache: Mutex<Option<(Instant, PlanUsage, bool)>>,
+    cache: Cache,
 }
 
 impl PlanUsageClient {
@@ -68,41 +142,31 @@ impl PlanUsageClient {
             url,
             http,
             token,
-            ttl,
-            cache: Mutex::new(None),
+            cache: Cache::new(ttl),
         })
     }
 
     /// `ttl` 안에 다시 부르면 저장해 둔 결과(키체인·네트워크를 건드리지 않음). 키체인 거부는 계속 쓴다.
     pub async fn get(&self) -> PlanUsage {
-        self.load(false).await
+        self.cache.get(false, self.fetch()).await
     }
 
-    /// 저장해 둔 결과를 건너뛰고 새로 읽는다(계정 추가 [확인]). 거부는 그대로 다시 묻지 않는다.
+    /// 저장해 둔 결과를 건너뛰고 새로 읽는다([새로 고침]·계정 추가 [확인]). 거부·429 대기는 그대로.
     pub async fn refresh(&self) -> PlanUsage {
-        self.load(true).await
+        self.cache.get(true, self.fetch()).await
     }
 
-    async fn load(&self, fresh: bool) -> PlanUsage {
-        let mut cache = self.cache.lock().await;
-        if let Some((at, u, sticky)) = cache.as_ref()
-            && (*sticky || (!fresh && at.elapsed() < self.ttl))
-        {
-            return u.clone();
-        }
-        let (u, sticky) = self.fetch().await;
-        *cache = Some((Instant::now(), u.clone(), sticky));
-        u
-    }
-
-    async fn fetch(&self) -> (PlanUsage, bool) {
+    async fn fetch(&self) -> Fetched {
         let token = self.token.clone();
         let token = match tokio::task::spawn_blocking(move || token()).await {
             Ok(TokenRead::Found(t)) => t,
             // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
-            Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true),
-            Ok(TokenRead::Missing) | Err(_) => return (usage("not_logged_in", Vec::new()), false),
+            Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true, None),
+            Ok(TokenRead::Missing) | Err(_) => {
+                return (usage("not_logged_in", Vec::new()), false, None);
+            }
         };
+        let mut wait = None;
         // 오류(reqwest 포함)는 버린다 — 헤더 값이 섞일 여지를 두지 않는다.
         let body: Option<Value> = async {
             let resp = self
@@ -114,6 +178,7 @@ impl PlanUsageClient {
                 .await
                 .ok()?;
             if !resp.status().is_success() {
+                wait = retry_after(&resp);
                 return None;
             }
             resp.json().await.ok()
@@ -123,7 +188,7 @@ impl PlanUsageClient {
             Some(w) => usage("ok", w),
             None => usage("unavailable", Vec::new()),
         };
-        (u, false)
+        (u, false, wait)
     }
 }
 

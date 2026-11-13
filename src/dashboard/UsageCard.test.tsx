@@ -138,6 +138,17 @@ test("subscription_usage_fetched_once_for_bar_and_dashboard", async () => {
   expect(agy).toHaveBeenCalledTimes(1);
 });
 
+test("dashboard_subscription_refresh_asks_fresh", async () => {
+  const { sub, agy } = mockSubs();
+  await mountCard();
+  const subs = within(screen.getByRole("region", { name: "구독 사용량" }));
+  expect(subs.getByText("지금 업데이트됨")).toBeTruthy();
+  expect(sub).toHaveBeenLastCalledWith("claude", "system", false);
+  await act(async () => fireEvent.click(subs.getByRole("button", { name: "새로 고침" })));
+  expect(sub).toHaveBeenLastCalledWith("claude", "system", true);
+  expect(agy).toHaveBeenLastCalledWith(true);
+});
+
 const plan = (pct: number): PlanUsage => ({ ...OK, windows: [{ kind: "session", usedPct: pct, resetsAt: inHours(4) }], accountEmail: "me@openai.dev" });
 const subRegion = () => within(screen.getByRole("region", { name: "구독 사용량" }));
 const picker = () => subRegion().getByRole("button", { name: /^구독 사용량:/ });

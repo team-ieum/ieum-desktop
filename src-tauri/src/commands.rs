@@ -271,18 +271,28 @@ pub async fn subscription_usage(
     usage: State<'_, SubscriptionUsage>,
     kind: String,
     id: String,
+    fresh: Option<bool>,
 ) -> Result<PlanUsage, String> {
     let k = kind.clone();
     let dir = with_credentials(&active, move |c| c.cli_dir(&k, &id)).await?;
-    usage.get(&kind, dir).await
+    if fresh == Some(true) {
+        usage.refresh(&kind, dir).await
+    } else {
+        usage.get(&kind, dir).await
+    }
 }
 
 /// Antigravity 구독 연결 상태. 키체인 읽기·`agy` 실행은 안에서 `spawn_blocking`.
 #[tauri::command]
 pub async fn antigravity_plan_usage(
     client: State<'_, AntigravityUsageClient>,
+    fresh: Option<bool>,
 ) -> Result<PlanUsage, String> {
-    Ok(client.get().await)
+    Ok(if fresh == Some(true) {
+        client.refresh().await
+    } else {
+        client.get().await
+    })
 }
 
 /// "웹에서 수정하기" 주소 — 허용된 서버 주소 + `/main`.

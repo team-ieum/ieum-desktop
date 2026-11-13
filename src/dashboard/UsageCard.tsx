@@ -1,7 +1,8 @@
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type UsageRange, type UsageSummary } from "../api";
 import { ProviderLogo } from "../assets/providers";
+import { formatRelative } from "./format";
 import { t } from "../i18n";
 import { PROVIDERS, type SubId } from "../screens/settings/AiPane";
 import { connectedSubs } from "../shell/UsagePopover";
@@ -19,7 +20,7 @@ const PICK_KEY = "ieum.dashboardSub";
 export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; onUsage: () => void; onAccounts: () => void }) {
   const [range, setRange] = useState<UsageRange>("today");
   const view = useCredentials((s) => s.view);
-  const { plans } = useDefaultPlans(view);
+  const { plans, refreshNow } = useDefaultPlans(view);
   const [picked, setPicked] = useState<string | null>(() => {
     try {
       return localStorage.getItem(PICK_KEY);
@@ -157,6 +158,15 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
         <section aria-label={t("usage.subSection")} className="px-5 pt-3 pb-4">
           <div className="mb-3 flex h-8 items-center justify-between gap-3">
             <h4 className="shrink-0 whitespace-nowrap typo-caption1_semibold tracking-[.04em] text-main-gray">{t("usage.subSection")}</h4>
+            <button
+              type="button"
+              aria-label={t("usage.refresh")}
+              title={t("usage.refresh")}
+              className="mr-auto -ml-2 grid size-7 shrink-0 place-items-center rounded-lg text-neutral-500 hover:bg-neutral-100"
+              onClick={refreshNow}
+            >
+              <RefreshCw className="size-3.5" aria-hidden="true" />
+            </button>
             {subs.length > 1 && current && (
               <Dropdown
                 label={t("usage.subSection")}
@@ -177,6 +187,7 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
                 <ProviderLogo id={current.sub.logo} size={18} />
                 <span className="typo-body3_semibold text-main-deep-blue">{current.sub.name}</span>
                 {current.plan.accountEmail && <span className="min-w-0 truncate typo-caption1_regular text-neutral-500">{current.plan.accountEmail}</span>}
+                <span className="ml-auto shrink-0 typo-caption2_regular text-neutral-400">{t("usage.updated").replace("{time}", formatRelative(current.plan.checkedAt))}</span>
               </div>
               <div className="flex flex-col gap-3">
                 {current.plan.windows.map((w) => (

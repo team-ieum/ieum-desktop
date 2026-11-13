@@ -417,7 +417,8 @@ export const api = {
   usageSummary: (range: UsageRange) => invoke<UsageSummary>("usage_summary", { range }),
   usageReport: () => invoke<UsageReport>("usage_report"),
   /** 구독 계정 하나의 연결 상태·사용량(계정별 60초 캐시). */
-  subscriptionUsage: (kind: SubKind, id: string) => invoke<PlanUsage>("subscription_usage", { kind, id }),
+  /** `fresh` = [새로 고침] — 60초 캐시를 건너뛴다(429 대기 중·성공 직후 10초는 그대로). */
+  subscriptionUsage: (kind: SubKind, id: string, fresh = false) => invoke<PlanUsage>("subscription_usage", { kind, id, fresh }),
   /** 계정 폴더를 만들고 로그인 명령을 준다(확인 전엔 목록에 안 보임). */
   beginCliAccount: (kind: SubKind, label: string) => invoke<CliAccountBegin>("begin_cli_account", { kind, label }),
   /** 그 계정 폴더로 로그인을 확인 — 이메일이 보이면 목록에 추가, 아니면 `not_logged_in` 그대로. */
@@ -425,5 +426,5 @@ export const api = {
   cancelCliAccount: (kind: SubKind, id: string) => invoke<void>("cancel_cli_account", { kind, id }),
   /** 이 Mac의 CLI 로그인(`system`)을 IEUM에서 숨기기·되살리기 — CLI 로그아웃은 하지 않는다. */
   setSystemHidden: (kind: SubKind, hidden: boolean) => invoke<void>("set_system_hidden", { kind, hidden }),
-  antigravityPlanUsage: () => invoke<PlanUsage>("antigravity_plan_usage"),
+  antigravityPlanUsage: (fresh = false) => invoke<PlanUsage>("antigravity_plan_usage", { fresh }),
 };

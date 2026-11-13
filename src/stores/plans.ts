@@ -7,13 +7,13 @@ import { accountsOf, planKey, type Plans, type SubId } from "../screens/settings
 export const usePlanStore = create<{ plans: Plans }>(() => ({ plans: {} }));
 const pending = new Set<string>();
 
-/** 키를 읽는다. 읽는 중인 키는 건너뛰고, force가 아니면 이미 읽은 키도 건너뛴다. */
-function loadPlans(sig: string, force = false) {
+/** 키를 읽는다. 읽는 중인 키는 건너뛰고, force가 아니면 이미 읽은 키도 건너뛴다. fresh = [새로 고침](앱 캐시도 건너뜀). */
+function loadPlans(sig: string, force = false, fresh = false) {
   for (const key of sig.split(",")) {
     if (pending.has(key) || (!force && key in usePlanStore.getState().plans)) continue;
     pending.add(key);
     const [k, id] = key.split(":") as [SubId, string];
-    (k === "antigravity" ? api.antigravityPlanUsage() : api.subscriptionUsage(k, id))
+    (k === "antigravity" ? api.antigravityPlanUsage(fresh) : api.subscriptionUsage(k, id, fresh))
       .catch(() => null)
       .then((u) => {
         pending.delete(key);
@@ -34,5 +34,6 @@ export function useDefaultPlans(view: CredentialsView | null | undefined) {
   const plans = usePlanStore((s) => s.plans);
   useEffect(() => loadPlans(sig), [sig]);
   const refresh = useCallback(() => loadPlans(sig, true), [sig]);
-  return { plans, refresh };
+  const refreshNow = useCallback(() => loadPlans(sig, true, true), [sig]);
+  return { plans, refresh, refreshNow };
 }

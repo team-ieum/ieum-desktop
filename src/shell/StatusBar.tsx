@@ -14,7 +14,7 @@ const REFRESH_MS = 60_000;
 /** 창 맨 아래 줄 — "사용" + 구독 회사마다 [로고 N% 남은 시간](가장 빡빡한 창). 구독이 없으면 오늘 API 예상 금액. 누르면 사용량 팝오버. */
 export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSettings: () => void }) {
   const view = useCredentials((s) => s.view);
-  const { plans, refresh } = useDefaultPlans(view);
+  const { plans, refresh, refreshNow } = useDefaultPlans(view);
   // undefined = 아직, null = 못 읽음
   const [today, setToday] = useState<UsageSummary | null | undefined>(undefined);
   const [open, setOpen] = useState(false);
@@ -98,7 +98,7 @@ export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSett
         title={t("usage.refresh")}
         className="grid size-6 place-items-center rounded-md text-main-deep-blue/70 hover:bg-white/70"
         onClick={() => {
-          refresh();
+          refreshNow();
           void loadToday();
         }}
       >

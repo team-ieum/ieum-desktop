@@ -69,12 +69,12 @@ export function usePlans(view: CredentialsView | null | undefined, onlyDefault =
     ),
     planKey("antigravity"),
   ].join(",");
-  const refresh = useCallback(
-    (only?: SubId) => {
+  const load = useCallback(
+    (only?: SubId, fresh = false) => {
       for (const key of sig.split(",")) {
         const [k, id] = key.split(":") as [SubId, string];
         if (only && k !== only) continue;
-        (k === "antigravity" ? api.antigravityPlanUsage() : api.subscriptionUsage(k, id)).then(
+        (k === "antigravity" ? api.antigravityPlanUsage(fresh) : api.subscriptionUsage(k, id, fresh)).then(
           (u) => setPlans((p) => ({ ...p, [key]: u })),
           () => setPlans((p) => ({ ...p, [key]: null })),
         );
@@ -82,7 +82,9 @@ export function usePlans(view: CredentialsView | null | undefined, onlyDefault =
     },
     [sig],
   );
-  useEffect(() => refresh(), [refresh]);
+  useEffect(() => load(), [load]);
+  /** [새로 고침] — 앱 캐시도 건너뛴다. */
+  const refresh = useCallback((only?: SubId) => load(only, true), [load]);
   return { plans, refresh };
 }
 

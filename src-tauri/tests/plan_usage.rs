@@ -49,8 +49,9 @@ async fn serve(route: impl Fn(&Req) -> (u16, String) + Send + Sync + 'static) ->
                 };
                 let (status, body) = route(&req);
                 seen.lock().unwrap().push(req);
+                let wait = if status == 429 { "retry-after: 30\r\n" } else { "" };
                 let resp = format!(
-                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n{wait}content-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = sock.write_all(resp.as_bytes()).await;
@@ -170,6 +171,57 @@ async fn plan_usage_cached_60s() {
     let b = c.get().await;
     assert_eq!(log.lock().unwrap().len(), 1);
     assert_eq!(a.checked_at, b.checked_at);
+}
+
+/// 호출 순서대로 상태를 돌려주는 서버 + 호출 수.
+async fn sequence(statuses: &'static [u16]) -> (String, Arc<AtomicUsize>) {
+    let n = Arc::new(AtomicUsize::new(0));
+    let seen = n.clone();
+    let (url, _) = serve(move |_| {
+        let i = seen.fetch_add(1, Ordering::SeqCst);
+        let status = statuses[i.min(statuses.len() - 1)];
+        (status, if status == 200 { sample().to_string() } else { "{}".into() })
+    })
+    .await;
+    (url, n)
+}
+
+#[tokio::test]
+async fn plan_usage_failure_keeps_last_ok() {
+    let (url, n) = sequence(&[200, 500, 429]).await;
+    let c = PlanUsageClient::with_url(&url, token(Some(TOKEN)), Duration::ZERO).unwrap();
+    let first = c.get().await;
+    assert_eq!(first.state, "ok");
+    for _ in 0..2 {
+        let u = c.get().await;
+        assert_eq!(u.state, "ok");
+        // 기준 시각은 마지막 성공 그대로.
+        assert_eq!(u.checked_at, first.checked_at);
+    }
+    assert_eq!(n.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn plan_usage_429_waits_even_on_refresh() {
+    let (url, n) = sequence(&[200, 429, 200]).await;
+    let c = PlanUsageClient::with_url(&url, token(Some(TOKEN)), Duration::ZERO).unwrap();
+    c.get().await;
+    c.get().await; // 429, retry-after 30
+    assert_eq!(c.refresh().await.state, "ok");
+    assert_eq!(n.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn plan_usage_refresh_skips_ttl_but_not_right_after_ok() {
+    // 실패 뒤 [새로 고침]은 바로 묻는다(계정 추가 [확인]).
+    let (url, n) = sequence(&[500, 200]).await;
+    let c = client(&url, Some(TOKEN));
+    assert_eq!(c.get().await.state, "unavailable");
+    assert_eq!(c.refresh().await.state, "ok");
+    assert_eq!(n.load(Ordering::SeqCst), 2);
+    // 성공 직후 연타는 묻지 않는다.
+    c.refresh().await;
+    assert_eq!(n.load(Ordering::SeqCst), 2);
 }
 
 #[test]
