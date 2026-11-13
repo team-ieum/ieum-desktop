@@ -6,6 +6,7 @@ import { setLang } from "../i18n";
 import { StatusBar } from "../shell/StatusBar";
 import { useCredentials } from "../stores/credentials";
 import { usePlanStore } from "../stores/plans";
+import { useWeb } from "../stores/web";
 import { UsageCard } from "./UsageCard";
 
 const SUMMARY: UsageSummary = {
@@ -244,4 +245,15 @@ test("usage_card_empty_when_unavailable", async () => {
     render(<UsageCard hidden={false} onUsage={() => {}} onAccounts={() => {}} />);
   });
   expect(screen.getByText("사용량을 아직 불러오지 못했어요.")).toBeTruthy();
+});
+
+test("plans_cleared_when_ieum_account_changes", async () => {
+  const { sub } = mockSubs();
+  useWeb.setState({ account: { email: "a@ieum.dev", serverUrl: "https://x.invalid" } as never });
+  await mountCard();
+  expect(sub).toHaveBeenCalledTimes(1);
+  // 로그아웃 → 이전 계정 값을 비우고 다시 읽는다.
+  sub.mockClear();
+  await act(async () => useWeb.setState({ account: null }));
+  expect(sub).toHaveBeenCalledTimes(1);
 });

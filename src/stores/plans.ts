@@ -2,6 +2,7 @@ import { useCallback, useEffect } from "react";
 import { create } from "zustand";
 import { api, type CredentialsView } from "../api";
 import { accountsOf, planKey, type Plans, type SubId } from "../screens/settings/AiPane";
+import { useWeb } from "./web";
 
 /** 구독 회사마다 기본 계정 사용량 — 상태 줄과 대시보드가 같이 본다. 키 없음 = 읽는 중, null = 못 읽음. */
 export const usePlanStore = create<{ plans: Plans }>(() => ({ plans: {} }));
@@ -32,7 +33,11 @@ function watchPlans() {
     });
 }
 
+/** 마지막으로 본 이음 계정 — 바뀌면(로그아웃·다른 계정) 이전 계정의 사용량을 비운다. */
+let lastWho: string | undefined;
+
 export function useDefaultPlans(view: CredentialsView | null | undefined) {
+  const who = useWeb((s) => s.account?.email ?? "");
   const sig = [
     ...(["claude", "codex"] as const).flatMap((k) =>
       accountsOf(view, k)
@@ -44,8 +49,10 @@ export function useDefaultPlans(view: CredentialsView | null | undefined) {
   const plans = usePlanStore((s) => s.plans);
   useEffect(() => {
     watchPlans();
+    if (lastWho !== undefined && lastWho !== who) usePlanStore.setState({ plans: {} });
+    lastWho = who;
     loadPlans(sig);
-  }, [sig]);
+  }, [sig, who]);
   const refresh = useCallback(() => loadPlans(sig, true), [sig]);
   const refreshNow = useCallback(() => loadPlans(sig, true, true), [sig]);
   return { plans, refresh, refreshNow };
