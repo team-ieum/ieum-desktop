@@ -22,6 +22,8 @@ beforeAll(() => {
   vi.spyOn(api, "getSettings").mockResolvedValue({ language: "ko", autostart: false, firstRunDone: true, serverUrl: "", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true });
   vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
   vi.spyOn(api, "onOpenTarget").mockResolvedValue(() => {});
+  vi.spyOn(api, "onAccountSuggest").mockResolvedValue(() => {});
+  vi.spyOn(api, "takeAccountSuggestion").mockResolvedValue(null);
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);
@@ -194,4 +196,50 @@ test("recent_web_item_opens_that_workflow", async () => {
   expect(get).toHaveBeenCalledWith(id);
   expect(screen.getByTestId("crumb").textContent).toBe("웹 이음");
   expect(screen.getByRole("heading", { name: "웹 흐름" })).toBeTruthy();
+});
+
+const SUGGEST = {
+  company: "claude" as const,
+  fromId: "system",
+  fromLabel: "이 Mac의 로그인",
+  toId: "abcd",
+  toLabel: "회사",
+  toUsedPct: 12,
+  windowKind: "five_hour",
+  resetsAt: new Date(Date.now() + 3 * 3600_000).toISOString(),
+};
+
+test("suggest_banner_from_event", async () => {
+  let push!: (s: typeof SUGGEST) => void;
+  vi.mocked(api.onAccountSuggest).mockImplementationOnce(async (cb) => {
+    push = cb;
+    return () => {};
+  });
+  const set = vi.spyOn(api, "setDefaultCredential").mockResolvedValue();
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => push(SUGGEST));
+  const banner = screen.getByText(/바꿔서 쓸까요/).closest<HTMLElement>('[role="status"]')!;
+  expect(banner.textContent).toContain("회사(12% 사용)으로 바꿔서 쓸까요?");
+  expect(banner.textContent).toContain("세션 100%");
+  await act(async () => fireEvent.click(within(banner).getByRole("button", { name: "바꾸기" })));
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.textContent).toContain("이 Mac의 로그인 → 회사 (12% 사용)");
+  await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "바꾸기" })));
+  expect(set).toHaveBeenCalledWith("claude", "abcd");
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+});
+
+test("suggest_banner_on_focus", async () => {
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce(SUGGEST);
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(screen.getByText(/바꿔서 쓸까요/)).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "나중에" })));
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
 });

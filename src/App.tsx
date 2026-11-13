@@ -1,6 +1,6 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { useEffect, useState } from "react";
-import { api, type WebWorkflowSummary } from "./api";
+import { api, type Suggestion, type WebWorkflowSummary } from "./api";
 import { AuthScreen } from "./auth/AuthScreen";
 import { t } from "./i18n";
 import { Onboarding } from "./onboarding/Onboarding";
@@ -20,6 +20,8 @@ import { subscribeExecEvents } from "./stores/runs";
 import { useSettings } from "./stores/settings";
 import { useWeb } from "./stores/web";
 import { useWorkflows } from "./stores/workflows";
+import { SuggestBanner } from "./usage/SuggestBanner";
+import { SwitchAccountDialog } from "./usage/SwitchAccount";
 
 export default function App() {
   const lang = useSettings((s) => s.lang);
@@ -73,9 +75,28 @@ export default function App() {
   const leave = (go: () => void) => (dirty && askDiscard ? setPending(() => go) : go());
   const newCanvas = () => leave(() => openEditor(null));
 
+  // 기본 계정 한도 도달 → 다른 계정 권하기 띠. 감시 이벤트, 또는 창이 다시 앞에 올 때·알림 클릭 때 남은 제안을 가져온다.
+  // "나중에"는 띠만 닫는다 — 같은 제안을 다시 띄우지 않는 건 Rust가 기억한다.
+  const [suggest, setSuggest] = useState<Suggestion | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const takeSuggest = () =>
+    void api.takeAccountSuggestion().then(
+      (s) => s && setSuggest(s),
+      () => {},
+    );
+  useEffect(() => {
+    const un = api.onAccountSuggest(setSuggest).catch(() => () => {});
+    window.addEventListener("focus", takeSuggest);
+    return () => {
+      void un.then((f) => f());
+      window.removeEventListener("focus", takeSuggest);
+    };
+  }, []);
+
   // 시스템 알림 클릭 → 그 실행 상세(대시보드와 같은 기록 화면) 또는 실행 기록.
   useEffect(() => {
     const un = api.onOpenTarget((t) => {
+      if (t.kind === "suggest") return takeSuggest();
       const go = () => setView(t.kind === "run" ? { page: "history", run: t.runId } : { page: "history" });
       if (dirty && askDiscard) setPending(() => go);
       else go();
@@ -144,10 +165,24 @@ export default function App() {
     />
   );
 
+  const suggestBanner = suggest && <SuggestBanner s={suggest} onSwitch={() => setSwitching(true)} onLater={() => setSuggest(null)} />;
+  const switchDialog = suggest && switching && (
+    <SwitchAccountDialog
+      kind={suggest.company}
+      fromName={suggest.fromLabel}
+      to={{ id: suggest.toId, name: suggest.toLabel, usedPct: Math.round(suggest.toUsedPct) }}
+      onClose={() => {
+        setSwitching(false);
+        setSuggest(null);
+      }}
+    />
+  );
+
   // 설정은 셸 사이드바 대신 설정 전용 사이드바(창 신호등 자리 포함). 머리줄은 본문 위.
   if (view.page === "settings")
     return (
       <div key={lang} className="flex h-full flex-col">
+        {suggestBanner}
         <SettingsShell
           key={"section" in view ? view.section : ""}
           onBack={() => setView(back)}
@@ -164,12 +199,14 @@ export default function App() {
         />
         <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
         {searchDialog}
+        {switchDialog}
       </div>
     );
 
   return (
     // 언어가 바뀌면 화면 전체를 다시 그린다.
     <div key={lang} className="flex h-full flex-col">
+      {suggestBanner}
       <div className="flex min-h-0 flex-1">
         {!collapsed && (
           <Sidebar
@@ -237,6 +274,7 @@ export default function App() {
       </div>
       <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
       {searchDialog}
+      {switchDialog}
     </div>
   );
 }

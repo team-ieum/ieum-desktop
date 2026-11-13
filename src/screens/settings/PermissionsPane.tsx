@@ -5,11 +5,12 @@ import { useWeb } from "../../stores/web";
 import { Switch, useSettingsUpdate } from "./GeneralPane";
 import { GHOST, Row } from "./Row";
 
-type NotifyKey = "notifyManualStart" | "notifyManualEnd" | "notifyWatchEnd";
+type NotifyKey = "notifyManualStart" | "notifyManualEnd" | "notifyWatchEnd" | "notifyAccountSuggest";
 const NOTIFY: { key: NotifyKey; label: Key }[] = [
   { key: "notifyManualStart", label: "settings.notifyManualStart" },
   { key: "notifyManualEnd", label: "settings.notifyManualEnd" },
   { key: "notifyWatchEnd", label: "settings.notifyWatchEnd" },
+  { key: "notifyAccountSuggest", label: "settings.notifyAccountSuggest" },
 ];
 
 /** 버튼 오류를 줄 아래에 보여주는 설정 한 칸 바꾸기. */
@@ -33,7 +34,7 @@ export const notificationTexts = () => [
   ...NOTIFY.map((n) => t(n.label)),
 ];
 
-/** 알림 — 테스트 알림·시스템 설정 알림 열기, 알림 토글 3개. */
+/** 알림 — 테스트 알림·시스템 설정 알림 열기, 알림 토글. */
 export function NotificationsPane() {
   const { settings, run, toggle, error } = useRun();
   return (
