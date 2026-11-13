@@ -191,7 +191,7 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
               </div>
               <div className="flex flex-col gap-3">
                 {current.plan.windows.map((w) => (
-                  <WindowMeter key={w.kind} w={w} now={now} inline />
+                  <WindowMeter key={`${w.kind}:${w.label ?? ""}`} w={w} now={now} inline />
                 ))}
               </div>
             </div>

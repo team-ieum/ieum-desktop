@@ -131,7 +131,10 @@ async fn plan_usage_reads_model_scoped_weekly() {
     body["limits"] = json!([
         {"kind": "weekly_scoped", "percent": 7.0, "resets_at": "2026-11-16T03:00:00+00:00",
          "scope": {"model": {"display_name": "Fable"}}},
-        {"kind": "weekly", "percent": 3.0}
+        {"kind": "weekly", "percent": 3.0},
+        // 모델 이름이 없으면 뺀다.
+        {"kind": "weekly_scoped", "percent": 9.0, "resets_at": "2026-11-16T03:00:00+00:00",
+         "scope": {"model": {}}}
     ]);
     let got = windows_of(body).await;
     assert_eq!(got.len(), 3, "{got:?}");

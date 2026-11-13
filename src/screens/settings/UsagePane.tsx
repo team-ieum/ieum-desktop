@@ -119,7 +119,7 @@ function ProviderCard({ p, plan }: { p: ProviderReport; plan: PlanUsage | null |
       {okPlan(plan) && (
         <div className="flex flex-col gap-2 border-t border-neutral-100 pt-3">
           {plan.windows.map((w) => (
-            <WindowMeter key={w.kind} w={w} now={now} />
+            <WindowMeter key={`${w.kind}:${w.label ?? ""}`} w={w} now={now} />
           ))}
         </div>
       )}
@@ -274,7 +274,7 @@ function ProviderDetail({ p, report, view, plans, onRefresh }: { p: ProviderRepo
                   {a.name}
                 </span>
                 {a.plan!.windows.map((w) => (
-                  <WindowMeter key={w.kind} w={w} now={now} inline />
+                  <WindowMeter key={`${w.kind}:${w.label ?? ""}`} w={w} now={now} inline />
                 ))}
               </li>
             ))}

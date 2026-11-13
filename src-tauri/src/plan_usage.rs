@@ -260,12 +260,16 @@ fn parse(body: &Value) -> Option<Vec<PlanWindow>> {
         .collect();
     let scoped = body["limits"].as_array().into_iter().flatten();
     for l in scoped.filter(|l| l["kind"] == "weekly_scoped") {
-        let name = l["scope"]["model"]["display_name"]
+        // 모델 이름이 없으면 무엇의 한도인지 보일 수 없어 뺀다.
+        let Some(name) = l["scope"]["model"]["display_name"]
             .as_str()
-            .filter(|n| !n.is_empty());
+            .filter(|n| !n.is_empty())
+        else {
+            continue;
+        };
         let w = window(
             "seven_day_model",
-            name,
+            Some(name),
             l["percent"].as_f64(),
             l["resets_at"].as_str(),
         );

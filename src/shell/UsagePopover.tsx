@@ -49,7 +49,7 @@ function Flyout({ s, plan, view, plans, manage, onSettings }: { s: Sub; plan: Pl
       </div>
       <div className="flex flex-col gap-3 rounded-lg bg-main-light-blue/40 p-3">
         {plan.windows.map((w) => (
-          <WindowMeter key={w.kind} w={w} now={now} />
+          <WindowMeter key={`${w.kind}:${w.label ?? ""}`} w={w} now={now} />
         ))}
       </div>
       <div className="mt-3 mb-1 px-1 typo-caption2_semibold text-main-gray">{listName}</div>
