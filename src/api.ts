@@ -1,5 +1,5 @@
 // Tauri 명령 타입 래퍼 — 타입은 러스트 직렬화(camelCase)와 1:1.
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 type Obj = Record<string, unknown>;
@@ -371,6 +371,9 @@ export interface PendingFinish {
   actions: { nodeId: string; event: string; label: string; target: string | null }[];
 }
 
+/** 앱 안 터미널에 띄울 수 있는 CLI. */
+export type TermTool = "claude" | "codex" | "agy";
+
 export interface ChatFile {
   messages: { role: "user" | "assistant"; text: string; at: string }[];
   state: {
@@ -473,4 +476,26 @@ export const api = {
     listen<{ id: string; name: string }>("finish-pending", (e) => cb(e.payload)),
   onTestUndoFailed: (cb: (p: { id: string; runId: string }) => void): Promise<UnlistenFn> =>
     listen<{ id: string; runId: string }>("test-undo-failed", (e) => cb(e.payload)),
+  // ── 캔버스 채팅 C(터미널) — 화면은 도구 이름만 넘긴다. 실행 줄은 Rust가 만든다. ──
+  /** 쓸 수 있는 CLI(설치 + 로그인)와 이 워크플로우에 살아 있는 세션. */
+  termTools: (workflowId: string) =>
+    invoke<{ tools: TermTool[]; running: TermTool | null }>("term_tools", { workflowId }),
+  /** 터미널을 띄우거나 살아 있는 세션에 붙는다. 출력은 `onData`로 온다. */
+  termSpawn: (workflowId: string, tool: TermTool, cols: number, rows: number, onData: (bytes: Uint8Array) => void) => {
+    const ch = new Channel<ArrayBuffer>();
+    ch.onmessage = (b) => onData(new Uint8Array(b));
+    return invoke<{ tool: TermTool; attached: boolean; skillInstalled: boolean }>("term_spawn", {
+      workflowId,
+      tool,
+      cols,
+      rows,
+      onData: ch,
+    });
+  },
+  termWrite: (workflowId: string, data: string) => invoke<void>("term_write", { workflowId, data }),
+  termResize: (workflowId: string, cols: number, rows: number) =>
+    invoke<void>("term_resize", { workflowId, cols, rows }),
+  termKill: (workflowId: string) => invoke<void>("term_kill", { workflowId }),
+  onTermExit: (cb: (p: { workflowId: string }) => void): Promise<UnlistenFn> =>
+    listen<{ workflowId: string }>("term-exit", (e) => cb(e.payload)),
 };
