@@ -26,6 +26,7 @@ const NAV_OFF = "font-normal text-main-deep-blue hover:bg-white/50 [&_svg]:opaci
 /** 설정 페이지 — 셸 사이드바 대신 설정 전용 사이드바(돌아가기·검색·묶음 메뉴)와 본문. */
 export function SettingsShell({ onBack, version, initial = "account" }: { onBack: () => void; version: string; initial?: Id }) {
   const account = useWeb((s) => s.account);
+  const expired = useWeb((s) => s.expired);
   const [providers, setProviders] = useState<Providers | null>(null);
   const view = useCredentials((s) => s.view);
   const keychain = view ? keyStates(view) : null;
@@ -62,7 +63,7 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
   // 줄 이름·설명·버튼 문구 — Row가 숨기는 기준과 같다. 메뉴 이름이 맞으면 그 페이지의 줄은 다 보이고,
   // 줄이 하나도 안 남는 메뉴는 목록에서 뺀다.
   const texts: Record<Id, string[]> = {
-    account: account ? [account.email, `${t("settings.loggedInAs")} · ${serverHost(account.serverUrl)}`, t("settings.logout")] : [],
+    account: account ? [account.email, `${t("settings.loggedInAs")} · ${serverHost(account.serverUrl)}`, t("settings.logout"), ...(expired ? [t("settings.sessionExpired"), t("settings.reloginHint"), t("settings.relogin")] : [])] : [],
     general: [t("settings.language"), t("settings.lang.system"), t("settings.lang.ko"), t("settings.lang.en")],
     permissions: [
       t("settings.filesHint"),

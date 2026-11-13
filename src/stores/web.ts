@@ -99,8 +99,11 @@ export function webErrorText(e: unknown): string {
 
 interface WebState {
   account: AccountId | null;
-  /** 로그인 만료(`AUTH_EXPIRED`) — 관문을 띄우지만 계정·감시는 그대로. */
+  /** 로그인 만료(`AUTH_EXPIRED`) — 앱은 계속 쓰고 계정·감시도 그대로, 이음 클라우드만 막힌다. */
   expired: boolean;
+  /** 만료 뒤 [다시 로그인]으로 관문을 연 상태 — 취소하면 앱으로 돌아간다. */
+  relogin: boolean;
+  setRelogin: (v: boolean) => void;
   /** 서버에 안 닿는다(`NETWORK`·`SERVER`) — 관문으로 보내지 않는다. */
   offline: boolean;
   load: () => Promise<void>;
@@ -114,7 +117,9 @@ interface WebState {
 export const useWeb = create<WebState>((set, get) => ({
   account: null,
   expired: false,
+  relogin: false,
   offline: false,
+  setRelogin: (relogin) => set({ relogin }),
   load: async () => {
     try {
       set({ account: await api.currentAccount() });
@@ -125,13 +130,13 @@ export const useWeb = create<WebState>((set, get) => ({
   },
   login: async (email, password) => {
     const a = await api.webLogin(email, password);
-    set({ account: { email: a.email, serverUrl: a.serverUrl }, expired: false, offline: false });
+    set({ account: { email: a.email, serverUrl: a.serverUrl }, expired: false, relogin: false, offline: false });
   },
   logout: async () => {
     try {
       await api.webLogout();
     } finally {
-      set({ account: null, expired: false });
+      set({ account: null, expired: false, relogin: false });
     }
   },
   guard: (p) =>

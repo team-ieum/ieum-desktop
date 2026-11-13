@@ -34,6 +34,8 @@ export default function App() {
   }
   const loadAccount = useWeb((s) => s.load);
   const expired = useWeb((s) => s.expired);
+  const relogin = useWeb((s) => s.relogin);
+  const setRelogin = useWeb((s) => s.setRelogin);
   const guard = useWeb((s) => s.guard);
   const [ready, setReady] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
@@ -49,9 +51,9 @@ export default function App() {
     getVersion().then(setVersion, () => {});
   }, [loadSettings, loadAccount]);
 
-  // 관문을 지나면(로그인한 계정의) 최근 작업을 읽는다. 웹 몫은 못 불러오면 내 PC만 —
-  // 만료면 guard가 관문으로, 오프라인이면 그대로.
-  const gated = account === null || expired;
+  // 관문을 지나면(로그인한 계정의) 최근 작업을 읽는다. 웹 몫은 못 불러오면 내 PC만.
+  // 만료돼도 앱은 그대로 쓴다 — 관문은 [다시 로그인]을 눌렀을 때만(설정 이음 계정·대시보드).
+  const gated = account === null || (expired && relogin);
   const onboarding = useSettings((s) => s.settings?.onboardingDone === false);
   useEffect(() => {
     if (gated) return setWeb([]);
@@ -108,11 +110,11 @@ export default function App() {
 
   if (!ready) return null;
 
-  // 관문: 로그인 전·만료면 로그인 화면만(만료면 이메일을 채운다). 오프라인은 관문으로 보내지 않는다.
+  // 관문: 로그인 전이거나 만료 뒤 다시 로그인할 때(이메일을 채우고 취소로 돌아갈 수 있다).
   if (gated)
     return (
       <div key={lang} className="h-full">
-        <AuthScreen key={account?.email ?? ""} initialEmail={account?.email} />
+        <AuthScreen key={account?.email ?? ""} initialEmail={account?.email} onCancel={account ? () => setRelogin(false) : undefined} />
       </div>
     );
 

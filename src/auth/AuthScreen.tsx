@@ -1,5 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { ArrowRightLeft, ChevronDown, ChevronUp, Globe, Laptop, Server } from "lucide-react";
+import { ArrowLeft, ArrowRightLeft, ChevronDown, ChevronUp, Globe, Laptop, Server } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import symbol from "../assets/symbol.png";
 import { t } from "../i18n";
@@ -83,7 +83,7 @@ function ServerLink() {
 }
 
 /** 로그인 관문(시안 B) — 왼쪽 남색 브랜드 판, 오른쪽 로그인 ↔ 가입. */
-export function AuthScreen({ initialEmail }: { initialEmail?: string }) {
+export function AuthScreen({ initialEmail, onCancel }: { initialEmail?: string; onCancel?: () => void }) {
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [version, setVersion] = useState("");
   useEffect(() => {
@@ -119,6 +119,12 @@ export function AuthScreen({ initialEmail }: { initialEmail?: string }) {
       </aside>
       <section className="flex basis-1/2 items-center justify-center overflow-y-auto bg-neutral-white px-12">
         <div className="w-[420px]">
+          {onCancel && (
+            <button type="button" className="mb-8 inline-flex items-center gap-1 typo-body2_medium text-neutral-500 hover:text-main-deep-blue" onClick={onCancel}>
+              <ArrowLeft className="size-4" aria-hidden="true" />
+              {t("common.back")}
+            </button>
+          )}
           {mode === "login" ? (
             <LoginForm initialEmail={initialEmail} onSignup={() => setMode("signup")} />
           ) : (

@@ -1,4 +1,4 @@
-import { Globe, Laptop, Power, WifiOff, X } from "lucide-react";
+import { Globe, Laptop, LogIn, Power, WifiOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type WebDashboardExecution, type WebDashboardSummary, type WebError } from "../api";
 import type { HeroSide } from "../dashboard/Hero";
@@ -32,7 +32,7 @@ const closeBanner = () => {
 
 const TABS: { id: Source; icon?: typeof Laptop }[] = [{ id: "all" }, { id: "local", icon: Laptop }, { id: "web", icon: Globe }];
 const MAX_ROWS = 20;
-// 연결 문제일 때만 "연결 안 됨" — 만료는 guard가 관문으로 보낸다.
+// 연결 문제일 때만 "연결 안 됨" — 만료는 따로 [다시 로그인].
 const offline = (e: unknown) => ["NETWORK", "SERVER"].includes((e as Partial<WebError> | null)?.code ?? "");
 
 /** 내 PC 행 = 그 실행 상세. 웹 행 = 웹 워크플로우를 브라우저로. */
@@ -42,6 +42,8 @@ export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void })
   const workflows = useWorkflows((s) => s.list);
   const loadWorkflows = useWorkflows((s) => s.load);
   const guard = useWeb((s) => s.guard);
+  const expired = useWeb((s) => s.expired);
+  const setRelogin = useWeb((s) => s.setRelogin);
   const autostart = useSettings((s) => s.settings?.autostart ?? false);
   const [banner, setBanner] = useState(() => !bannerClosed());
   const [summary, setSummary] = useState<WebDashboardSummary | null>(null);
@@ -52,7 +54,7 @@ export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void })
   useEffect(() => {
     void load();
     void loadWorkflows();
-    // 만료면 guard가 관문으로, 그 밖 실패는 웹 쪽만 비운다.
+    // 실패하면(만료 포함) 웹 쪽만 비운다.
     guard(api.dashboardSummary()).then(setSummary, (e) => setWebFail(e ?? "failed"));
     guard(api.dashboardExecutions(null)).then(
       (p) => setExecs(p.content),
@@ -104,7 +106,18 @@ export function Dashboard({ onOpenRun }: { onOpenRun: (runId: string) => void })
           <p className="typo-body2_regular mt-1 text-neutral-500">{t("dashboard.subtitle")}</p>
         </div>
         <div className="flex items-center gap-2">
-          {webOff && (
+          {expired && (
+            <button
+              type="button"
+              className="inline-flex items-center gap-1.5 rounded-full border border-danger-300 bg-danger-100 px-2.5 py-1 typo-caption1_semibold text-danger-700 hover:brightness-95"
+              title={t("settings.reloginHint")}
+              onClick={() => setRelogin(true)}
+            >
+              <LogIn className="size-3" aria-hidden="true" />
+              {t("settings.relogin")}
+            </button>
+          )}
+          {!expired && webOff && (
             <span className="inline-flex items-center gap-1.5 rounded-full border border-neutral-300 bg-neutral-white px-2.5 py-1 typo-caption1_semibold text-neutral-600">
               <WifiOff className="size-3" aria-hidden="true" />
               {t("dashboard.webOffline")}
