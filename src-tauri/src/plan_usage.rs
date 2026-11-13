@@ -39,6 +39,9 @@ pub struct PlanWindow {
     pub kind: &'static str,
     pub used_pct: f64,
     pub resets_at: String,
+    /// 화면에 그대로 쓰는 이름(모델·그룹별 창). 없으면 화면이 `kind`로 번역한다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -226,28 +229,65 @@ pub fn claude_account_email(path: &std::path::Path) -> Option<String> {
 }
 
 /// `{five_hour: {utilization, resets_at}, ...}`. `resets_at`이 RFC 3339가 아닌 창(아직 안 쓴 창은 null)은 뺀다.
-/// 창 키가 하나도 객체로 없으면 `None`(모르는 응답).
+/// 이어서 `limits[]`의 `weekly_scoped`마다 모델별 주간 창(`seven_day_model`, label = 모델 이름),
+/// Fable이 없으면 옛 키(`seven_day_fable`→`fable_weekly`→`fable_seven_day`)를 Fable로. 같은 모델은 하나만.
+/// 창 키가 하나도 객체로 없고 모델 창도 없으면 `None`(모르는 응답).
 fn parse(body: &Value) -> Option<Vec<PlanWindow>> {
-    if !WINDOWS
+    let known = WINDOWS
         .iter()
-        .any(|k| body.get(k).is_some_and(Value::is_object))
-    {
-        return None;
-    }
-    let windows = WINDOWS
+        .any(|k| body.get(k).is_some_and(Value::is_object));
+    let window = |kind, label: Option<&str>, used: Option<f64>, resets: Option<&str>| {
+        let resets_at = resets?;
+        chrono::DateTime::parse_from_rfc3339(resets_at).ok()?;
+        Some(PlanWindow {
+            kind,
+            used_pct: used?,
+            resets_at: resets_at.to_string(),
+            label: label.map(str::to_string),
+        })
+    };
+    let mut windows: Vec<PlanWindow> = WINDOWS
         .iter()
         .filter_map(|&kind| {
             let w = body.get(kind)?;
-            let resets_at = w.get("resets_at")?.as_str()?;
-            chrono::DateTime::parse_from_rfc3339(resets_at).ok()?;
-            Some(PlanWindow {
+            window(
                 kind,
-                used_pct: w.get("utilization")?.as_f64()?,
-                resets_at: resets_at.to_string(),
-            })
+                None,
+                w["utilization"].as_f64(),
+                w["resets_at"].as_str(),
+            )
         })
         .collect();
-    Some(windows)
+    let scoped = body["limits"].as_array().into_iter().flatten();
+    for l in scoped.filter(|l| l["kind"] == "weekly_scoped") {
+        let name = l["scope"]["model"]["display_name"]
+            .as_str()
+            .filter(|n| !n.is_empty());
+        let w = window(
+            "seven_day_model",
+            name,
+            l["percent"].as_f64(),
+            l["resets_at"].as_str(),
+        );
+        if let Some(w) = w.filter(|w| !windows.iter().any(|x| x.label == w.label)) {
+            windows.push(w);
+        }
+    }
+    if !windows.iter().any(|w| w.label.as_deref() == Some("Fable")) {
+        let legacy = ["seven_day_fable", "fable_weekly", "fable_seven_day"]
+            .iter()
+            .find_map(|k| {
+                let w = body.get(k)?;
+                window(
+                    "seven_day_model",
+                    Some("Fable"),
+                    w["utilization"].as_f64(),
+                    w["resets_at"].as_str(),
+                )
+            });
+        windows.extend(legacy);
+    }
+    (known || !windows.is_empty()).then_some(windows)
 }
 
 /// 설정 폴더(계정)별 토큰 읽기. None = 이 Mac의 기본 로그인.

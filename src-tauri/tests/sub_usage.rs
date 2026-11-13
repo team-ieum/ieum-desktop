@@ -171,13 +171,13 @@ fn agy_sample() -> String {
         "num_turns": 0,
         "command": {"name": "usage", "data": {"groups": [
             {"name": "Gemini Models", "buckets": [
-                {"id": "g-w", "window": "weekly", "remaining_fraction": 0.8, "reset_time": "2026-11-20T00:00:00Z"},
-                {"id": "g-5", "window": "5h", "remaining_fraction": 1.0, "reset_time": "2026-11-13T05:00:00Z"}
+                {"id": "g-w", "name": "Weekly", "window": "weekly", "remaining_fraction": 0.8, "reset_time": "2026-11-20T00:00:00Z"},
+                {"id": "g-5", "name": "5h", "window": "5h", "remaining_fraction": 1.0, "reset_time": "2026-11-13T05:00:00Z"}
             ]},
             {"name": "Claude and GPT models", "buckets": [
-                {"id": "c-w", "window": "weekly", "remaining_fraction": 0.25, "reset_time": "2026-11-19T00:00:00Z"},
-                {"id": "c-5", "window": "5h", "remaining_fraction": 0.9, "reset_time": "2026-11-13T04:00:00Z"},
-                {"id": "off", "window": "5h", "remaining_fraction": 0.0, "reset_time": "2026-11-13T04:00:00Z", "disabled": true}
+                {"id": "c-w", "name": "Weekly", "window": "weekly", "remaining_fraction": 0.25, "reset_time": "2026-11-19T00:00:00Z"},
+                {"id": "c-5", "name": "5h", "window": "5h", "remaining_fraction": 0.9, "reset_time": "2026-11-13T04:00:00Z"},
+                {"id": "off", "name": "Off", "window": "5h", "remaining_fraction": 0.0, "reset_time": "2026-11-13T04:00:00Z", "disabled": true}
             ]}
         ]}}
     });
@@ -233,20 +233,93 @@ async fn antigravity_usage_parses_windows() {
     let (c, _) = agy(agy_secret, || AgyRun::Out(agy_sample()));
     let u = c.get().await;
     assert_eq!(u.state, "ok");
-    // 종류별로 가장 많이 쓴 묶음(꺼진 묶음 제외).
-    let got: Vec<(&str, f64, &str)> = u
+    // 묶음마다 창 하나, 응답 순서(꺼진 묶음 제외).
+    let got: Vec<(&str, &str, f64, &str)> = u
         .windows
         .iter()
-        .map(|w| (w.kind, w.used_pct, w.resets_at.as_str()))
+        .map(|w| {
+            let l = w.label.as_deref().unwrap_or("");
+            (w.kind, l, w.used_pct, w.resets_at.as_str())
+        })
         .collect();
     assert_eq!(
         got,
         vec![
-            ("session", 10.0, "2026-11-13T04:00:00Z"),
-            ("weekly", 75.0, "2026-11-19T00:00:00Z"),
+            (
+                "weekly",
+                "Gemini Models · Weekly",
+                20.0,
+                "2026-11-20T00:00:00Z"
+            ),
+            ("session", "Gemini Models · 5h", 0.0, "2026-11-13T05:00:00Z"),
+            (
+                "weekly",
+                "Claude and GPT models · Weekly",
+                75.0,
+                "2026-11-19T00:00:00Z"
+            ),
+            (
+                "session",
+                "Claude and GPT models · 5h",
+                10.0,
+                "2026-11-13T04:00:00Z"
+            ),
         ]
     );
     assert_eq!(u.account_email.as_deref(), Some("me@example.com"));
+}
+
+/// 2026-11-13 실측 모양: Argon만 다 썼는데 "주간 100%"로 합쳐 보이면 안 된다.
+#[tokio::test]
+async fn antigravity_windows_per_group() {
+    fn run() -> AgyRun {
+        let b = |name: &str, window: &str, rf: f64| {
+            json!({"name": name, "window": window, "remaining_fraction": rf,
+                   "reset_time": "2026-11-19T00:00:00Z"})
+        };
+        let line = json!({
+            "status": "SUCCESS",
+            "command": {"name": "usage", "data": {"groups": [
+                {"name": "Gemini Models", "buckets": [
+                    b("Weekly Limit Remaining", "weekly", 0.9976),
+                    b("5 Hour Limit Remaining", "5h", 0.9953)
+                ]},
+                {"name": "Claude and GPT models", "buckets": [
+                    b("Weekly Limit Remaining", "weekly", 1.0),
+                    b("5 Hour Limit Remaining", "5h", 1.0)
+                ]},
+                {"name": "Gemini 4 Argon", "buckets": [
+                    b("Gemini 4 Argon Weekly Limit", "weekly", 0.0)
+                ]}
+            ]}}
+        });
+        AgyRun::Out(line.to_string())
+    }
+    let (c, _) = agy(agy_secret, run);
+    let u = c.get().await;
+    let got: Vec<(&str, &str, f64)> = u
+        .windows
+        .iter()
+        .map(|w| (w.kind, w.label.as_deref().unwrap_or(""), w.used_pct))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("weekly", "Gemini Models · Weekly Limit Remaining", 0.0),
+            ("session", "Gemini Models · 5 Hour Limit Remaining", 0.0),
+            (
+                "weekly",
+                "Claude and GPT models · Weekly Limit Remaining",
+                0.0
+            ),
+            (
+                "session",
+                "Claude and GPT models · 5 Hour Limit Remaining",
+                0.0
+            ),
+            ("weekly", "Gemini 4 Argon Weekly Limit", 100.0),
+        ]
+    );
 }
 
 #[tokio::test]

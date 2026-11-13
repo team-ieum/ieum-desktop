@@ -334,10 +334,12 @@ export interface UsageReport {
 
 // plan_usage.rs(Claude)·sub_usage.rs(Codex·Antigravity) — 구독 연결 상태와 창별 사용 비율.
 export interface PlanWindow {
-  /** Claude: five_hour·seven_day·seven_day_opus. Codex·Antigravity: session(하루 이하)·weekly(7일 이하)·monthly(Codex 무료 30일). */
-  kind: "five_hour" | "seven_day" | "seven_day_opus" | "session" | "weekly" | "monthly";
+  /** Claude: five_hour·seven_day·seven_day_opus·seven_day_model(모델별 주간). Codex·Antigravity: session(하루 이하)·weekly(7일 이하)·monthly(Codex 무료 30일). */
+  kind: "five_hour" | "seven_day" | "seven_day_opus" | "seven_day_model" | "session" | "weekly" | "monthly";
   usedPct: number;
   resetsAt: string;
+  /** 화면에 그대로 쓰는 이름(Claude 모델·Antigravity 그룹별 창). 없으면 kind 번역. */
+  label?: string;
 }
 export interface PlanUsage {
   state: "ok" | "unavailable" | "not_logged_in";

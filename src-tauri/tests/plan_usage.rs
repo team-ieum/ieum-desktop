@@ -114,6 +114,71 @@ async fn plan_usage_parses_windows() {
     assert!(head.contains("anthropic-beta: oauth-2025-04-20"));
 }
 
+async fn windows_of(body: Value) -> Vec<(&'static str, Option<String>, f64, String)> {
+    let (url, _) = serve(move |_| (200, body.to_string())).await;
+    client(&url, Some(TOKEN))
+        .get()
+        .await
+        .windows
+        .into_iter()
+        .map(|w| (w.kind, w.label, w.used_pct, w.resets_at))
+        .collect()
+}
+
+#[tokio::test]
+async fn plan_usage_reads_model_scoped_weekly() {
+    let mut body = sample();
+    body["limits"] = json!([
+        {"kind": "weekly_scoped", "percent": 7.0, "resets_at": "2026-11-16T03:00:00+00:00",
+         "scope": {"model": {"display_name": "Fable"}}},
+        {"kind": "weekly", "percent": 3.0}
+    ]);
+    let got = windows_of(body).await;
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(
+        got[2],
+        (
+            "seven_day_model",
+            Some("Fable".into()),
+            7.0,
+            "2026-11-16T03:00:00+00:00".into()
+        )
+    );
+    // label 없는 창은 JSON에 label 칸이 없다.
+    let (url, _) = serve(|_| (200, sample().to_string())).await;
+    let v = serde_json::to_value(client(&url, Some(TOKEN)).get().await).unwrap();
+    assert!(v["windows"][0].get("label").is_none());
+}
+
+#[tokio::test]
+async fn plan_usage_reads_legacy_fable_key() {
+    let mut body = sample();
+    body["seven_day_fable"] =
+        json!({"utilization": 12.0, "resets_at": "2026-11-16T03:00:00+00:00"});
+    let got = windows_of(body.clone()).await;
+    assert_eq!(
+        got[2..],
+        [(
+            "seven_day_model",
+            Some("Fable".into()),
+            12.0,
+            "2026-11-16T03:00:00+00:00".into()
+        )]
+    );
+    // limits와 옛 키가 둘 다 있으면 Fable 하나만(limits 쪽).
+    body["limits"] = json!([
+        {"kind": "weekly_scoped", "percent": 7.0, "resets_at": "2026-11-16T03:00:00+00:00",
+         "scope": {"model": {"display_name": "Fable"}}}
+    ]);
+    let got = windows_of(body).await;
+    let fable: Vec<_> = got
+        .iter()
+        .filter(|w| w.1.as_deref() == Some("Fable"))
+        .collect();
+    assert_eq!(fable.len(), 1, "{got:?}");
+    assert_eq!(fable[0].2, 7.0);
+}
+
 #[tokio::test]
 async fn plan_usage_unavailable_on_5xx_and_bad_json() {
     for (status, body) in [

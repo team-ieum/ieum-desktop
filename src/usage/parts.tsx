@@ -15,11 +15,13 @@ export const tightest = (p: PlanUsage | null | undefined) =>
 export const hot = (pct: number) => (pct > 80 ? "text-danger-700" : "");
 export const usedText = (pct: number) => t("usage.used").replace("{pct}", String(pct));
 export const resetText = (w: PlanWindow, now: Date) => t("usage.resetsIn").replace("{time}", formatReset(w.resetsAt, now));
+/** 창 이름 — 백엔드가 준 label(모델·그룹), 없으면 kind 번역. */
+export const windowName = (w: PlanWindow) => w.label ?? t(`usage.window.${w.kind}`);
 
 /** 창 하나 — 이름·"N% 사용"·막대·초기화. `inline`이면 초기화를 오른쪽 글에 붙인다. */
 export function WindowMeter({ w, now, inline = false }: { w: PlanWindow; now: Date; inline?: boolean }) {
   const pct = usedOf(w);
-  const name = t(`usage.window.${w.kind}`);
+  const name = windowName(w);
   return (
     <div>
       <div className="flex justify-between gap-2 typo-caption1_medium text-neutral-700">

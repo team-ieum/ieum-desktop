@@ -5,7 +5,7 @@ import { ProviderLogo } from "../../assets/providers";
 import { formatRelative } from "../../dashboard/format";
 import { locale, t, type Key } from "../../i18n";
 import { formatCount, formatUsd } from "../../usage/format";
-import { credName, Dropdown, hot, resetText, tightest, usedOf, WindowMeter, type DropItem } from "../../usage/parts";
+import { credName, Dropdown, hot, resetText, tightest, usedOf, windowName, WindowMeter, type DropItem } from "../../usage/parts";
 import { accountsOf, BOXES, credLabel, planKey, type Plans } from "./AiPane";
 
 const CARD = "rounded-brand-md border border-[#cde9f4] bg-white p-4";
@@ -64,7 +64,7 @@ function SubLeftTile({ view, plans }: { view: CredentialsView | null | undefined
       label={t("usage.subLeft")}
       value={`${100 - used}%`}
       valueClass={hot(used)}
-      note={`${worst.name} · ${t(`usage.window.${worst.w.kind}`)} · ${resetText(worst.w, now)}`}
+      note={`${worst.name} · ${windowName(worst.w)} · ${resetText(worst.w, now)}`}
     />
   );
 }

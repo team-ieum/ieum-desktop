@@ -103,6 +103,13 @@ test("dashboard_usage_shows_subscription_windows", async () => {
   expect(onUsage).toHaveBeenCalledTimes(1);
 });
 
+test("dashboard_shows_window_label", async () => {
+  mockSubs({ ...OK, windows: [...OK.windows, { kind: "seven_day_model", label: "Fable", usedPct: 0, resetsAt: inHours(50) }] });
+  await mountCard();
+  const claude = within(within(screen.getByRole("region", { name: "구독 사용량" })).getByRole("group", { name: "Claude" }));
+  expect(claude.getByText("Fable")).toBeTruthy();
+});
+
 test("dashboard_usage_hides_unconnected_subscriptions", async () => {
   mockSubs();
   await mountCard();

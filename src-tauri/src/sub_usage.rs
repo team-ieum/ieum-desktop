@@ -165,6 +165,7 @@ fn parse_codex(body: &Value) -> Option<Vec<PlanWindow>> {
                 },
                 used_pct: w["used_percent"].as_f64()?,
                 resets_at: reset.to_rfc3339(),
+                label: None,
             })
         })
         .collect();
@@ -363,18 +364,26 @@ impl AntigravityUsageClient {
 }
 
 /// `{"status":"SUCCESS","command":{"name":"usage","data":{"groups":[{"buckets":[{window,remaining_fraction,reset_time,disabled}]}]}}}` 줄.
-/// 창(`5h`→`session`, `weekly`)마다 가장 많이 쓴 묶음(Orca 표시와 같음). 쓸 묶음이 없으면 None.
+/// 묶음마다 창 하나(응답 순서, kind는 `5h`→`session`·`weekly`), label = `"<그룹> · <묶음>"`
+/// (그룹에 묶음이 하나면 묶음 이름만). 꺼진 묶음·모르는 창은 뺀다. 쓸 묶음이 없으면 None.
 fn parse_agy(out: &str) -> Option<Vec<PlanWindow>> {
     let v = out
         .lines()
         .filter_map(|l| serde_json::from_str::<Value>(l.trim()).ok())
         .find(|v| v["status"] == "SUCCESS" && v["command"]["name"] == "usage")?;
-    let mut best: Vec<PlanWindow> = Vec::new();
+    let mut windows: Vec<PlanWindow> = Vec::new();
     let buckets = v["command"]["data"]["groups"]
         .as_array()?
         .iter()
-        .flat_map(|g| g["buckets"].as_array().into_iter().flatten());
-    for b in buckets {
+        .flat_map(|g| {
+            let bs = g["buckets"]
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let group = g["name"].as_str().filter(|_| bs.len() > 1);
+            bs.iter().map(move |b| (group, b))
+        });
+    for (group, b) in buckets {
         let kind = match b["window"].as_str() {
             _ if b["disabled"] == true => continue,
             Some("5h") => "session",
@@ -388,19 +397,20 @@ fn parse_agy(out: &str) -> Option<Vec<PlanWindow>> {
         if chrono::DateTime::parse_from_rfc3339(reset).is_err() {
             continue;
         }
-        let w = PlanWindow {
+        let label = [group, b["name"].as_str()]
+            .into_iter()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
+        windows.push(PlanWindow {
             kind,
             used_pct: ((1.0 - rf) * 100.0).clamp(0.0, 100.0).round(),
             resets_at: reset.to_string(),
-        };
-        match best.iter_mut().find(|x| x.kind == kind) {
-            Some(x) if x.used_pct >= w.used_pct => {}
-            Some(x) => *x = w,
-            None => best.push(w),
-        }
+            label: Some(label).filter(|l| !l.is_empty()),
+        });
     }
-    best.sort_by_key(|w| w.kind != "session");
-    Some(best).filter(|b| !b.is_empty())
+    Some(windows).filter(|w| !w.is_empty())
 }
 
 /// agy가 저장한 자격 글(go-keyring `go-keyring-base64:`/`go-keyring-encoded:` 감싸기 또는 날 JSON)에서
