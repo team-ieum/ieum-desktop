@@ -15,6 +15,7 @@ fn ask(provider: &CliProvider, config_dir: Option<PathBuf>) -> String {
             schema: None,
             key_name: None,
             config_dir,
+            system: None,
         },
         &|_: &str| {},
     ))

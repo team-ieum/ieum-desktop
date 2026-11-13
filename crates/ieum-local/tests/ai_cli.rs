@@ -463,6 +463,7 @@ fn req(model: Option<&str>) -> AiRequest {
         schema: None,
         key_name: None,
         config_dir: None,
+        system: None,
     }
 }
 
@@ -765,6 +766,7 @@ async fn claude_cli_result_usage_parsed() {
                 schema: None,
                 key_name: None,
                 config_dir: None,
+                system: None,
             },
             &|_: &str| {},
         )
@@ -797,6 +799,7 @@ async fn stdout_cap_kills_flooding_cli() {
                 schema: None,
                 key_name: None,
                 config_dir: None,
+                system: None,
             },
             &|_: &str| {},
         )
@@ -872,6 +875,7 @@ async fn timeout_kills_cli_process() {
                 schema: None,
                 key_name: None,
                 config_dir: None,
+                system: None,
             },
             &|_: &str| {},
         )
