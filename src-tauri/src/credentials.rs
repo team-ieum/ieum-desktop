@@ -51,6 +51,8 @@ pub struct Credentials {
     /// 계정 추가 [확인] 전(로그인 대기) — 목록·노드 선택에 보이지 않는다.
     pub pending_claude_accounts: Vec<CliAccountMeta>,
     pub pending_codex_accounts: Vec<CliAccountMeta>,
+    /// IEUM이 쓰지 않게 숨긴 `system` 계정(`claude`|`codex`). CLI 로그아웃은 하지 않는다.
+    pub hidden_system: Vec<String>,
 }
 
 /// `begin_cli_account` 응답: 터미널에 붙여 넣을 로그인 명령.
@@ -244,8 +246,13 @@ impl AccountCredentials {
                 Err(e) => keychain_error = Some(e.to_string()),
             }
         }
-        for list in [&mut c.claude_accounts, &mut c.codex_accounts] {
-            if !list.iter().any(|m| m.id == SYSTEM_ID) {
+        for (kind, list) in [
+            ("claude", &mut c.claude_accounts),
+            ("codex", &mut c.codex_accounts),
+        ] {
+            if c.hidden_system.iter().any(|h| h == kind) {
+                list.retain(|m| m.id != SYSTEM_ID);
+            } else if !list.iter().any(|m| m.id == SYSTEM_ID) {
                 let is_default = !list.iter().any(|m| m.is_default);
                 list.insert(
                     0,
@@ -403,10 +410,14 @@ impl AccountCredentials {
     /// 확정된 계정의 설정 폴더. `system` = None(CLI 기본 설정). 파일만 읽는다.
     pub fn cli_dir(&self, kind: &str, id: &str) -> Result<Option<PathBuf>, String> {
         let kind = cli_kind(kind)?;
+        let mut c = self.read_file()?;
         if id == SYSTEM_ID {
+            // 숨긴 로그인은 없는 계정처럼(다른 계정으로 대신하지 않는다).
+            if c.hidden_system.iter().any(|h| h == kind) {
+                return Err(MISSING.into());
+            }
             return Ok(None);
         }
-        let mut c = self.read_file()?;
         let dir = self.account_dir(kind, id)?;
         if !accounts(&mut c, kind).0.iter().any(|m| m.id == id) || !dir.is_dir() {
             return Err(MISSING.into());
@@ -444,6 +455,22 @@ impl AccountCredentials {
             Ok(())
         })?;
         remove_dir(&dir)
+    }
+
+    /// `system`(이 Mac의 CLI 로그인)을 IEUM에서 숨기거나 되살린다. 숨기면 목록·노드 선택에서 빠지고,
+    /// 기본이었으면 남은 것 중 가장 먼저 만든 것이 기본. CLI 로그아웃은 하지 않는다.
+    pub fn set_system_hidden(&self, kind: &str, hidden: bool) -> Result<(), String> {
+        let kind = cli_kind(kind)?;
+        self.edit(|c| {
+            let was = c.hidden_system.iter().any(|h| h == kind);
+            if hidden && !was {
+                remove(accounts(c, kind).0, SYSTEM_ID)?;
+                c.hidden_system.push(kind.into());
+            } else if !hidden {
+                c.hidden_system.retain(|h| h != kind);
+            }
+            Ok(())
+        })
     }
 
     /// API 키는 vault 값도, 구독 계정은 설정 폴더도 지운다. `system` 계정은 지울 수 없다.

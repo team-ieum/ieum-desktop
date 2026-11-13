@@ -19,10 +19,12 @@ import {
 } from "@xyflow/react";
 import { Check, CircleAlert, CircleDashed, CircleSlash, Laptop, LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ValidationError, Workflow, WfNode } from "../api";
+import type { CredentialsView, ValidationError, Workflow, WfNode } from "../api";
 import { t, tDyn } from "../i18n";
 import { branchHandles, DEFS, isLocal } from "../nodes/defs";
 import { nodeMeta, toneStyle } from "../nodes/meta";
+import { credLabel } from "../screens/settings/AiPane";
+import { choicesFor, useCredentials } from "../stores/credentials";
 import type { NodeRunStatus } from "../stores/runs";
 import { AnimatedEdge, type EdgeData } from "./AnimatedEdge";
 
@@ -66,10 +68,14 @@ export const nodeTitle = (event: string) => tDyn(`node.${event}.title`) ?? event
 
 const isAi = (event: string, kind: string) => kind === "AI" || event === "local.ai" || event.startsWith("ai.");
 
-/** AI 노드 알약 — Claude 구독이면 공급원 이름, API면 모델 이름. */
-export function modelLabel(config: WfNode["config"]): string {
-  if (config.provider === "cli:claude") return t("editor.claudePlan");
-  return typeof config.model === "string" && config.model ? config.model : t("editor.noModel");
+/** AI 노드 알약 — Claude 구독이면 공급원 이름, API면 모델 이름. 고른 키·계정이 있으면 " · 이름표"(기본이면 생략). */
+export function modelLabel(config: WfNode["config"], view?: CredentialsView | null): string {
+  const base =
+    config.provider === "cli:claude" ? t("editor.claudePlan") : typeof config.model === "string" && config.model ? config.model : t("editor.noModel");
+  if (!view || typeof config.credential !== "string" || !config.credential) return base;
+  const m = choicesFor(view, config.provider).find((x) => x.id === config.credential);
+  if (m?.isDefault) return base;
+  return `${base} · ${m ? credLabel(m) : t("editor.credentialMissing")}`;
 }
 
 type Data = { wf: WfNode; step: number; errors: string[]; status?: NodeRunStatus };
@@ -92,6 +98,7 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
   const meta = nodeMeta(wf.event, wf.type);
   const branches = kind === "CONDITION" ? branchHandles(wf) : null;
   const title = wf.label || nodeTitle(wf.event);
+  const creds = useCredentials((s) => s.view);
   return (
     <article
       style={toneStyle(meta)}
@@ -130,7 +137,7 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
         <p className="m-0 min-h-[1.95rem] text-[0.68rem] leading-[1.45] text-[#6d6b7c]">{tDyn(`node.${wf.event}.desc`) ?? wf.description}</p>
         {isAi(wf.event, kind) && (
           <span className="inline-flex min-h-8 w-full items-center rounded-[0.65rem] border border-[color-mix(in_srgb,var(--node-color)_30%,white)] bg-(--node-tint) px-[0.6rem] py-[0.28rem] text-[0.67rem] font-bold text-(--node-color)">
-            {modelLabel(wf.config)}
+            {modelLabel(wf.config, creds)}
           </span>
         )}
       </div>
@@ -190,6 +197,10 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
   // 한 틱에 여러 변경(엣지 삭제 → 노드 삭제)이 오면 앞 변경 결과 위에 쌓는다 — 렌더의 workflow는 낡았다.
   const latest = useRef(workflow);
   latest.current = workflow;
+  // 노드 알약의 키·계정 이름표.
+  useEffect(() => {
+    useCredentials.getState().load().catch(() => {});
+  }, []);
   const emit = (f: (w: Workflow) => Workflow) => {
     latest.current = f(latest.current);
     onChange?.(latest.current);

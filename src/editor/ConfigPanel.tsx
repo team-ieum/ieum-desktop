@@ -1,7 +1,10 @@
 import { FolderOpen, Plus, TriangleAlert, X } from "lucide-react";
-import { useId } from "react";
+import { useEffect, useId } from "react";
 import { api, type Workflow, type WfNode } from "../api";
+import { ProviderLogo, type LogoId } from "../assets/providers";
 import { t, tDyn } from "../i18n";
+import { credLabel } from "../screens/settings/AiPane";
+import { choicesFor, useCredentials } from "../stores/credentials";
 import { DEFS, fieldKey, FOLDER_FIELDS, newItem, outputKeys, upstream, type Field } from "../nodes/defs";
 import { nodeTitle } from "./Canvas";
 
@@ -22,9 +25,44 @@ interface FieldProps {
   onChange: (v: unknown) => void;
   refs: Ref[];
   pickFolder: () => Promise<string | null>;
+  /** AI 노드의 지금 공급원 — 키·계정 칸이 본다. */
+  provider?: unknown;
 }
 
-function FieldInput({ event, field, path, value, onChange, refs, pickFolder }: FieldProps) {
+const PROVIDER_LOGO: Record<string, LogoId> = { "cli:claude": "claude", "api:anthropic": "anthropic", "api:openai": "openai", "api:gemini": "gemini" };
+
+/** AI 노드 "키·계정" — 그 공급원의 목록 + 맨 위 "기본(이름표)". 비우면 칸을 저장하지 않는다(`undefined`). */
+function CredentialSelect({ id, provider, value, onChange }: { id: string; provider: unknown; value: string; onChange: (v: unknown) => void }) {
+  const view = useCredentials((s) => s.view);
+  useEffect(() => {
+    useCredentials.getState().load().catch(() => {});
+  }, []);
+  const list = view ? choicesFor(view, provider) : [];
+  const def = list.find((m) => m.isDefault);
+  // 목록을 읽었는데 저장된 id가 없으면 경고(다른 키로 대신하지 않는다).
+  const missing = !!view && !!value && !list.some((m) => m.id === value);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <select id={id} className={`${INPUT} ${missing ? "border-danger-600" : ""}`} value={value} onChange={(e) => onChange(e.target.value || undefined)}>
+        <option value="">{def ? t("editor.credentialDefault").replace("{label}", credLabel(def)) : t("settings.defaultBadge")}</option>
+        {list.map((m) => (
+          <option key={m.id} value={m.id}>
+            {credLabel(m)}
+          </option>
+        ))}
+        {value && !list.some((m) => m.id === value) && <option value={value}>{view ? t("editor.credentialMissing") : value}</option>}
+      </select>
+      {missing && (
+        <p role="alert" className="flex items-center gap-1.5 typo-caption1_semibold text-danger-700">
+          <TriangleAlert size={14} aria-hidden="true" />
+          {t("editor.credentialMissing")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function FieldInput({ event, field, path, value, onChange, refs, pickFolder, provider }: FieldProps) {
   const id = useId();
   const label = tDyn(fieldKey(event, path)) ?? field.title ?? field.key;
   const desc = tDyn(`fieldDesc.${event}.${path}`);
@@ -96,16 +134,22 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder }: F
         </button>
       </div>
     );
+  } else if (event === "local.ai" && field.key === "credential") {
+    input = <CredentialSelect id={id} provider={provider} value={str} onChange={onChange} />;
   } else if (field.choices) {
+    const logo = event === "local.ai" && field.key === "provider" ? PROVIDER_LOGO[str] : undefined;
     input = (
-      <select id={id} className={INPUT} value={str} onChange={(e) => onChange(e.target.value)}>
-        {!str && <option value="" disabled />}
-        {field.choices.map((c) => (
-          <option key={c.id} value={c.id}>
-            {tDyn(`choice.${field.key}.${c.id}`) ?? c.name}
-          </option>
-        ))}
-      </select>
+      <div className="flex items-center gap-2">
+        {logo && <ProviderLogo id={logo} size={28} />}
+        <select id={id} className={INPUT} value={str} onChange={(e) => onChange(e.target.value)}>
+          {!str && <option value="" disabled />}
+          {field.choices.map((c) => (
+            <option key={c.id} value={c.id}>
+              {tDyn(`choice.${field.key}.${c.id}`) ?? c.name}
+            </option>
+          ))}
+        </select>
+      </div>
     );
   } else if (field.type === "boolean") {
     input = (
@@ -188,9 +232,15 @@ export function ConfigPanel({ node, workflow, onChange, pickFolder = () => api.p
           field={f}
           path={f.key}
           value={node.config[f.key]}
-          onChange={(v) => onChange({ ...node, config: { ...node.config, [f.key]: v } })}
+          onChange={(v) => {
+            // undefined = 칸을 뺀다. 공급원을 바꾸면 고른 키·계정(다른 공급원의 id)도 뺀다.
+            const { [f.key]: _old, ...rest } = node.config;
+            if (node.event === "local.ai" && f.key === "provider") delete rest.credential;
+            onChange({ ...node, config: v === undefined ? rest : { ...rest, [f.key]: v } });
+          }}
           refs={refs}
           pickFolder={pickFolder}
+          provider={node.config.provider}
         />
       ))}
     </div>

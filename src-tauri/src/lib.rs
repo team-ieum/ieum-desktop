@@ -251,6 +251,7 @@ pub fn run() {
             commands::begin_cli_account,
             commands::confirm_cli_account,
             commands::cancel_cli_account,
+            commands::set_system_hidden,
             commands::subscription_usage,
             commands::antigravity_plan_usage,
             commands::open_system_settings,

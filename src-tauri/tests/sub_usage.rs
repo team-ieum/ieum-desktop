@@ -262,9 +262,9 @@ async fn antigravity_not_logged_in_without_credentials() {
     // 자격은 있는데 agy가 없음 → 로그인 안내.
     let (c, _) = agy(agy_secret, || AgyRun::NotInstalled);
     assert_eq!(c.get().await.state, "not_logged_in");
-    // 키체인 거부도 로그인 안 됨.
+    // 키체인 거부 = 확인 불가(로그인 안내 아님).
     let (c, _) = agy(|| TokenRead::Denied, || AgyRun::Out(agy_sample()));
-    assert_eq!(c.get().await.state, "not_logged_in");
+    assert_eq!(c.get().await.state, "unavailable");
     // 토큰 없는 비밀은 로그인 아님.
     assert!(matches!(
         agy_login_from_secret(br#"{"id_token_email":"x@y.z"}"#),
@@ -325,9 +325,13 @@ async fn antigravity_cached_60s() {
 #[tokio::test]
 async fn antigravity_denied_not_asked_again() {
     // 캐시 시간 0: 없음은 매번 다시 보고, 거부는 한 번만 묻는다.
-    let cases: [(fn() -> TokenRead, usize); 2] =
-        [(|| TokenRead::Missing, 3), (|| TokenRead::Denied, 1)];
-    for (read, want) in cases {
+    /// (읽기, 물은 횟수, 상태)
+    type Case = (fn() -> TokenRead, usize, &'static str);
+    let cases: [Case; 2] = [
+        (|| TokenRead::Missing, 3, "not_logged_in"),
+        (|| TokenRead::Denied, 1, "unavailable"),
+    ];
+    for (read, want, state) in cases {
         let n: Calls = Arc::default();
         let seen = n.clone();
         let c = AntigravityUsageClient::new(
@@ -339,7 +343,7 @@ async fn antigravity_denied_not_asked_again() {
             std::time::Duration::ZERO,
         );
         for _ in 0..3 {
-            assert_eq!(c.get().await.state, "not_logged_in");
+            assert_eq!(c.get().await.state, state);
         }
         assert_eq!(n.load(Ordering::SeqCst), want);
     }

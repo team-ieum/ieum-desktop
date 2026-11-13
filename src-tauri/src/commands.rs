@@ -235,6 +235,16 @@ pub async fn cancel_cli_account(
     with_credentials(&active, move |c| c.cancel_cli_account(&kind, &id)).await
 }
 
+/// 이 Mac의 CLI 로그인을 IEUM에서 숨기기·되살리기(CLI 로그아웃 아님). `kind` = `claude|codex`.
+#[tauri::command]
+pub async fn set_system_hidden(
+    active: State<'_, Active>,
+    kind: String,
+    hidden: bool,
+) -> Result<(), String> {
+    with_credentials(&active, move |c| c.set_system_hidden(&kind, hidden)).await
+}
+
 /// 구독 계정 하나의 연결 상태·사용량. 키체인·파일 읽기는 안에서 `spawn_blocking`.
 #[tauri::command]
 pub async fn subscription_usage(

@@ -214,8 +214,9 @@ async fn plan_usage_denied_not_asked_again() {
 
     let (denied, n_denied) = counting(|| TokenRead::Denied);
     let c = PlanUsageClient::with_url(url, denied, Duration::ZERO).unwrap();
+    // 거부 = "확인 불가"(설계 8절), 로그인 안내가 아니다.
     for _ in 0..3 {
-        assert_eq!(c.get().await.state, "not_logged_in");
+        assert_eq!(c.get().await.state, "unavailable");
     }
     assert_eq!(n_denied.load(Ordering::SeqCst), 1);
 }
@@ -278,7 +279,7 @@ async fn denied_account_not_asked_again_others_still_work() {
     for _ in 0..3 {
         assert_eq!(
             s.get("claude", Some(a.clone())).await.unwrap().state,
-            "not_logged_in"
+            "unavailable"
         );
     }
     let asked = |p: &Option<PathBuf>| seen.lock().unwrap().iter().filter(|x| *x == p).count();
@@ -286,7 +287,7 @@ async fn denied_account_not_asked_again_others_still_work() {
     // 확인(새로 읽기)도 거부한 계정은 다시 묻지 않는다.
     assert_eq!(
         s.refresh("claude", Some(a.clone())).await.unwrap().state,
-        "not_logged_in"
+        "unavailable"
     );
     assert_eq!(asked(&Some(a)), 1);
     assert_eq!(s.get("claude", None).await.unwrap().state, "ok");

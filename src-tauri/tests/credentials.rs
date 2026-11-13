@@ -529,3 +529,21 @@ fn delete_system_account_rejected() {
         assert_eq!(c.list().claude_accounts[0].id, "system");
     }
 }
+
+#[test]
+fn hide_system_account_then_restore() {
+    let (_t, c) = setup_spaced();
+    c.set_system_hidden("claude", true).unwrap();
+    let v = c.list();
+    assert!(v.claude_accounts.iter().all(|m| m.id != "system"));
+    assert_eq!(v.codex_accounts[0].id, "system");
+    // 숨긴 로그인을 고른 노드·기본 노드는 다른 계정으로 대신하지 않고 실패.
+    assert_eq!(c.claude_config_dir(Some("system")).unwrap_err(), MISSING);
+    assert_eq!(c.claude_config_dir(None).unwrap_err(), MISSING);
+    assert!(c.set_system_hidden("gemini", true).is_err());
+    c.set_system_hidden("claude", false).unwrap();
+    let v = c.list();
+    assert_eq!(v.claude_accounts[0].id, "system");
+    assert!(v.claude_accounts[0].is_default);
+    assert_eq!(c.claude_config_dir(None).unwrap(), None);
+}

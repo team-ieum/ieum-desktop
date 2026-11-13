@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, keyStates, type KeychainStatus } from "../api";
+import { api } from "../api";
 import symbol from "../assets/symbol.png";
 import { t, type Key } from "../i18n";
 import { BUTTON, PRIMARY } from "../screens/Editor";
 import { AiProvidersPane, usePlans } from "../screens/settings/AiPane";
 import { Switch } from "../screens/settings/GeneralPane";
+import { useCredentials } from "../stores/credentials";
 import { useSettings } from "../stores/settings";
 
 const STEPS: { title: Key; desc: Key }[] = [
@@ -16,15 +17,15 @@ const NOTIFY = 1;
 
 /** 1단계 — 설정 "AI 제공자"와 같은 카드(구독 3장 + API 키 3장). 길어서 상자 안에서 스크롤. */
 function AiStep() {
-  const { plans, refresh: refreshPlan } = usePlans();
-  const [keychain, setKeychain] = useState<KeychainStatus | null>(null);
+  const view = useCredentials((s) => s.view);
+  const { plans, refresh: refreshPlan } = usePlans(view);
   const refresh = useCallback(() => {
-    api.listCredentials().then((v) => setKeychain(keyStates(v)), () => {});
+    useCredentials.getState().load().catch(() => {});
   }, []);
   useEffect(refresh, [refresh]);
   return (
     <div className="max-h-[360px] overflow-y-auto pr-1">
-      <AiProvidersPane plans={plans} refreshPlan={refreshPlan} keychain={keychain} refreshKeys={refresh} />
+      <AiProvidersPane view={view} plans={plans} refreshPlan={refreshPlan} refreshCreds={refresh} />
     </div>
   );
 }

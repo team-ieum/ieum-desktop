@@ -383,5 +383,7 @@ export const api = {
   /** 그 계정 폴더로 로그인을 확인 — 이메일이 보이면 목록에 추가, 아니면 `not_logged_in` 그대로. */
   confirmCliAccount: (kind: SubKind, id: string) => invoke<PlanUsage>("confirm_cli_account", { kind, id }),
   cancelCliAccount: (kind: SubKind, id: string) => invoke<void>("cancel_cli_account", { kind, id }),
+  /** 이 Mac의 CLI 로그인(`system`)을 IEUM에서 숨기기·되살리기 — CLI 로그아웃은 하지 않는다. */
+  setSystemHidden: (kind: SubKind, hidden: boolean) => invoke<void>("set_system_hidden", { kind, hidden }),
   antigravityPlanUsage: () => invoke<PlanUsage>("antigravity_plan_usage"),
 };

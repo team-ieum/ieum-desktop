@@ -39,6 +39,7 @@ const COMMANDS: &[&str] = &[
     "begin_cli_account",
     "confirm_cli_account",
     "cancel_cli_account",
+    "set_system_hidden",
     "subscription_usage",
     "antigravity_plan_usage",
     "open_system_settings",

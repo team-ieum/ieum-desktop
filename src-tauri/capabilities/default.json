@@ -46,6 +46,7 @@
     "allow-begin-cli-account",
     "allow-confirm-cli-account",
     "allow-cancel-cli-account",
+    "allow-set-system-hidden",
     "allow-subscription-usage",
     "allow-antigravity-plan-usage",
     "allow-open-system-settings",

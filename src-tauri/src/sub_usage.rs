@@ -365,7 +365,8 @@ impl AntigravityUsageClient {
         let login = self.login.clone();
         let email = match tokio::task::spawn_blocking(move || login()).await {
             Ok(TokenRead::Found(e)) => e,
-            Ok(TokenRead::Denied) => return (usage("not_logged_in", Vec::new()), true),
+            // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
+            Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true),
             Ok(TokenRead::Missing) | Err(_) => return (usage("not_logged_in", Vec::new()), false),
         };
         let run = self.run.clone();

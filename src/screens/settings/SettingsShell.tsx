@@ -1,7 +1,8 @@
 import { ArrowLeft, Bot, CircleUserRound, Search, ShieldCheck, SlidersHorizontal, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, keyStates, type KeychainStatus, type Providers, type UsageSummary } from "../../api";
+import { api, keyStates, type Providers, type UsageSummary } from "../../api";
 import { t, type Key } from "../../i18n";
+import { useCredentials } from "../../stores/credentials";
 import { useWeb } from "../../stores/web";
 import { AccountPane, serverHost } from "./AccountPane";
 import { AiProvidersPane, aiTexts, usePlans } from "./AiPane";
@@ -26,20 +27,24 @@ const NAV_OFF = "font-normal text-main-deep-blue hover:bg-white/50 [&_svg]:opaci
 export function SettingsShell({ onBack, version, initial = "account" }: { onBack: () => void; version: string; initial?: Id }) {
   const account = useWeb((s) => s.account);
   const [providers, setProviders] = useState<Providers | null>(null);
-  const [keychain, setKeychain] = useState<KeychainStatus | null>(null);
+  const view = useCredentials((s) => s.view);
+  const keychain = view ? keyStates(view) : null;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState<Id>(initial);
-  const { plans, refresh: refreshPlan } = usePlans();
+  const { plans, refresh: refreshPlan } = usePlans(view);
   // undefined = 읽는 중, null = 못 읽음(Rust 명령이 아직 없을 때도)
   const [usage, setUsage] = useState<UsageSummary | null | undefined>(undefined);
   const search = useRef<HTMLInputElement>(null);
 
+  const refreshCreds = useCallback(() => {
+    useCredentials.getState().load().catch((e) => setLoadError(String(e)));
+  }, []);
   const refresh = useCallback(() => {
     api.detectProviders().then(setProviders, (e) => setLoadError(String(e)));
-    api.listCredentials().then((v) => setKeychain(keyStates(v)), (e) => setLoadError(String(e)));
+    refreshCreds();
     api.usageSummary("month").then(setUsage, () => setUsage(null));
-  }, []);
+  }, [refreshCreds]);
   useEffect(refresh, [refresh]);
   // 상태 줄에서 들어오면 그 묶음으로.
   useEffect(() => {
@@ -81,7 +86,7 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
       t("settings.replayOnboarding"),
       t("settings.replayOnboardingDesc"),
     ],
-    ai: aiTexts(plans, keychain),
+    ai: aiTexts(plans, view),
   };
   const titleHit = (s: (typeof SECTIONS)[number]) => matches(q, t(s.label));
   const visible = SECTIONS.filter((s) => titleHit(s) || texts[s.id].some((x) => matches(q, x)));
@@ -97,7 +102,7 @@ export function SettingsShell({ onBack, version, initial = "account" }: { onBack
     account: <AccountPane />,
     general: <GeneralPane />,
     permissions: <PermissionsPane providers={providers} keychain={keychain} onAi={() => pick("ai")} />,
-    ai: <AiProvidersPane plans={plans} refreshPlan={refreshPlan} keychain={keychain} refreshKeys={refresh} usage={usage} />,
+    ai: <AiProvidersPane view={view} plans={plans} refreshPlan={refreshPlan} refreshCreds={refresh} usage={usage} />,
   };
 
   return (

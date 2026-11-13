@@ -99,7 +99,8 @@ impl PlanUsageClient {
         let token = self.token.clone();
         let token = match tokio::task::spawn_blocking(move || token()).await {
             Ok(TokenRead::Found(t)) => t,
-            Ok(TokenRead::Denied) => return (usage("not_logged_in", Vec::new()), true),
+            // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
+            Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true),
             Ok(TokenRead::Missing) | Err(_) => return (usage("not_logged_in", Vec::new()), false),
         };
         // 오류(reqwest 포함)는 버린다 — 헤더 값이 섞일 여지를 두지 않는다.

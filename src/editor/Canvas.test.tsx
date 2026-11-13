@@ -4,6 +4,7 @@ import { Position, ReactFlowProvider } from "@xyflow/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Workflow } from "../api";
 import { setLang } from "../i18n";
+import { useCredentials } from "../stores/credentials";
 import { AnimatedEdge } from "./AnimatedEdge";
 import { Canvas } from "./Canvas";
 
@@ -154,6 +155,31 @@ test("ai_node_shows_model_pill", () => {
   expect(screen.getByText("모델 정보 없음")).toBeTruthy();
   r.rerender(<Canvas workflow={ai({ provider: "cli:claude", model: "x" })} />);
   expect(screen.getByText("Claude (구독)")).toBeTruthy();
+});
+
+test("canvas_pill_shows_credential_label", () => {
+  const sys = { id: "system", label: "이 Mac의 로그인", isDefault: true, createdAt: "", email: null };
+  const work = { id: "abcd1234", label: "회사", isDefault: false, createdAt: "1", email: "w@x.dev" };
+  useCredentials.setState({
+    view: {
+      apiKeys: { anthropic: [{ id: "default", label: "기본", isDefault: true, createdAt: "", last4: "1234" }], openai: [], gemini: [] },
+      claudeAccounts: [sys, work],
+      codexAccounts: [sys],
+      keychainError: null,
+    },
+  });
+  const ai = (config: Record<string, unknown>): Workflow => ({
+    nodes: [{ id: "a", event: "local.ai", type: "AI", position: { x: 0, y: 0 }, config }],
+    edges: [],
+  });
+  const r = render(<Canvas workflow={ai({ provider: "cli:claude", credential: "abcd1234" })} />);
+  expect(screen.getByText("Claude (구독) · 회사")).toBeTruthy();
+  // 기본이면 이름표 생략.
+  r.rerender(<Canvas workflow={ai({ provider: "api:anthropic", model: "m", credential: "default" })} />);
+  expect(screen.getByText("m")).toBeTruthy();
+  r.rerender(<Canvas workflow={ai({ provider: "api:anthropic", model: "m", credential: "deadbeef" })} />);
+  expect(screen.getByText("m · 찾을 수 없는 키")).toBeTruthy();
+  useCredentials.setState({ view: null });
 });
 
 test("read_only_hides_edge_delete", () => {
