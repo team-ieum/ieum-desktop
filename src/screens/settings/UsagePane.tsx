@@ -1,11 +1,11 @@
-import { Bot, Check, Clock, LayoutGrid, Play, RefreshCw, type LucideIcon } from "lucide-react";
+import { Check, LayoutGrid, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { api, type CredentialsView, type PlanUsage, type ProviderReport, type TokenParts, type UsageProvider, type UsageReport } from "../../api";
+import { api, type CredentialsView, type DayUse, type ModelUse, type PlanUsage, type ProviderReport, type UsageProvider, type UsageReport, type WorkflowUse } from "../../api";
 import { ProviderLogo } from "../../assets/providers";
 import { formatRelative } from "../../dashboard/format";
 import { locale, t, type Key } from "../../i18n";
-import { formatCount, formatHm, formatShare, formatUsd } from "../../usage/format";
-import { credName, Dropdown, WindowMeter, type DropItem } from "../../usage/parts";
+import { formatCount, formatUsd } from "../../usage/format";
+import { credName, Dropdown, hot, resetText, tightest, usedOf, WindowMeter, type DropItem } from "../../usage/parts";
 import { accountsOf, BOXES, credLabel, planKey, type Plans } from "./AiPane";
 
 const CARD = "rounded-brand-md border border-[#cde9f4] bg-white p-4";
@@ -13,14 +13,7 @@ const H4 = "typo-caption1_semibold text-neutral-700";
 const EMPTY = "py-6 text-center typo-caption1_regular text-neutral-400";
 const ICON_BTN = "grid size-7 place-items-center rounded-lg text-neutral-500 hover:bg-neutral-100";
 
-/** 토큰 구성 4계열 — 이음 파랑 + dataviz 기본 팔레트 2~4번(validate_palette 통과, 대비 WARN → 범례에 숫자). */
-const PARTS: { key: keyof TokenParts; label: Key; color: string }[] = [
-  { key: "input", label: "usage.input", color: "#007ba7" },
-  { key: "output", label: "usage.output", color: "#eb6834" },
-  { key: "cacheRead", label: "usage.cacheRead", color: "#1baf7a" },
-  { key: "cacheWrite", label: "usage.cacheWrite", color: "#eda100" },
-];
-const sum = (p: TokenParts) => p.input + p.output + p.cacheRead + p.cacheWrite;
+const sum = (p: { input: number; output: number; cacheRead: number; cacheWrite: number }) => p.input + p.output + p.cacheRead + p.cacheWrite;
 
 /** "2026-11-10" → 로컬 날짜. */
 const day = (d: string) => {
@@ -44,14 +37,35 @@ function subAccounts(p: UsageProvider, view: CredentialsView | null | undefined,
 }
 const okPlan = (p: PlanUsage | null | undefined): p is PlanUsage => p?.state === "ok" && p.windows.length > 0;
 
-function Tile({ icon: Icon, label, value, note }: { icon?: LucideIcon; label: string; value: string; note?: string }) {
+function Tile({ label, value, note, valueClass = "" }: { label: string; value: string; note?: string; valueClass?: string }) {
   return (
     <div role="group" aria-label={label} className={`${CARD} flex flex-col gap-1`}>
-      {Icon && <Icon className="size-4 text-main-blue" aria-hidden="true" />}
-      <span className="text-[22px] leading-tight font-semibold text-neutral-900">{value}</span>
+      <span className={`text-[22px] leading-tight font-semibold ${valueClass || "text-neutral-900"}`}>{value}</span>
       <span className="typo-caption1_medium text-neutral-500">{label}</span>
       {note && <span className="typo-caption2_regular text-neutral-400">{note}</span>}
     </div>
+  );
+}
+
+/** 구독 한도 — 연결된 모든 구독 계정 중 가장 빡빡한 창의 남은 비율. */
+function SubLeftTile({ view, plans }: { view: CredentialsView | null | undefined; plans: Plans }) {
+  const now = new Date();
+  let worst: { name: string; w: NonNullable<ReturnType<typeof tightest>> } | undefined;
+  for (const b of BOXES) {
+    for (const a of subAccounts(b.id, view, plans)) {
+      const w = tightest(a.plan);
+      if (w && (!worst || w.usedPct > worst.w.usedPct)) worst = { name: b.name, w };
+    }
+  }
+  if (!worst) return <Tile label={t("usage.subLeft")} value="—" note={t("usage.subNone")} />;
+  const used = usedOf(worst.w);
+  return (
+    <Tile
+      label={t("usage.subLeft")}
+      value={`${100 - used}%`}
+      valueClass={hot(used)}
+      note={`${worst.name} · ${t(`usage.window.${worst.w.kind}`)} · ${resetText(worst.w, now)}`}
+    />
   );
 }
 
@@ -74,85 +88,6 @@ function Head({ title, updatedAt, onRefresh }: { title: string; updatedAt: strin
         <RefreshCw className="size-3.5" aria-hidden="true" />
       </button>
     </div>
-  );
-}
-
-/** 일일 강도 — 최근 6주 칸(한 열 = 7일), 한 색 농도 4단계. */
-function Heatmap({ heat }: { heat: UsageReport["overview"]["heat"] }) {
-  const max = Math.max(0, ...heat.map((d) => d.tokens));
-  const level = (n: number) => (n === 0 ? 0 : Math.min(4, Math.ceil((n / max) * 4)));
-  const SHADE = ["#eef1f4", "rgba(0,123,167,.22)", "rgba(0,123,167,.45)", "rgba(0,123,167,.7)", "#007ba7"];
-  const peak = heat.reduce((a, d) => (d.tokens > a.tokens ? d : a), heat[0]);
-  return (
-    <figure aria-label={t("usage.heat")} className={CARD}>
-      <div className="mb-3 flex items-center gap-2">
-        <h4 className={H4}>{t("usage.heat")}</h4>
-        {max > 0 && <span className="ml-auto rounded-full bg-main-light-blue px-2 py-0.5 typo-caption2_semibold text-main-deep-blue">{t("usage.peak").replace("{date}", monthDay(peak.date))}</span>}
-      </div>
-      {max === 0 ? (
-        <p className={EMPTY}>{t("usage.empty42")}</p>
-      ) : (
-        <>
-          <div className="grid grid-flow-col grid-rows-7 justify-start gap-[3px]">
-            {heat.map((d) => {
-              const label = `${monthDay(d.date)} · ${formatCount(d.tokens)} ${t("usage.tokens")}`;
-              return <span key={d.date} data-testid="heat-cell" title={label} aria-label={label} role="img" className="size-4 rounded-[4px]" style={{ background: SHADE[level(d.tokens)] }} />;
-            })}
-          </div>
-          <div className="mt-3 flex items-center gap-1 typo-caption2_regular text-neutral-400">
-            <span>{t("usage.less")}</span>
-            {SHADE.map((c) => (
-              <span key={c} aria-hidden="true" className="size-2.5 rounded-[3px]" style={{ background: c }} />
-            ))}
-            <span>{t("usage.more")}</span>
-          </div>
-        </>
-      )}
-    </figure>
-  );
-}
-
-/** 범례 — 색 점 + 이름 + (있으면) 숫자. 글은 글 색, 계열 색은 점만. */
-function Legend({ parts }: { parts?: TokenParts }) {
-  return (
-    <ul className="flex flex-wrap gap-x-4 gap-y-1.5">
-      {PARTS.map((p) => (
-        <li key={p.key} className="flex items-center gap-1.5 typo-caption1_regular text-neutral-600">
-          <span aria-hidden="true" className="size-2 rounded-full" style={{ background: p.color }} />
-          {t(p.label)}
-          {parts && <span className="tabular-nums font-semibold text-neutral-800">{formatCount(parts[p.key])}</span>}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-/** 토큰 구성 — 한 줄 누적 막대(8px, 2px 틈) + 범례 숫자. */
-function Composition({ c }: { c: TokenParts }) {
-  const total = sum(c);
-  return (
-    <figure aria-label={t("usage.composition")} className={CARD}>
-      <h4 className={`${H4} mb-3`}>{t("usage.composition")}</h4>
-      {total === 0 ? (
-        <p className={EMPTY}>{t("usage.empty30")}</p>
-      ) : (
-        <>
-          <div className="flex h-2 gap-[2px]">
-            {PARTS.filter((p) => c[p.key] > 0).map((p) => (
-              <span
-                key={p.key}
-                title={`${t(p.label)} ${formatCount(c[p.key])} (${formatShare(c[p.key] / total)})`}
-                className="h-full rounded-full"
-                style={{ flexGrow: c[p.key], background: p.color, minWidth: 4 }}
-              />
-            ))}
-          </div>
-          <div className="mt-3">
-            <Legend parts={c} />
-          </div>
-        </>
-      )}
-    </figure>
   );
 }
 
@@ -192,14 +127,14 @@ function ProviderCard({ p, plan }: { p: ProviderReport; plan: PlanUsage | null |
   );
 }
 
-/** 일일 사용량 — 사용 있는 날마다 누적 세로 막대(≤24px, 2px 틈, 위 4px 둥글게). */
-function DailyBars({ days }: { days: ProviderReport["byDay"] }) {
-  const max = Math.max(0, ...days.map(sum));
+/** 일일 사용량 — 30일 칸마다 토큰 세로 막대(2px 틈, 위 4px 둥글게, 빈 날은 빈칸), 툴팁에 예상 비용. */
+function DailyBars({ days }: { days: DayUse[] }) {
+  const max = Math.max(0, ...days.map((d) => d.tokens));
   const H = 140;
   return (
     <figure aria-label={t("usage.daily")} className={CARD}>
       <h4 className={`${H4} mb-3`}>{t("usage.daily")}</h4>
-      {days.length === 0 ? (
+      {max === 0 ? (
         <p className={EMPTY}>{t("usage.empty30")}</p>
       ) : (
         <>
@@ -207,13 +142,17 @@ function DailyBars({ days }: { days: ProviderReport["byDay"] }) {
             <span className="absolute top-0 left-0 typo-caption2_regular tabular-nums text-neutral-400">{formatCount(max)}</span>
             <div className="flex items-end gap-[2px]" style={{ height: H }}>
               {days.map((d) => {
-                const tip = [monthDay(d.date), ...PARTS.map((p) => `${t(p.label)} ${formatCount(d[p.key])}`)].join(" · ");
+                const tip = `${monthDay(d.date)} · ${formatCount(d.tokens)} ${t("usage.tokens")} · ${formatUsd(d.usd)}`;
                 return (
-                  <div key={d.date} data-testid="day-bar" title={tip} aria-label={tip} role="img" className="flex max-w-6 flex-1 flex-col-reverse gap-[2px] overflow-hidden rounded-t-[4px]">
-                    {PARTS.filter((p) => d[p.key] > 0).map((p) => (
-                      <span key={p.key} style={{ height: Math.max(1, (d[p.key] / max) * H), background: p.color }} />
-                    ))}
-                  </div>
+                  <span
+                    key={d.date}
+                    data-testid="day-bar"
+                    title={tip}
+                    aria-label={tip}
+                    role="img"
+                    className="flex-1 rounded-t-[4px] bg-main-blue"
+                    style={{ height: d.tokens && Math.max(1, (d.tokens / max) * H) }}
+                  />
                 );
               })}
             </div>
@@ -221,9 +160,6 @@ function DailyBars({ days }: { days: ProviderReport["byDay"] }) {
           <div className="mt-1 flex justify-between typo-caption2_regular text-neutral-400">
             <span>{monthDay(days[0].date)}</span>
             {days.length > 1 && <span>{monthDay(days[days.length - 1].date)}</span>}
-          </div>
-          <div className="mt-3">
-            <Legend />
           </div>
         </>
       )}
@@ -272,12 +208,48 @@ function Table({ label, cols, num, rows, className = "" }: { label: string; cols
   );
 }
 
-/** 공급자 하나 — 타일 8개·구독 사용량·일일 사용량·모델별·워크플로우별·최근 실행. */
+const wfName = (name: string | null) => name ?? t("usage.deletedWorkflow");
+
+/** 모델별 표 — 개요는 회사 로고를 같이 보인다. */
+function ModelTable({ rows, logo = false }: { rows: ModelUse[]; logo?: boolean }) {
+  return (
+    <Table
+      label={t("usage.byModel")}
+      cols={["usage.col.model", "usage.col.tokens", "usage.col.cost", "usage.col.calls"]}
+      num={1}
+      rows={rows.map((m) => [
+        logo ? (
+          <span className="flex items-center gap-1.5">
+            <ProviderLogo id={box(m.provider).logo} size={14} />
+            {m.model || "—"}
+          </span>
+        ) : (
+          m.model || "—"
+        ),
+        formatCount(m.tokens),
+        formatUsd(m.usd),
+        formatCount(m.calls),
+      ])}
+    />
+  );
+}
+
+function WorkflowTable({ rows }: { rows: WorkflowUse[] }) {
+  return (
+    <Table
+      label={t("usage.byWorkflow")}
+      cols={["usage.col.workflow", "usage.col.tokens", "usage.col.cost", "usage.col.calls", "usage.col.runs"]}
+      num={1}
+      rows={rows.map((w) => [wfName(w.name), formatCount(w.tokens), formatUsd(w.usd), formatCount(w.calls), formatCount(w.runs)])}
+    />
+  );
+}
+
+/** 공급자 하나 — 타일 4개·구독 사용량·일일 사용량·모델별·워크플로우별·최근 실행. */
 function ProviderDetail({ p, report, view, plans, onRefresh }: { p: ProviderReport; report: UsageReport; view: CredentialsView | null | undefined; plans: Plans; onRefresh: () => void }) {
   const b = box(p.provider);
   const now = new Date();
   const subs = subAccounts(p.provider, view, plans).filter((a) => okPlan(a.plan));
-  const wfName = (name: string | null) => name ?? t("usage.deletedWorkflow");
   const time = (iso: string) => fmtDate(new Date(iso), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   return (
     <div className="flex flex-col gap-3">
@@ -286,14 +258,10 @@ function ProviderDetail({ p, report, view, plans, onRefresh }: { p: ProviderRepo
         <p className="typo-caption2_regular text-neutral-400">{t("usage.last30")}</p>
       </div>
       <div className="grid grid-cols-4 gap-2">
+        <Tile label={t("usage.cost")} value={formatUsd(p.usd)} note={p.unpricedCalls > 0 ? t("usage.costNote") : undefined} />
         <Tile label={t("usage.inputTokens")} value={formatCount(p.input)} />
         <Tile label={t("usage.outputTokens")} value={formatCount(p.output)} />
-        <Tile label={t("usage.cacheRead")} value={formatCount(p.cacheRead)} />
-        <Tile label={t("usage.cacheWrite")} value={formatCount(p.cacheWrite)} />
-        <Tile label={t("usage.cacheReuse")} value={formatShare(p.cacheReuse)} />
-        <Tile label={t("usage.noCacheCalls")} value={formatShare(p.noCacheCallShare)} />
         <Tile label={t("usage.runsCalls")} value={`${formatCount(p.runs)} / ${formatCount(p.calls)}`} />
-        <Tile label={t("usage.cost")} value={formatUsd(p.usd)} note={p.unpricedCalls > 0 ? t("usage.costNote") : undefined} />
       </div>
       {subs.length > 0 && (
         <section aria-label={t("usage.subUsage")} className={CARD}>
@@ -315,25 +283,20 @@ function ProviderDetail({ p, report, view, plans, onRefresh }: { p: ProviderRepo
       )}
       <DailyBars days={p.byDay} />
       <div className="grid grid-cols-2 gap-3">
-        <Table label={t("usage.byModel")} cols={["usage.col.model", "usage.col.tokens", "usage.col.calls"]} num={1} rows={p.byModel.map((m) => [m.model || "—", formatCount(m.tokens), formatCount(m.calls)])} />
-        <Table
-          label={t("usage.byWorkflow")}
-          cols={["usage.col.workflow", "usage.col.tokens", "usage.col.calls", "usage.col.runs"]}
-          num={1}
-          rows={p.byWorkflow.map((w) => [wfName(w.name), formatCount(w.tokens), formatCount(w.calls), formatCount(w.runs)])}
-        />
+        <WorkflowTable rows={p.byWorkflow} />
+        <ModelTable rows={p.byModel} />
       </div>
       <Table
         label={t("usage.recent")}
-        cols={["usage.col.time", "usage.col.workflow", "usage.col.model", "usage.col.cred", "usage.input", "usage.output", "usage.col.cache"]}
+        cols={["usage.col.time", "usage.col.workflow", "usage.col.model", "usage.col.cred", "usage.input", "usage.output"]}
         num={4}
-        rows={p.recent.map((r) => [time(r.at), wfName(r.workflowName), r.model || "—", credName(view, r.credential), formatCount(r.input), formatCount(r.output), formatCount(r.cache)])}
+        rows={p.recent.map((r) => [time(r.at), wfName(r.workflowName), r.model || "—", credName(view, r.credential), formatCount(r.input), formatCount(r.output)])}
       />
     </div>
   );
 }
 
-/** 설정 › 통계 및 사용량 — 요약 타일·사용량 분석(개요 / 공급자별). */
+/** 설정 › 통계 및 사용량 — AI 사용량 분석(개요 / 공급자별). 실행 통계는 대시보드 몫. */
 export function UsagePane({ view, plans, refreshPlans }: { view: CredentialsView | null | undefined; plans: Plans; refreshPlans: () => void }) {
   // undefined = 읽는 중, null = 못 읽음
   const [report, setReport] = useState<UsageReport | null | undefined>(undefined);
@@ -353,19 +316,12 @@ export function UsagePane({ view, plans, refreshPlans }: { view: CredentialsView
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="-mt-2 mb-1 typo-caption1_regular text-neutral-500">{t("usage.pageDesc")}</p>
-      <div className="grid grid-cols-3 gap-2">
-        <Tile icon={Play} label={t("usage.runs")} value={formatCount(report.totals.runs)} />
-        <Tile icon={Clock} label={t("usage.runTime")} value={formatHm(report.totals.runSeconds)} />
-        <Tile icon={Bot} label={t("usage.aiCalls")} value={formatCount(report.totals.aiCalls)} />
-      </div>
-      {report.trackingSince && (
-        <p className="typo-caption2_regular text-neutral-400">
-          {t("usage.trackingSince").replace("{date}", fmtDate(new Date(report.trackingSince), { year: "numeric", month: "long", day: "numeric" }))}
-        </p>
-      )}
+      <p className="-mt-2 mb-1 typo-caption1_regular text-neutral-500">
+        {t("usage.pageDesc")}
+        {report.trackingSince && ` ${t("usage.trackingSince").replace("{date}", fmtDate(new Date(report.trackingSince), { year: "numeric", month: "long", day: "numeric" }))}`}
+      </p>
 
-      <div className="mt-4 flex items-center justify-between">
+      <div className="flex items-center justify-between">
         <h3 className="typo-body1_semibold text-neutral-800">{t("usage.analysis")}</h3>
         <Picker sel={sel} onSel={setSel} />
       </div>
@@ -374,16 +330,20 @@ export function UsagePane({ view, plans, refreshPlans }: { view: CredentialsView
         <ProviderDetail p={detail} report={report} view={view} plans={plans} onRefresh={refresh} />
       ) : (
         <div className="flex flex-col gap-3">
-          <Head title={t("usage.overviewTitle")} updatedAt={report.updatedAt} onRefresh={refresh} />
-          <div className="grid grid-cols-4 gap-2">
-            <Tile label={t("usage.totalTokens")} value={formatCount(o.totalTokens)} />
-            <Tile label={t("usage.cost")} value={formatUsd(o.usd)} note={t("usage.costNote")} />
-            <Tile label={t("usage.activeDays")} value={String(o.activeDays)} />
-            <Tile label={t("usage.cacheShare")} value={formatShare(o.cacheShare)} />
+          <div>
+            <Head title={t("usage.overviewTitle")} updatedAt={report.updatedAt} onRefresh={refresh} />
+            <p className="typo-caption2_regular text-neutral-400">{t("usage.last30")}</p>
           </div>
-          <div className="grid grid-cols-2 items-start gap-3">
-            <Heatmap heat={o.heat} />
-            <Composition c={o.composition} />
+          <div className="grid grid-cols-4 gap-2">
+            <Tile label={t("usage.cost")} value={formatUsd(o.usd)} note={t("usage.costNote")} />
+            <Tile label={t("usage.totalTokens")} value={formatCount(o.totalTokens)} />
+            <Tile label={t("usage.aiCalls")} value={formatCount(o.calls)} />
+            <SubLeftTile view={view} plans={plans} />
+          </div>
+          <DailyBars days={o.byDay} />
+          <div className="grid grid-cols-2 gap-3">
+            <WorkflowTable rows={o.byWorkflow} />
+            <ModelTable rows={o.byModel} logo />
           </div>
           <h4 className={`${H4} mt-2`}>{t("usage.providers")}</h4>
           <div className="grid grid-cols-3 gap-3">
@@ -402,17 +362,12 @@ export const usageTexts = () =>
   (
     [
       "usage.pageDesc",
-      "usage.runs",
-      "usage.runTime",
       "usage.aiCalls",
       "usage.analysis",
       "usage.overviewTitle",
       "usage.totalTokens",
       "usage.cost",
-      "usage.activeDays",
-      "usage.cacheShare",
-      "usage.heat",
-      "usage.composition",
+      "usage.subLeft",
       "usage.providers",
       "usage.subUsage",
       "usage.daily",

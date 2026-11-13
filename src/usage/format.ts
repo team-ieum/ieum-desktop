@@ -21,16 +21,6 @@ export function formatCount(n: number): string {
   return String(Math.round(n));
 }
 
-/** "2h 14m"·"35m"·"12s" */
-export function formatHm(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
-  return m ? `${m}m` : `${Math.max(0, Math.round(seconds))}s`;
-}
-
-/** 0~1 → "42%" */
-export const formatShare = (x: number) => `${Math.round(x * 100)}%`;
-
 /** 초기화까지 남은 시간 — "2일 10시간"·"3시간 5분"·"35분". */
 export function formatReset(iso: string, now: Date): string {
   const min = Math.max(0, Math.floor((Date.parse(iso) - now.getTime()) / 60_000));

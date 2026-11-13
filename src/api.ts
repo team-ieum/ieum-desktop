@@ -302,42 +302,32 @@ export interface UsageSummary {
   asOf: string;
 }
 
-// usage.rs `report` — 설정 › 통계 및 사용량. 합계는 전체 기간, 나머지는 최근 30일(히트맵 42일).
+// usage.rs `report` — 설정 › 통계 및 사용량. 전부 최근 30일, 추적 시작만 전체 기간.
 export type UsageProvider = "claude" | "openai" | "google";
-export interface TokenParts {
+/** 오늘 포함 30일, 빈 날 0. usd는 구독 호출이 빠진 예상 금액. */
+export interface DayUse { date: string; tokens: number; usd: number }
+export interface ModelUse { provider: UsageProvider; model: string; tokens: number; calls: number; usd: number }
+export interface WorkflowUse { workflowId: string; name: string | null; tokens: number; calls: number; runs: number; usd: number }
+export interface ProviderReport {
+  provider: UsageProvider;
   input: number;
   output: number;
   cacheRead: number;
   cacheWrite: number;
-}
-export interface ProviderReport extends TokenParts {
-  provider: UsageProvider;
-  /** 구독 호출은 빠진 예상 금액. */
   usd: number;
   unpricedCalls: number;
   calls: number;
   runs: number;
-  cacheReuse: number;
-  noCacheCallShare: number;
   topModel: string | null;
-  byDay: ({ date: string } & TokenParts)[];
-  byModel: { model: string; tokens: number; calls: number }[];
-  byWorkflow: { workflowId: string; name: string | null; tokens: number; calls: number; runs: number }[];
-  recent: { at: string; workflowId: string; workflowName: string | null; model: string | null; credential: string; input: number; output: number; cache: number }[];
+  byDay: DayUse[];
+  byModel: ModelUse[];
+  byWorkflow: WorkflowUse[];
+  recent: { at: string; workflowId: string; workflowName: string | null; model: string | null; credential: string; input: number; output: number }[];
 }
 export interface UsageReport {
   updatedAt: string;
   trackingSince: string | null;
-  totals: { runs: number; runSeconds: number; aiCalls: number };
-  overview: {
-    totalTokens: number;
-    usd: number;
-    unpricedCalls: number;
-    activeDays: number;
-    cacheShare: number;
-    heat: { date: string; tokens: number }[];
-    composition: TokenParts;
-  };
+  overview: { totalTokens: number; usd: number; unpricedCalls: number; calls: number; byDay: DayUse[]; byModel: ModelUse[]; byWorkflow: WorkflowUse[] };
   /** 늘 claude·openai·google 순. */
   providers: ProviderReport[];
 }
