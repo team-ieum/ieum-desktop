@@ -1,4 +1,5 @@
-import { CircleHelp, Globe, Laptop, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Settings, Sparkles } from "lucide-react";
+import { ChevronLeft, ChevronRight, CircleHelp, Globe, Laptop, MoreHorizontal, Settings, Sparkles } from "lucide-react";
+import { useState } from "react";
 import { api, type WebWorkflowSummary, type WorkflowEntry } from "../api";
 import { locale, t } from "../i18n";
 import { NAV, type Page } from "./nav";
@@ -45,14 +46,29 @@ const NAV_OFF = "font-normal text-main-deep-blue hover:bg-white/50 [&_svg]:opaci
 const FOOT = "flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border border-[#cde9f4] bg-white text-main-deep-blue hover:bg-neutral-50";
 const BADGE = "inline-flex items-center gap-1 rounded-full bg-white px-1.5 text-[10px] font-bold ring-1 ring-[#cde9f4]";
 
+// 접힌 상태는 이 PC에만 기억 — 저장소가 막혀도 펼친 상태로 동작한다.
+const COLLAPSED_KEY = "ieum.sidebarCollapsed";
+const readCollapsed = () => {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+const writeCollapsed = (c: boolean) => {
+  try {
+    localStorage.setItem(COLLAPSED_KEY, c ? "1" : "0");
+  } catch {
+    // 기억 못 해도 화면은 그대로.
+  }
+};
+
 export function Sidebar({
   current,
   onNavigate,
   onNewCanvas,
   recent,
   onOpenRecent,
-  collapsed,
-  onToggleCollapse,
   version,
 }: {
   current: Page;
@@ -60,10 +76,13 @@ export function Sidebar({
   onNewCanvas: () => void;
   recent: RecentItem[];
   onOpenRecent: (r: RecentItem) => void;
-  collapsed: boolean;
-  onToggleCollapse: () => void;
   version: string;
 }) {
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const onToggleCollapse = () => {
+    writeCollapsed(!collapsed);
+    setCollapsed(!collapsed);
+  };
   return (
     <aside className={`flex shrink-0 flex-col border-r border-[#cde9f4] bg-main-light-blue ${collapsed ? "w-16" : "w-64"}`}>
       <div className="p-3.5">
@@ -71,6 +90,7 @@ export function Sidebar({
           type="button"
           onClick={onNewCanvas}
           aria-label={collapsed ? t("nav.newCanvas") : undefined}
+          title={collapsed ? t("nav.newCanvas") : undefined}
           className={`flex h-[42px] w-full items-center rounded-xl bg-main-deep-blue text-sm font-semibold text-white shadow-[0_4px_12px_-4px_rgba(41,83,124,.5)] hover:bg-main-deep-blue/90 ${
             collapsed ? "justify-center" : "justify-between px-3.5"
           }`}
@@ -91,6 +111,7 @@ export function Sidebar({
             onClick={() => onNavigate(page)}
             aria-current={current === page ? "page" : undefined}
             aria-label={collapsed ? t(label) : undefined}
+            title={collapsed ? t(label) : undefined}
             className={`flex h-10 w-full items-center gap-2.5 rounded-xl text-sm transition-colors ${collapsed ? "justify-center" : "px-3.5"} ${
               current === page ? NAV_ON : NAV_OFF
             }`}
@@ -165,11 +186,17 @@ export function Sidebar({
             {t("nav.help")}
           </button>
         )}
-        <button type="button" onClick={() => onNavigate("settings")} className={FOOT} aria-label={t("nav.settings")}>
+        <button type="button" onClick={() => onNavigate("settings")} className={FOOT} aria-label={t("nav.settings")} title={t("nav.settings")}>
           <Settings className="size-4" aria-hidden="true" />
         </button>
-        <button type="button" onClick={onToggleCollapse} className={FOOT} aria-label={collapsed ? t("nav.expand") : t("nav.collapse")}>
-          {collapsed ? <PanelLeftOpen className="size-4" aria-hidden="true" /> : <PanelLeftClose className="size-4" aria-hidden="true" />}
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className={FOOT}
+          aria-label={collapsed ? t("nav.expand") : t("nav.collapse")}
+          title={collapsed ? t("nav.expand") : t("nav.collapse")}
+        >
+          {collapsed ? <ChevronRight className="size-4" aria-hidden="true" /> : <ChevronLeft className="size-4" aria-hidden="true" />}
         </button>
       </div>
     </aside>

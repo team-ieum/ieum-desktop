@@ -1,5 +1,25 @@
-import { ArrowLeft, History, LoaderCircle, Play, Save } from "lucide-react";
+import { ArrowLeft, CodeXml, History, LoaderCircle, Play, Save } from "lucide-react";
 import { t } from "../i18n";
+
+/** `</> 기술 정보` 스위치 — 켜면 노드 카드에 이벤트 id 등. 화면 상태로만 쥔다. */
+export function TechSwitch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={t("editor.techInfo")}
+      onClick={() => onChange(!on)}
+      className="inline-flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-[10px] px-2 text-sm font-semibold text-neutral-600 hover:bg-neutral-100"
+    >
+      <CodeXml size={16} aria-hidden="true" />
+      <span aria-hidden="true">{t("editor.techInfo")}</span>
+      <span className={`relative block h-5 w-9 shrink-0 rounded-full transition-colors ${on ? "bg-main-blue" : "bg-neutral-300"}`}>
+        <span className={`absolute left-0 top-0.5 size-4 rounded-full bg-white shadow-sm transition-transform ${on ? "translate-x-4.5" : "translate-x-0.5"}`} />
+      </span>
+    </button>
+  );
+}
 
 export interface ToolbarProps {
   name: string;
@@ -15,12 +35,29 @@ export interface ToolbarProps {
   onRun: () => void;
   running: boolean;
   saving: boolean;
+  techInfo: boolean;
+  onTechInfo: (on: boolean) => void;
 }
 
 const ICON_BTN = "grid h-9 w-9 shrink-0 cursor-pointer place-items-center rounded-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-40";
 
-/** 웹 WorkflowToolbar 클래스 — 공유·기술 정보 없이, Deploy 대신 실행. */
-export function Toolbar({ name, onName, dirty, enabled, onEnabled, problems, onBack, onOpenRuns, onSave, onRun, running, saving }: ToolbarProps) {
+/** 웹 WorkflowToolbar 클래스 — 공유 없이, Deploy 대신 실행. */
+export function Toolbar({
+  name,
+  onName,
+  dirty,
+  enabled,
+  onEnabled,
+  problems,
+  onBack,
+  onOpenRuns,
+  onSave,
+  onRun,
+  running,
+  saving,
+  techInfo,
+  onTechInfo,
+}: ToolbarProps) {
   const status = enabled ? t("list.status.active") : t("list.status.paused");
   return (
     <div className="flex h-16 shrink-0 items-center gap-3.5 overflow-x-auto border-b border-neutral-200 bg-white/85 px-6 backdrop-blur-[8px]">
@@ -63,6 +100,7 @@ export function Toolbar({ name, onName, dirty, enabled, onEnabled, problems, onB
         </span>
       )}
       <div className="flex-1" />
+      <TechSwitch on={techInfo} onChange={onTechInfo} />
       <button
         type="button"
         onClick={onOpenRuns}

@@ -20,6 +20,8 @@ const props = (over: Partial<Parameters<typeof Toolbar>[0]> = {}) => ({
   onRun: vi.fn(),
   running: false,
   saving: false,
+  techInfo: false,
+  onTechInfo: vi.fn(),
   ...over,
 });
 

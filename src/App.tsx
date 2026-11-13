@@ -36,7 +36,6 @@ export default function App() {
   const expired = useWeb((s) => s.expired);
   const guard = useWeb((s) => s.guard);
   const [ready, setReady] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
   const [version, setVersion] = useState("");
   const local = useWorkflows((s) => s.list);
   const loadLocal = useWorkflows((s) => s.load);
@@ -160,8 +159,6 @@ export default function App() {
           onNewCanvas={newCanvas}
           recent={recentItems(local, web)}
           onOpenRecent={(r) => leave(() => (r.kind === "local" ? openEditor(r.id) : setView({ page: "web", workflow: r.id })))}
-          collapsed={collapsed}
-          onToggleCollapse={() => setCollapsed((c) => !c)}
           version={version}
         />
         <main className="flex min-w-0 flex-1 flex-col bg-neutral-50 text-neutral-800">

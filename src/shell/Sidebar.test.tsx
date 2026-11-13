@@ -1,10 +1,19 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api, type WebWorkflowSummary, type WorkflowEntry } from "../api";
 import { recentItems, Sidebar } from "./Sidebar";
 
-afterEach(cleanup);
+// 이 환경의 localStorage는 온전하지 않다 — 메모리 저장소를 꽂는다.
+const memoryStorage = () => {
+  const m = new Map<string, string>();
+  return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };
+};
+beforeEach(() => vi.stubGlobal("localStorage", memoryStorage()));
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const props = {
   current: "local" as const,
@@ -12,10 +21,43 @@ const props = {
   onNewCanvas: () => {},
   recent: [],
   onOpenRecent: () => {},
-  collapsed: false,
-  onToggleCollapse: () => {},
   version: "0.2.0",
 };
+
+test("sidebar_collapses_to_icon_rail", () => {
+  const recent = recentItems([local("a", "2026-11-10T00:00:00Z")], []);
+  render(<Sidebar {...props} recent={recent} />);
+  expect(screen.getByText("최근 작업")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
+  // 아이콘만 — 이름은 aria-label·title로.
+  for (const name of ["새 캔버스", "대시보드", "내 PC", "웹 이음", "실행 기록", "설정"]) {
+    const b = screen.getAllByRole("button", { name })[0];
+    expect(b.getAttribute("title")).toBe(name);
+    expect(b.textContent).toBe("");
+  }
+  expect(screen.queryByText("최근 작업")).toBeNull();
+  expect(screen.queryByText("local a")).toBeNull();
+  expect(screen.queryByText(/IEUM desktop/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "사이드바 펼치기" }));
+  expect(screen.getByText("최근 작업")).toBeTruthy();
+});
+
+test("sidebar_state_remembered", () => {
+  const r = render(<Sidebar {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
+  r.unmount();
+  render(<Sidebar {...props} />);
+  expect(screen.getByRole("button", { name: "사이드바 펼치기" })).toBeTruthy();
+  cleanup();
+  // 저장소가 막혀도 펼친 상태로 동작.
+  const blocked = () => {
+    throw new Error("blocked");
+  };
+  vi.stubGlobal("localStorage", { getItem: blocked, setItem: blocked });
+  render(<Sidebar {...props} />);
+  fireEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
+  expect(screen.getByRole("button", { name: "사이드바 펼치기" })).toBeTruthy();
+});
 
 test("sidebar_marks_current_page_navy", () => {
   render(<Sidebar {...props} current="history" />);

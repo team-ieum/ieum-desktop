@@ -78,7 +78,23 @@ export function modelLabel(config: WfNode["config"], view?: CredentialsView | nu
   return `${base} · ${m ? credLabel(m) : t("editor.credentialMissing")}`;
 }
 
-type Data = { wf: WfNode; step: number; errors: string[]; status?: NodeRunStatus };
+/** 기술 정보 줄 — 이벤트 id, AI면 공급원·모델·키·계정 이름표. 빈 값은 뺀다. */
+export function techRows(wf: WfNode, kind: string, view?: CredentialsView | null): [string, string][] {
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const rows: [string, string][] = [[t("editor.tech.event"), wf.event]];
+  if (isAi(wf.event, kind)) {
+    const { provider, model, credential } = wf.config;
+    const m = view && str(credential) ? choicesFor(view, provider).find((x) => x.id === credential) : undefined;
+    rows.push(
+      [t("editor.tech.provider"), str(provider)],
+      [t("editor.tech.model"), str(model)],
+      [t("editor.tech.credential"), m ? credLabel(m) : str(credential)],
+    );
+  }
+  return rows.filter(([, v]) => v);
+}
+
+type Data = { wf: WfNode; step: number; errors: string[]; status?: NodeRunStatus; techInfo?: boolean };
 type IeumNode = Node<Data, "ieum">;
 
 // 웹 WorkflowNode HANDLE_CLASS.
@@ -93,7 +109,7 @@ function handleLabel(h: { id: string; name: string }) {
 
 /** 웹 이음 WorkflowNode와 같은 카드. */
 function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
-  const { wf, step, errors, status } = data;
+  const { wf, step, errors, status, techInfo } = data;
   const kind = DEFS[wf.event]?.node_type ?? wf.type ?? "";
   const meta = nodeMeta(wf.event, wf.type);
   const branches = kind === "CONDITION" ? branchHandles(wf) : null;
@@ -140,6 +156,7 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
             {modelLabel(wf.config, creds)}
           </span>
         )}
+        {techInfo && <TechInfo rows={techRows(wf, kind, creds)} />}
       </div>
       {branches ? (
         <ul className="flex flex-col gap-1 border-t border-neutral-200 px-[0.85rem] py-2">
@@ -154,6 +171,22 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
         <Handle type="source" position={Position.Right} className={HANDLE} isConnectable={isConnectable} />
       )}
     </article>
+  );
+}
+
+function TechInfo({ rows }: { rows: [string, string][] }) {
+  if (!rows.length) return <p className="m-0 rounded-[0.65rem] bg-neutral-100 px-[0.6rem] py-1.5 text-[0.67rem] text-neutral-500">{t("editor.noTechInfo")}</p>;
+  return (
+    <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 rounded-[0.65rem] bg-neutral-100 px-[0.6rem] py-1.5 text-[0.67rem]">
+      {rows.map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="text-neutral-500">{k}</dt>
+          <dd className="m-0 min-w-0 truncate font-mono text-neutral-800" title={v}>
+            {v}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -187,11 +220,15 @@ export interface CanvasProps {
   selectedId?: string | null;
   onChange?: (wf: Workflow) => void;
   onSelect?: (id: string | null) => void;
+  /** 읽기 전용에서도 불린다 — 노드 정보 패널을 여는 데. */
+  onNodeClick?: (id: string) => void;
+  /** 노드 카드 안에 기술 정보(이벤트 id 등). */
+  techInfo?: boolean;
 }
 
 const edgeId = (e: Workflow["edges"][number]) => e.id ?? `${e.source}-${e.target}-${e.conditionType ?? ""}`;
 
-export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect }: CanvasProps) {
+export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect, onNodeClick, techInfo = false }: CanvasProps) {
   const [nodes, setNodes] = useState<IeumNode[]>([]);
   const [edges, setEdges] = useState<Edge<EdgeData>[]>([]);
   // 한 틱에 여러 변경(엣지 삭제 → 노드 삭제)이 오면 앞 변경 결과 위에 쌓는다 — 렌더의 workflow는 낡았다.
@@ -214,16 +251,17 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
         type: "ieum",
         position: n.position ?? { x: i * 320, y: 0 },
         measured: measured.get(n.id),
-        selected: !readOnly && n.id === selectedId,
+        selected: n.id === selectedId,
         data: {
           wf: n,
           step: i + 1,
           errors: (errors ?? []).filter((e) => e.nodeId === n.id).map((e) => e.message),
           status: statuses?.[n.id],
+          techInfo,
         },
       }));
     });
-  }, [workflow.nodes, errors, statuses, selectedId, readOnly]);
+  }, [workflow.nodes, errors, statuses, selectedId, readOnly, techInfo]);
 
   useEffect(() => {
     setEdges((prev) => {
@@ -287,6 +325,7 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      onNodeClick={onNodeClick && ((_: unknown, n: IeumNode) => onNodeClick(n.id))}
       nodesDraggable={!readOnly}
       nodesConnectable={!readOnly}
       elementsSelectable={!readOnly}
