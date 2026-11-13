@@ -4,6 +4,7 @@
 use std::future::Future;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use reqwest::{Client, Url, redirect};
@@ -131,6 +132,8 @@ pub struct PlanUsageClient {
     http: Client,
     token: TokenSource,
     cache: Cache,
+    /// 이번 실행에서 토큰을 `Found`로 읽은 적 있음 — 다시 읽어도 허용 창이 안 뜬다.
+    read: AtomicBool,
 }
 
 impl PlanUsageClient {
@@ -146,7 +149,16 @@ impl PlanUsageClient {
             http,
             token,
             cache: Cache::new(ttl),
+            read: AtomicBool::new(false),
         })
+    }
+
+    /// 백그라운드용 — 토큰을 아직 못 읽은 계정은 키체인(허용 창)을 건드리지 않고 None.
+    pub async fn get_quiet(&self) -> Option<PlanUsage> {
+        if !self.read.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(self.get().await)
     }
 
     /// `ttl` 안에 다시 부르면 저장해 둔 결과(키체인·네트워크를 건드리지 않음). 키체인 거부는 계속 쓴다.
@@ -162,7 +174,10 @@ impl PlanUsageClient {
     async fn fetch(&self) -> Fetched {
         let token = self.token.clone();
         let token = match tokio::task::spawn_blocking(move || token()).await {
-            Ok(TokenRead::Found(t)) => t,
+            Ok(TokenRead::Found(t)) => {
+                self.read.store(true, Ordering::Relaxed);
+                t
+            }
             // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
             Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true, None),
             Ok(TokenRead::Missing) | Err(_) => {

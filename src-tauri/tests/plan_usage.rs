@@ -456,6 +456,27 @@ fn security_exit_codes_map_to_token_read() {
     assert!(matches!(token_from_security(None, b""), TokenRead::Missing));
 }
 
+#[tokio::test]
+async fn quiet_get_skips_unread_account() {
+    let (url, _) = serve(|_| (200, sample().to_string())).await;
+    let (src, n) = counting(|| TokenRead::Found(TOKEN.into()));
+    let c = PlanUsageClient::with_url(&url, src, CACHE_TTL).unwrap();
+    // 아직 한 번도 못 읽은 계정 — 키체인(허용 창)을 건드리지 않는다.
+    assert!(c.get_quiet().await.is_none());
+    assert_eq!(n.load(Ordering::SeqCst), 0);
+    assert_eq!(c.get().await.state, "ok");
+    assert_eq!(c.get_quiet().await.map(|u| u.state), Some("ok"));
+    assert_eq!(n.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn quiet_get_after_denied_stays_none() {
+    let (src, _) = counting(|| TokenRead::Denied);
+    let c = PlanUsageClient::with_url("http://127.0.0.1:1/x", src, CACHE_TTL).unwrap();
+    assert_eq!(c.get().await.state, "unavailable");
+    assert!(c.get_quiet().await.is_none());
+}
+
 /// 수동 확인용(실제 키체인·Anthropic): `cargo test -p ieum-desktop --test plan_usage -- --ignored`.
 #[tokio::test]
 #[ignore]

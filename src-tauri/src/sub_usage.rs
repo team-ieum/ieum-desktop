@@ -9,14 +9,15 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use reqwest::{Client, Url};
 use serde_json::Value;
 
 use crate::plan_usage::{
-    Cache, ClaudeTokenFor, Fetched, PlanUsage, PlanUsageClient, PlanWindow, TokenRead,
-    TokenSource, claude_account_email, pinned_http, retry_after, usage,
+    Cache, ClaudeTokenFor, Fetched, PlanUsage, PlanUsageClient, PlanWindow, TokenRead, TokenSource,
+    claude_account_email, pinned_http, retry_after, usage,
 };
 
 pub const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -268,6 +269,22 @@ impl SubscriptionUsage {
         self.load(kind, dir, true).await
     }
 
+    /// 백그라운드 감시용 — 허용 창을 띄우지 않는다. 이번 실행에서 토큰을 못 읽은 Claude 계정은 None.
+    /// Codex는 키체인을 안 쓰므로 늘 조회한다.
+    pub async fn get_quiet(
+        &self,
+        kind: &str,
+        dir: Option<PathBuf>,
+    ) -> Result<Option<PlanUsage>, String> {
+        match &*self.client(kind, dir.clone())? {
+            AccountClient::Codex(c) => Ok(Some(c.get().await)),
+            AccountClient::Claude(c) => match c.get_quiet().await {
+                Some(u) => Ok(Some(self.with_claude_email(u, dir).await)),
+                None => Ok(None),
+            },
+        }
+    }
+
     async fn load(
         &self,
         kind: &str,
@@ -281,22 +298,26 @@ impl SubscriptionUsage {
                 c.get().await
             }),
             AccountClient::Claude(c) => {
-                let mut u = if fresh {
+                let u = if fresh {
                     c.refresh().await
                 } else {
                     c.get().await
                 };
-                // 로그인 계정: 설정 폴더의 `.claude.json`(기본은 `~/.claude.json`).
-                let file = dir
-                    .unwrap_or_else(|| self.home.clone())
-                    .join(".claude.json");
-                u.account_email = tokio::task::spawn_blocking(move || claude_account_email(&file))
-                    .await
-                    .ok()
-                    .flatten();
-                Ok(u)
+                Ok(self.with_claude_email(u, dir).await)
             }
         }
+    }
+
+    /// 로그인 계정: 설정 폴더의 `.claude.json`(기본은 `~/.claude.json`).
+    async fn with_claude_email(&self, mut u: PlanUsage, dir: Option<PathBuf>) -> PlanUsage {
+        let file = dir
+            .unwrap_or_else(|| self.home.clone())
+            .join(".claude.json");
+        u.account_email = tokio::task::spawn_blocking(move || claude_account_email(&file))
+            .await
+            .ok()
+            .flatten();
+        u
     }
 }
 
@@ -319,6 +340,8 @@ pub struct AntigravityUsageClient {
     login: AgyLoginSource,
     run: AgyRunner,
     cache: Cache,
+    /// 이번 실행에서 로그인을 `Found`로 읽은 적 있음.
+    read: AtomicBool,
 }
 
 impl AntigravityUsageClient {
@@ -327,7 +350,16 @@ impl AntigravityUsageClient {
             login,
             run,
             cache: Cache::new(ttl),
+            read: AtomicBool::new(false),
         }
+    }
+
+    /// 백그라운드용 — 로그인을 아직 못 읽었으면 키체인(허용 창)·agy를 건드리지 않고 None.
+    pub async fn get_quiet(&self) -> Option<PlanUsage> {
+        if !self.read.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(self.get().await)
     }
 
     pub async fn get(&self) -> PlanUsage {
@@ -342,7 +374,10 @@ impl AntigravityUsageClient {
     async fn fetch(&self) -> Fetched {
         let login = self.login.clone();
         let email = match tokio::task::spawn_blocking(move || login()).await {
-            Ok(TokenRead::Found(e)) => e,
+            Ok(TokenRead::Found(e)) => {
+                self.read.store(true, Ordering::Relaxed);
+                e
+            }
             // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
             Ok(TokenRead::Denied) => return (usage("unavailable", Vec::new()), true, None),
             Ok(TokenRead::Missing) | Err(_) => {

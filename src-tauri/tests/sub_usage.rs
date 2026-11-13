@@ -1,12 +1,13 @@
 //! Codex·Antigravity 구독 연결 상태와 Claude 계정. 가짜 HTTP 서버·가짜 CLI·가짜 자격만 쓴다.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ieum_desktop_lib::plan_usage::{CACHE_TTL, PlanUsage, TokenRead, claude_account_email};
 use ieum_desktop_lib::sub_usage::{
-    AgyRun, AntigravityUsageClient, CodexAuth, CodexUsageClient, agy_login_from_secret,
-    agy_version_ok, codex_auth_from_json,
+    AgyRun, AntigravityUsageClient, CodexAuth, CodexUsageClient, SubscriptionUsage,
+    agy_login_from_secret, agy_version_ok, codex_auth_from_json,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -393,6 +394,47 @@ async fn antigravity_cached_60s() {
     let b = c.get().await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(a.checked_at, b.checked_at);
+}
+
+#[tokio::test]
+async fn antigravity_quiet_get_needs_prior_login() {
+    let (n, runs): (Calls, Calls) = Default::default();
+    let (seen, ran) = (n.clone(), runs.clone());
+    let c = AntigravityUsageClient::new(
+        Arc::new(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            TokenRead::Found("me@example.com".into())
+        }),
+        Arc::new(move || {
+            ran.fetch_add(1, Ordering::SeqCst);
+            AgyRun::Out(agy_sample())
+        }),
+        CACHE_TTL,
+    );
+    // 로그인을 한 번도 안 읽었으면 키체인도 agy도 건드리지 않는다.
+    assert!(c.get_quiet().await.is_none());
+    assert_eq!(n.load(Ordering::SeqCst), 0);
+    assert_eq!(runs.load(Ordering::SeqCst), 0);
+    assert_eq!(c.get().await.state, "ok");
+    assert_eq!(c.get_quiet().await.map(|u| u.state), Some("ok"));
+    assert_eq!(n.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn codex_quiet_get_reads_file() {
+    let (url, _) = serve(|_| (200, codex_sample().to_string())).await;
+    let s = SubscriptionUsage::with(
+        "http://127.0.0.1:1/x",
+        &url,
+        CACHE_TTL,
+        Arc::new(|_: Option<&Path>| TokenRead::Missing),
+        Arc::new(|_: Option<&Path>| Some(codex_auth())),
+        std::env::temp_dir().join("ieum-no-home"),
+    )
+    .unwrap();
+    // Codex는 키체인을 안 쓰므로 처음부터 조회한다.
+    let u = s.get_quiet("codex", None).await.unwrap();
+    assert_eq!(u.map(|u| u.state), Some("ok"));
 }
 
 #[tokio::test]
