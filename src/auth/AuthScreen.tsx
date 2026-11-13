@@ -92,7 +92,7 @@ export function AuthScreen({ initialEmail }: { initialEmail?: string }) {
 
   return (
     <div className="flex h-full overflow-hidden bg-neutral-white">
-      <aside className="relative flex basis-1/2 flex-col justify-between overflow-hidden bg-main-deep-blue px-16 py-14 text-white">
+      <aside className="relative flex basis-1/2 flex-col justify-between overflow-hidden bg-main-deep-blue px-16 pt-20 pb-14 text-white">
         <div className="absolute -top-24 -right-24 h-[360px] w-[360px] rounded-full bg-sub-blue/35" />
         <div className="absolute top-[230px] right-[120px] h-[90px] w-[90px] rounded-full bg-node-yellow/50" />
         <div className="absolute -bottom-32 -left-20 h-[300px] w-[300px] rounded-full bg-sub-blue/20" />

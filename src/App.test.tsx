@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import App from "./App";
 import { api } from "./api";
@@ -35,6 +35,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup();
   useWeb.setState({ expired: false, offline: false });
+  vi.unstubAllGlobals();
 });
 
 test("leaving_editor_with_unsaved_changes_asks_in_app", async () => {
@@ -87,6 +88,48 @@ test("shell_shows_header_crumb_and_new_canvas_opens_editor", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "대시보드" })));
   expect(screen.getByTestId("crumb").textContent).toBe("대시보드");
   expect(screen.getByRole("heading", { name: "대시보드" })).toBeTruthy();
+});
+
+test("sidebar_has_search_row_opening_command_palette", async () => {
+  await act(async () => {
+    render(<App />);
+  });
+  const sidebar = screen.getByRole("complementary", { name: "사이드바" });
+  expect(screen.queryByRole("combobox")).toBeNull();
+  await act(async () => fireEvent.click(within(sidebar).getByRole("button", { name: /찾기/ })));
+  expect(screen.getByRole("combobox", { name: "워크플로우 이름으로 찾기" })).toBeTruthy();
+});
+
+test("sidebar_collapse_hides_entirely_and_header_shows_expand", async () => {
+  const m = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) });
+  const r = await act(async () => render(<App />));
+  expect(screen.queryByRole("button", { name: "사이드바 펼치기" })).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "사이드바 접기" })));
+  // 아이콘 줄도 없이 통째로 숨는다.
+  expect(screen.queryByRole("complementary", { name: "사이드바" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "대시보드" })).toBeNull();
+  expect(within(screen.getByRole("banner")).getByRole("button", { name: "사이드바 펼치기" })).toBeTruthy();
+  // 다시 열어도 기억한다.
+  r.unmount();
+  await act(async () => render(<App />));
+  expect(screen.queryByRole("complementary", { name: "사이드바" })).toBeNull();
+  await act(async () => fireEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "사이드바 펼치기" })));
+  expect(screen.getByRole("complementary", { name: "사이드바" })).toBeTruthy();
+});
+
+test("header_has_no_logo_when_sidebar_shown", async () => {
+  await act(async () => {
+    render(<App />);
+  });
+  const header = screen.getByRole("banner");
+  expect(header.querySelector("img")).toBeNull();
+  expect(within(header).queryByText("IEUM")).toBeNull();
+  expect(within(screen.getByRole("complementary", { name: "사이드바" })).getByText("IEUM")).toBeTruthy();
+  // 위치·찾기·알림·계정은 그대로.
+  expect(within(header).getByTestId("crumb")).toBeTruthy();
+  expect(within(header).getByRole("button", { name: /찾기/ })).toBeTruthy();
+  expect(within(header).getByLabelText(ACCOUNT.email)).toBeTruthy();
 });
 
 test("gate_shows_auth_when_no_account", async () => {

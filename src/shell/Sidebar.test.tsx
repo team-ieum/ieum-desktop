@@ -2,7 +2,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api, type WebWorkflowSummary, type WorkflowEntry } from "../api";
-import { recentItems, Sidebar } from "./Sidebar";
+import { recentItems, Sidebar, useSidebarCollapsed } from "./Sidebar";
 
 // 이 환경의 localStorage는 온전하지 않다 — 메모리 저장소를 꽂는다.
 const memoryStorage = () => {
@@ -19,60 +19,60 @@ const props = {
   current: "local" as const,
   onNavigate: () => {},
   onNewCanvas: () => {},
+  onSearch: () => {},
+  onCollapse: () => {},
   recent: [],
   onOpenRecent: () => {},
   version: "0.2.0",
 };
 
-test("sidebar_collapses_to_icon_rail", () => {
-  const recent = recentItems([local("a", "2026-11-10T00:00:00Z")], []);
-  render(<Sidebar {...props} recent={recent} />);
-  expect(screen.getByText("최근 작업")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
-  // 아이콘만 — 이름은 aria-label·title로.
-  for (const name of ["새 캔버스", "대시보드", "내 PC", "웹 이음", "실행 기록", "설정"]) {
-    const b = screen.getAllByRole("button", { name })[0];
-    expect(b.getAttribute("title")).toBe(name);
-    expect(b.textContent).toBe("");
-  }
-  expect(screen.queryByText("최근 작업")).toBeNull();
-  expect(screen.queryByText("local a")).toBeNull();
-  expect(screen.queryByText(/IEUM desktop/)).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "사이드바 펼치기" }));
-  expect(screen.getByText("최근 작업")).toBeTruthy();
-});
+function CollapseHarness() {
+  const [collapsed, toggle] = useSidebarCollapsed();
+  return <button onClick={toggle}>{collapsed ? "접힘" : "펼침"}</button>;
+}
 
 test("sidebar_state_remembered", () => {
-  const r = render(<Sidebar {...props} />);
-  fireEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
+  const r = render(<CollapseHarness />);
+  fireEvent.click(screen.getByText("펼침"));
   r.unmount();
-  render(<Sidebar {...props} />);
-  expect(screen.getByRole("button", { name: "사이드바 펼치기" })).toBeTruthy();
+  render(<CollapseHarness />);
+  expect(screen.getByText("접힘")).toBeTruthy();
   cleanup();
   // 저장소가 막혀도 펼친 상태로 동작.
   const blocked = () => {
     throw new Error("blocked");
   };
   vi.stubGlobal("localStorage", { getItem: blocked, setItem: blocked });
-  render(<Sidebar {...props} />);
-  fireEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
-  expect(screen.getByRole("button", { name: "사이드바 펼치기" })).toBeTruthy();
+  render(<CollapseHarness />);
+  fireEvent.click(screen.getByText("펼침"));
+  expect(screen.getByText("접힘")).toBeTruthy();
 });
 
-test("sidebar_marks_current_page_navy", () => {
+test("sidebar_marks_current_page_light_blue", () => {
   render(<Sidebar {...props} current="history" />);
   const cur = screen.getByRole("button", { name: "실행 기록" });
   expect(cur.getAttribute("aria-current")).toBe("page");
-  expect(cur.className).toContain("bg-main-deep-blue");
-  expect(cur.className).toContain("text-white");
-  expect(screen.getByRole("button", { name: "내 PC" }).className).not.toContain("bg-main-deep-blue");
+  expect(cur.className).toContain("bg-main-light-blue");
+  expect(cur.className).toContain("text-main-deep-blue");
+  expect(screen.getByRole("button", { name: "내 PC" }).className).not.toContain("bg-main-light-blue");
+  // 새 캔버스도 같은 줄 모양(남색 큰 버튼 아님).
+  expect(screen.getByRole("button", { name: /새 캔버스/ }).className).not.toContain("bg-main-deep-blue");
 });
 
-test("sidebar_help_opens_install_doc", () => {
+test("sidebar_footer_settings_and_help", () => {
   const help = vi.spyOn(api, "openHelp").mockResolvedValue();
-  render(<Sidebar {...props} />);
+  const onNavigate = vi.fn();
+  const onCollapse = vi.fn();
+  render(<Sidebar {...props} onNavigate={onNavigate} onCollapse={onCollapse} />);
+  fireEvent.click(screen.getByRole("button", { name: "설정" }));
+  expect(onNavigate).toHaveBeenCalledWith("settings");
   fireEvent.click(screen.getByRole("button", { name: "도움말" }));
   expect(help).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("v0.2.0")).toBeTruthy();
+  // 첫 줄: IEUM + 접기.
+  expect(screen.getByText("IEUM")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));
+  expect(onCollapse).toHaveBeenCalledTimes(1);
 });
 
 const local = (id: string, updatedAt: string): WorkflowEntry => ({
@@ -97,7 +97,7 @@ test("recent_mixes_local_and_web_by_time", () => {
   const items = screen.getAllByRole("button", { name: /^(local|web) / });
   expect(items.map((b) => b.textContent?.match(/^(local|web) \w/)?.[0])).toEqual(["local b", "web c", "local a", "web d"]);
   expect(within(items[0]).getByText("내 PC")).toBeTruthy();
-  expect(within(items[1]).getByText("웹")).toBeTruthy();
+  expect(within(items[1]).getByText("웹 이음")).toBeTruthy();
 });
 
 test("recent_shows_only_five_with_status_text", () => {

@@ -222,8 +222,8 @@ function WebWorkflowView({ id, onBack, onOpenExecution }: { id: string; onBack: 
       </Header>
       <ErrorLine msg={error} />
       <ErrorLine msg={pageError} />
-      <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">
+      <div className="relative min-h-0 flex-1">
+        <div className="absolute inset-0">
           {wf && (
             <Canvas
               workflow={wf}

@@ -339,7 +339,8 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
     >
       <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="rgba(74, 101, 124, 0.18)" />
       <Controls showInteractive={false} />
-      <MiniMap pannable zoomable nodeStrokeWidth={3} nodeColor={(n) => minimapMeta(n).tint} nodeStrokeColor={(n) => minimapMeta(n).color} />
+      {/* 오른쪽은 떠 있는 패널 자리 — 미니맵은 왼쪽 아래, 줌 버튼 옆. */}
+      <MiniMap position="bottom-left" style={{ marginLeft: 56 }} pannable zoomable nodeStrokeWidth={3} nodeColor={(n) => minimapMeta(n).tint} nodeStrokeColor={(n) => minimapMeta(n).color} />
     </ReactFlow>
   );
 }

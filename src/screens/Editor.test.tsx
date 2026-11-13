@@ -69,6 +69,20 @@ test("editor_config_panel_only_when_node_selected", async () => {
   expect(screen.queryByRole("complementary")).toBeNull();
 });
 
+test("editor_panel_floats_over_canvas", async () => {
+  const r = await open();
+  const canvas = r.container.querySelector(".react-flow")!.parentElement!;
+  await addNode(PALETTE[0]);
+  const panel = screen.getByRole("complementary", { name: nodeTitle(PALETTE[0]) });
+  // 캔버스 위에 떠 있는 카드 — 캔버스는 뒤에서 전체 폭 그대로.
+  expect(panel.className).toMatch(/\babsolute\b/);
+  expect(panel.className).toContain("rounded-2xl");
+  expect(panel.className).toContain("shadow-");
+  expect(r.container.querySelector(".react-flow")!.parentElement).toBe(canvas);
+  expect(canvas.className).toContain("inset-0");
+  expect(panel.parentElement!.contains(canvas)).toBe(true);
+});
+
 test("tech_info_toggle_shows_event_ids", async () => {
   await open();
   await addNode(PALETTE[0]);

@@ -12,9 +12,10 @@ import { SettingsShell } from "./screens/settings/SettingsShell";
 import { Web } from "./screens/Web";
 import { WorkflowList } from "./screens/WorkflowList";
 import { Header } from "./shell/Header";
+import { SearchDialog } from "./shell/SearchDialog";
 import { StatusBar } from "./shell/StatusBar";
 import { NAV, type Page, type View } from "./shell/nav";
-import { recentItems, Sidebar } from "./shell/Sidebar";
+import { recentItems, Sidebar, useSidebarCollapsed } from "./shell/Sidebar";
 import { subscribeExecEvents } from "./stores/runs";
 import { useSettings } from "./stores/settings";
 import { useWeb } from "./stores/web";
@@ -78,13 +79,17 @@ export default function App() {
     return () => void un.then((f) => f(), () => {});
   }, [dirty]);
 
-  // ⌘N = 새 캔버스
+  const [collapsed, toggleSidebar] = useSidebarCollapsed();
+  const [searching, setSearching] = useState(false);
+
+  // ⌘N = 새 캔버스, ⌘K = 찾기
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!gated && !onboarding && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "n") {
-        e.preventDefault();
-        newCanvas();
-      }
+      if (gated || onboarding || !(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "n" || k === "k") e.preventDefault();
+      if (k === "n") newCanvas();
+      if (k === "k") setSearching(true);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -123,6 +128,14 @@ export default function App() {
       </div>
     );
 
+  const searchDialog = (
+    <SearchDialog
+      open={searching}
+      onClose={() => setSearching(false)}
+      onPick={(p) => leave(() => (p.kind === "local" ? openEditor(p.id) : setView({ page: "web", workflow: p.id })))}
+    />
+  );
+
   // 설정은 셸 사이드바 대신 설정 전용 사이드바.
   if (view.page === "settings")
     return (
@@ -130,8 +143,9 @@ export default function App() {
         <Header
           crumb={t("nav.settings")}
           email={account?.email ?? null}
-          onPick={(p) => (p.kind === "local" ? openEditor(p.id) : setView({ page: "web", workflow: p.id }))}
+          onSearch={() => setSearching(true)}
           onOpenRun={(run) => setView({ page: "history", run })}
+          inset
         />
         <SettingsShell
           key={"section" in view ? view.section : ""}
@@ -140,71 +154,80 @@ export default function App() {
           initial={"section" in view ? view.section : undefined}
         />
         <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
+        {searchDialog}
       </div>
     );
 
   return (
     // 언어가 바뀌면 화면 전체를 다시 그린다.
     <div key={lang} className="flex h-full flex-col">
-      <Header
-        crumb={t(NAV.find((n) => n.page === view.page)!.label)}
-        email={account?.email ?? null}
-        onPick={(p) => leave(() => (p.kind === "local" ? openEditor(p.id) : setView({ page: "web", workflow: p.id })))}
-        onOpenRun={(run) => leave(() => setView({ page: "history", run }))}
-      />
       <div className="flex min-h-0 flex-1">
-        <Sidebar
-          current={view.page}
-          onNavigate={navigate}
-          onNewCanvas={newCanvas}
-          recent={recentItems(local, web)}
-          onOpenRecent={(r) => leave(() => (r.kind === "local" ? openEditor(r.id) : setView({ page: "web", workflow: r.id })))}
-          version={version}
-        />
-        <main className="flex min-w-0 flex-1 flex-col bg-neutral-50 text-neutral-800">
-          {pending && (
-            <div role="alert" className="flex items-center gap-3 border-b border-danger-300 bg-danger-100 px-4 py-2 typo-body3_semibold text-danger-700">
-              <span className="min-w-0 flex-1">{t("common.unsavedLeave")}</span>
-              <button type="button" className={BUTTON} onClick={() => setPending(null)}>
-                {t("common.cancel")}
-              </button>
-              <button
-                type="button"
-                className={PRIMARY}
-                onClick={() => {
-                  setPending(null);
-                  pending();
-                }}
-              >
-                {t("common.discard")}
-              </button>
-            </div>
-          )}
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {view.page === "dashboard" ? (
-              <Dashboard onOpenRun={(run) => setView({ page: "history", run })} />
-
-            ) : view.page === "web" ? (
-              <Web workflow={"workflow" in view ? view.workflow : undefined} onOpen={(id) => setView(id ? { page: "web", workflow: id } : { page: "web" })} />
-            ) : view.page === "history" ? (
-              <History key={"run" in view ? view.run : ""} initialRun={"run" in view ? view.run : null} />
-            ) : "editor" in view ? (
-              <Editor
-                key={view.editor ?? "new"}
-                id={view.editor}
-                onBack={() => leave(toList)}
-                onOpenRuns={(id) => leave(() => openRuns(id))}
-                onDirty={setDirty}
-              />
-            ) : "run" in view ? (
-              <RunView workflowId={view.run} onBack={toList} onEdit={openEditor} />
-            ) : (
-              <WorkflowList onOpen={openEditor} />
+        {!collapsed && (
+          <Sidebar
+            current={view.page}
+            onNavigate={navigate}
+            onNewCanvas={newCanvas}
+            onSearch={() => setSearching(true)}
+            onCollapse={toggleSidebar}
+            recent={recentItems(local, web)}
+            onOpenRecent={(r) => leave(() => (r.kind === "local" ? openEditor(r.id) : setView({ page: "web", workflow: r.id })))}
+            version={version}
+          />
+        )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Header
+            crumb={t(NAV.find((n) => n.page === view.page)!.label)}
+            email={account?.email ?? null}
+            onSearch={() => setSearching(true)}
+            onOpenRun={(run) => leave(() => setView({ page: "history", run }))}
+            inset={collapsed}
+            onExpand={collapsed ? toggleSidebar : undefined}
+          />
+          <main className="flex min-h-0 flex-1 flex-col bg-neutral-50 text-neutral-800">
+            {pending && (
+              <div role="alert" className="flex items-center gap-3 border-b border-danger-300 bg-danger-100 px-4 py-2 typo-body3_semibold text-danger-700">
+                <span className="min-w-0 flex-1">{t("common.unsavedLeave")}</span>
+                <button type="button" className={BUTTON} onClick={() => setPending(null)}>
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  className={PRIMARY}
+                  onClick={() => {
+                    setPending(null);
+                    pending();
+                  }}
+                >
+                  {t("common.discard")}
+                </button>
+              </div>
             )}
-          </div>
-        </main>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {view.page === "dashboard" ? (
+                <Dashboard onOpenRun={(run) => setView({ page: "history", run })} />
+              ) : view.page === "web" ? (
+                <Web workflow={"workflow" in view ? view.workflow : undefined} onOpen={(id) => setView(id ? { page: "web", workflow: id } : { page: "web" })} />
+              ) : view.page === "history" ? (
+                <History key={"run" in view ? view.run : ""} initialRun={"run" in view ? view.run : null} />
+              ) : "editor" in view ? (
+                <Editor
+                  key={view.editor ?? "new"}
+                  id={view.editor}
+                  onBack={() => leave(toList)}
+                  onOpenRuns={(id) => leave(() => openRuns(id))}
+                  onDirty={setDirty}
+                />
+              ) : "run" in view ? (
+                <RunView workflowId={view.run} onBack={toList} onEdit={openEditor} />
+              ) : (
+                <WorkflowList onOpen={openEditor} />
+              )}
+            </div>
+          </main>
+        </div>
       </div>
       <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
+      {searchDialog}
     </div>
   );
 }

@@ -167,6 +167,23 @@ test("web_node_click_opens_readonly_panel", async () => {
   expect(screen.queryByRole("complementary")).toBeNull();
 });
 
+test("web_panels_float", async () => {
+  vi.spyOn(api, "webGetWorkflow").mockResolvedValueOnce(webWf);
+  vi.spyOn(api, "webListExecutions").mockResolvedValue({ content: [], hasNext: false, nextCursor: null });
+  const r = await act(async () => render(<Web workflow="w1" onOpen={() => {}} />));
+  const canvas = r.container.querySelector(".react-flow")!.parentElement!;
+  expect(canvas.className).toContain("inset-0");
+  const floats = (el: HTMLElement) => {
+    expect(el.className).toMatch(/\babsolute\b/);
+    expect(el.className).toContain("rounded-2xl");
+    expect(el.parentElement!.contains(canvas)).toBe(true);
+  };
+  await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
+  floats(screen.getByRole("complementary", { name: "메일 보내기" }));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "실행 기록" })));
+  floats(screen.getByRole("complementary", { name: "실행 기록" }));
+});
+
 test("web_tech_info_toggle_shows_event_ids", async () => {
   vi.spyOn(api, "webGetWorkflow").mockResolvedValueOnce(webWf);
   vi.spyOn(api, "webListExecutions").mockResolvedValue({ content: [], hasNext: false, nextCursor: null });

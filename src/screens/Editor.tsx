@@ -33,16 +33,31 @@ export function useEscape(onEscape: () => void, active = true) {
   }, [active]);
 }
 
-/** 캔버스 오른쪽에 뜨는 패널 — 머리 + [X]. Esc로도 닫힌다. */
+/**
+ * 캔버스 위 오른쪽에 떠 있는 카드 — 머리 + [X]. Esc로도 닫힌다.
+ * 부모는 `relative`, 캔버스는 그 안에서 `absolute inset-0`(패널 뒤로 전체 폭).
+ */
 export function SidePanel({ label, header, onClose, children }: { label: string; header: ReactNode; onClose: () => void; children: ReactNode }) {
-  useEscape(onClose);
+  const [closing, setClosing] = useState(false);
+  // 열 때는 CSS(@starting-style)로 밀려 들어오고, 닫을 때는 밀려 나간 뒤 없앤다. 움직임 줄이기면 바로.
+  const close = () => {
+    if (!window.matchMedia?.("(prefers-reduced-motion: no-preference)").matches) return onClose();
+    setClosing(true);
+    setTimeout(onClose, 150);
+  };
+  useEscape(close);
   return (
-    <aside aria-label={label} className="flex w-96 shrink-0 flex-col overflow-y-auto border-l border-neutral-200 bg-white">
+    <aside
+      aria-label={label}
+      className={`absolute top-4 right-4 bottom-4 z-20 flex w-96 flex-col overflow-y-auto rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] transition-[translate,opacity] duration-150 ease-out starting:translate-x-6 starting:opacity-0 motion-reduce:transition-none ${
+        closing ? "translate-x-6 opacity-0" : ""
+      }`}
+    >
       <div className="flex items-center gap-2.5 border-b border-neutral-200 px-5 py-4">
         <div className="flex min-w-0 flex-1 items-center gap-2.5">{header}</div>
         <button
           type="button"
-          onClick={onClose}
+          onClick={close}
           aria-label={t("editor.closePanel")}
           title={t("editor.closePanel")}
           className="grid size-8 shrink-0 place-items-center rounded-[10px] text-neutral-500 transition-colors hover:bg-neutral-100"
@@ -223,8 +238,8 @@ export function Editor({
           ))}
         </ul>
       )}
-      <div className="flex min-h-0 flex-1">
-        <div className="relative min-w-0 flex-1">
+      <div className="relative min-h-0 flex-1">
+        <div className="absolute inset-0">
           <Canvas
             workflow={wf}
             errors={errors}
@@ -235,8 +250,8 @@ export function Editor({
             onNodeClick={setSelectedId}
             techInfo={techInfo}
           />
-          <PaletteButton onAdd={add} />
         </div>
+        <PaletteButton onAdd={add} />
         {selected && (
           <SidePanel
             label={selected.label || nodeTitle(selected.event)}

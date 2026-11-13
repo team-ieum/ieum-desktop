@@ -111,7 +111,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <div className="flex h-full items-center justify-center overflow-y-auto bg-main-light-blue px-6 py-10">
+    <div className="flex h-full items-center justify-center overflow-y-auto bg-main-light-blue px-6 pt-14 pb-10">
       <div className="w-full max-w-[560px] rounded-brand-lg bg-white px-10 py-9 shadow-[0_12px_32px_-12px_rgba(41,83,124,.25)]">
         <div className="flex items-center justify-between">
           <img src={symbol} className="h-8 w-8" alt="" />
