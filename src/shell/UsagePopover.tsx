@@ -6,8 +6,10 @@ import { formatRelative } from "../dashboard/format";
 import { t } from "../i18n";
 import { accountsOf, credLabel, planKey, SUBS, usePlans, type Plans, type SubId } from "../screens/settings/AiPane";
 import { useCredentials } from "../stores/credentials";
+import { useDefaultPlans } from "../stores/plans";
 import { formatReset, formatUsd } from "../usage/format";
 import { hot, tightest, usedOf, WindowMeter } from "../usage/parts";
+import { SwitchAccountDialog } from "../usage/SwitchAccount";
 
 type Sub = (typeof SUBS)[number];
 
@@ -35,13 +37,16 @@ const PANEL = "rounded-brand-md border border-[#cde9f4] bg-white p-3 text-neutra
 const ICON_BTN = "grid size-7 place-items-center rounded-lg text-neutral-500 hover:bg-neutral-100";
 const LINK = "flex h-8 w-full items-center justify-between rounded-lg px-2 typo-caption1_semibold text-main-deep-blue hover:bg-main-light-blue";
 
-/** 두 번째 패널 — 기본 계정의 창별 막대, 그 회사 계정 목록(체크 = 기본, 보기 전용), 계정 관리. */
-function Flyout({ s, plan, view, plans, manage, onSettings }: { s: Sub; plan: PlanUsage; view: CredentialsView | null | undefined; plans: Plans; manage: Ref<HTMLButtonElement>; onSettings: () => void }) {
+type Pick = { kind: "claude" | "codex"; fromName: string; to: { id: string; name: string; usedPct: number | null } };
+
+/** 두 번째 패널 — 기본 계정의 창별 막대, 그 회사 계정 목록(체크 = 기본, 다른 계정을 누르면 바꾸기 확인), 계정 관리. */
+function Flyout({ s, plan, view, plans, manage, onSettings, onPick, onEnter }: { s: Sub; plan: PlanUsage; view: CredentialsView | null | undefined; plans: Plans; manage: Ref<HTMLButtonElement>; onSettings: () => void; onPick: (p: Pick) => void; onEnter: () => void }) {
   const now = new Date();
   const list = accounts(s, view, plans);
   const listName = t("usage.accountsOf").replace("{name}", s.name);
+  const fromName = list.find((a) => a.isDefault)?.name ?? "";
   return (
-    <section aria-label={s.name} className={`absolute bottom-0 left-full ml-2 w-80 ${PANEL}`}>
+    <section aria-label={s.name} onMouseEnter={onEnter} className={`absolute bottom-0 left-full ml-2 w-80 ${PANEL}`}>
       <div className="mb-2 flex items-center gap-2">
         <ProviderLogo id={s.logo} size={18} />
         <span className="typo-body3_semibold text-main-deep-blue">{s.name}</span>
@@ -57,11 +62,19 @@ function Flyout({ s, plan, view, plans, manage, onSettings }: { s: Sub; plan: Pl
         {list.map((a) => {
           const w = tightest(a.plan);
           const pct = w ? usedOf(w) : null;
+          const pick = a.isDefault || s.id === "antigravity" ? undefined : () => onPick({ kind: s.id as Pick["kind"], fromName, to: { id: a.key, name: a.name, usedPct: pct } });
           return (
-            <li key={a.key} aria-label={a.name} className="flex h-7 items-center gap-2 px-1 typo-caption1_medium">
-              {a.isDefault ? <Check className="size-3.5 shrink-0 text-main-blue" aria-label={t("settings.defaultBadge")} /> : <span className="size-3.5 shrink-0" />}
-              <span className="min-w-0 flex-1 truncate text-neutral-700">{a.name}</span>
-              {pct !== null && <span className={`tabular-nums ${hot(pct) || "text-neutral-500"}`}>{pct}%</span>}
+            <li key={a.key} aria-label={a.name}>
+              <button
+                type="button"
+                aria-disabled={pick ? undefined : "true"}
+                onClick={pick}
+                className={`flex h-7 w-full items-center gap-2 rounded-lg px-1 text-left typo-caption1_medium ${pick ? "hover:bg-main-light-blue/60" : "cursor-default"}`}
+              >
+                {a.isDefault ? <Check className="size-3.5 shrink-0 text-main-blue" aria-label={t("settings.defaultBadge")} /> : <span className="size-3.5 shrink-0" />}
+                <span className="min-w-0 flex-1 truncate text-neutral-700">{a.name}</span>
+                {pct !== null && <span className={`tabular-nums ${hot(pct) || "text-neutral-500"}`}>{pct}%</span>}
+              </button>
             </li>
           );
         })}
@@ -79,9 +92,25 @@ function Flyout({ s, plan, view, plans, manage, onSettings }: { s: Sub; plan: Pl
 export function UsagePopover({ onUsage, onSettings }: { onUsage: () => void; onSettings: () => void }) {
   const view = useCredentials((s) => s.view);
   const { plans, refresh } = usePlans(view);
+  const { refreshNow } = useDefaultPlans(view);
   // undefined = 읽는 중, null = 못 읽음
   const [month, setMonth] = useState<UsageSummary | null | undefined>(undefined);
   const [fly, setFly] = useState<SubId | null>(null);
+  const [pick, setPick] = useState<Pick | null>(null);
+  const [switched, setSwitched] = useState(0);
+  // 바꾼 뒤 새 기본 계정 기준으로 사용량을 새로 읽는다(자격 목록이 바뀐 다음 렌더에서).
+  useEffect(() => {
+    if (switched) refreshNow();
+  }, [switched]);
+  // 패널이 열린 채 다른 줄을 스치면 150ms 뒤 바꾼다 — 그 사이 패널에 들어가면 취소(대각선 이동).
+  const hoverT = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const stopHover = () => clearTimeout(hoverT.current);
+  useEffect(() => stopHover, []);
+  const hoverRow = (id: SubId) => {
+    stopHover();
+    if (!fly) setFly(id);
+    else if (fly !== id) hoverT.current = setTimeout(() => setFly(id), 150);
+  };
   const first = useRef<HTMLButtonElement>(null);
   const rows = useRef<Partial<Record<SubId, HTMLButtonElement | null>>>({});
   const manage = useRef<HTMLButtonElement>(null);
@@ -147,8 +176,11 @@ export function UsagePopover({ onUsage, onSettings }: { onUsage: () => void; onS
                 }}
                 type="button"
                 aria-expanded={fly === s.id}
-                onMouseEnter={() => setFly(s.id)}
-                onClick={() => setFly(s.id)}
+                onMouseEnter={() => hoverRow(s.id)}
+                onClick={() => {
+                  stopHover();
+                  setFly(s.id);
+                }}
                 className={`flex h-8 w-full items-center gap-2 rounded-lg px-2 typo-caption1_medium hover:bg-main-light-blue/60 ${fly === s.id ? "bg-main-light-blue/60" : ""}`}
               >
                 <ProviderLogo id={s.logo} size={16} />
@@ -175,7 +207,16 @@ export function UsagePopover({ onUsage, onSettings }: { onUsage: () => void; onS
           <ChevronRight className="size-3.5" aria-hidden="true" />
         </button>
       </div>
-      {open && <Flyout s={open.sub} plan={open.plan} view={view} plans={plans} manage={manage} onSettings={onSettings} />}
+      {open && <Flyout s={open.sub} plan={open.plan} view={view} plans={plans} manage={manage} onSettings={onSettings} onPick={setPick} onEnter={stopHover} />}
+      {pick && (
+        <SwitchAccountDialog
+          {...pick}
+          onClose={(ok) => {
+            setPick(null);
+            if (ok) setSwitched((n) => n + 1);
+          }}
+        />
+      )}
     </div>
   );
 }

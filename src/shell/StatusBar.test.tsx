@@ -122,7 +122,7 @@ test("usage_popover_flyout_shows_accounts_and_windows", async () => {
   expect(fly.getByText("13시간 21분 뒤 초기화")).toBeTruthy();
   expect(fly.getByText("주간")).toBeTruthy();
   expect(fly.getByText("12% 사용")).toBeTruthy();
-  // 계정 목록 — 체크 = 기본, 각 계정 사용 %(80% 넘으면 빨강). 보기 전용.
+  // 계정 목록 — 체크 = 기본, 각 계정 사용 %(80% 넘으면 빨강). 기본 줄은 누를 수 없고, 다른 계정 줄은 버튼.
   const list = within(fly.getByRole("list", { name: "Claude 계정" }));
   const me = within(list.getByRole("listitem", { name: /me@claude\.dev/ }));
   expect(me.getByLabelText("기본")).toBeTruthy();
@@ -130,7 +130,8 @@ test("usage_popover_flyout_shows_accounts_and_windows", async () => {
   const work = within(list.getByRole("listitem", { name: /work@claude\.dev/ }));
   expect(work.queryByLabelText("기본")).toBeNull();
   expect(work.getByText("91%").className).toMatch(/danger/);
-  expect(list.queryByRole("button")).toBeNull();
+  expect(me.getByRole("button").getAttribute("aria-disabled")).toBe("true");
+  expect(work.getByRole("button").getAttribute("aria-disabled")).toBeNull();
   expect(fly.getByRole("button", { name: "계정 관리…" })).toBeTruthy();
 });
 
