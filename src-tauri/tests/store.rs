@@ -128,3 +128,10 @@ fn ids_must_be_uuid() {
     assert!(t.path().join("x.json").exists());
     assert!(!t.path().join("workflows").exists());
 }
+
+#[test]
+fn account_suggest_defaults_on() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert!(s.notify_account_suggest);
+    assert!(Settings::default().notify_account_suggest);
+}

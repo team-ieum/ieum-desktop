@@ -1,11 +1,18 @@
 //! 구독 한도 판정: 기본 계정이 한도에 닿았는지, 어느 계정을 권할지, 다음 조회까지 얼마나 쉴지.
+//! 그리고 그 판정을 돌리는 백그라운드 감시 루프.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager};
 
+use crate::active::Active;
+use crate::credentials::{CliAccountMeta, CredentialsView};
+use crate::notify::{self, Lang};
 use crate::plan_usage::{PlanUsage, PlanWindow};
+use crate::sub_usage::{AntigravityUsageClient, SubscriptionUsage};
 
 /// 한도 판정 대상 창. 모델 전용 창(`seven_day_opus`·`seven_day_model`)은 표시만 한다.
 pub fn gating(kind: &str) -> bool {
@@ -111,4 +118,158 @@ impl Seen {
     pub fn first_time(&mut self, s: &Suggestion) -> bool {
         self.0.insert(s.key())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    Banner,
+    System,
+    Drop,
+}
+
+/// 꺼짐 → 버림, 앱이 앞 → 앱 안 띠, 뒤 → 시스템 알림.
+pub fn route_suggestion(enabled: bool, focused: bool) -> Delivery {
+    match (enabled, focused) {
+        (false, _) => Delivery::Drop,
+        (true, true) => Delivery::Banner,
+        (true, false) => Delivery::System,
+    }
+}
+
+/// 시스템 알림으로 보낸 제안 — 알림을 눌러 화면이 `take_account_suggestion`으로 꺼낸다.
+#[derive(Default)]
+pub struct PendingSuggest(pub Mutex<Option<Suggestion>>);
+
+/// 감시 한 회차의 결과.
+pub struct Tick {
+    /// `claude:<id>`·`codex:<id>` → 사용량(조회 못 한 계정은 빠진다).
+    pub plans: BTreeMap<String, PlanUsage>,
+    pub suggestions: Vec<Suggestion>,
+    pub delay: Duration,
+}
+
+fn account_label(m: &CliAccountMeta, lang: Lang) -> String {
+    match (m.id.as_str(), lang) {
+        ("system", Lang::Ko) => "이 Mac의 로그인".into(),
+        ("system", Lang::En) => "This Mac's login".into(),
+        _ => m.label.clone(),
+    }
+}
+
+/// 감시 한 회차. `view` = None(로그아웃)이면 조회하지 않는다. `fetch(회사, 계정 id)`는 조용한 조회.
+pub async fn tick<F, Fut>(view: Option<&CredentialsView>, lang: Lang, fetch: F) -> Tick
+where
+    F: Fn(&'static str, String) -> Fut,
+    Fut: Future<Output = Option<PlanUsage>>,
+{
+    let mut t = Tick {
+        plans: BTreeMap::new(),
+        suggestions: Vec::new(),
+        delay: IDLE,
+    };
+    let Some(view) = view else { return t };
+    let mut defaults = Vec::new();
+    for (company, list) in [
+        ("claude", &view.claude_accounts),
+        ("codex", &view.codex_accounts),
+    ] {
+        let Some(d) = list.iter().find(|m| m.is_default) else {
+            continue;
+        };
+        let Some(plan) = fetch(company, d.id.clone()).await else {
+            continue;
+        };
+        let default = Candidate {
+            id: d.id.clone(),
+            label: account_label(d, lang),
+            plan,
+        };
+        let mut others = Vec::new();
+        if needs_others(&default.plan) {
+            for m in list.iter().filter(|m| !m.is_default) {
+                if let Some(plan) = fetch(company, m.id.clone()).await {
+                    others.push(Candidate {
+                        id: m.id.clone(),
+                        label: account_label(m, lang),
+                        plan,
+                    });
+                }
+            }
+        }
+        t.suggestions.extend(suggest(company, &default, &others));
+        for c in &others {
+            t.plans
+                .insert(format!("{company}:{}", c.id), c.plan.clone());
+        }
+        t.plans
+            .insert(format!("{company}:{}", default.id), default.plan.clone());
+        defaults.push(default.plan);
+    }
+    t.delay = next_delay(&defaults.iter().collect::<Vec<_>>());
+    t
+}
+
+/// 로그아웃이거나 여유 있을 때 쉬는 시간.
+const IDLE: Duration = Duration::from_secs(300);
+
+/// 백그라운드 감시 루프. 키체인 허용 창은 띄우지 않는다(`get_quiet`).
+pub fn spawn(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut seen = Seen::default();
+        loop {
+            let delay = run_once(&app, &mut seen).await;
+            tokio::time::sleep(delay).await;
+        }
+    });
+}
+
+async fn run_once(app: &AppHandle, seen: &mut Seen) -> Duration {
+    let Ok(creds) = app.state::<Active>().credentials().await else {
+        return IDLE;
+    };
+    let creds = Arc::new(creds);
+    let c = creds.clone();
+    let view = tauri::async_runtime::spawn_blocking(move || c.list())
+        .await
+        .ok();
+    let s = notify::settings(app);
+    let lang: Lang = s.language.into();
+    let usage = app.state::<SubscriptionUsage>();
+    let usage = &*usage;
+    let mut t = tick(view.as_ref(), lang, |kind, id| {
+        let creds = creds.clone();
+        async move {
+            let dir = creds.cli_dir(kind, &id).ok()?;
+            usage.get_quiet(kind, dir).await.ok().flatten()
+        }
+    })
+    .await;
+    if let Some(p) = app.state::<AntigravityUsageClient>().get_quiet().await {
+        t.plans.insert("antigravity".into(), p);
+    }
+    if let Err(e) = app.emit("plans-updated", &t.plans) {
+        eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");
+    }
+    for sug in t.suggestions {
+        if !seen.first_time(&sug) {
+            continue;
+        }
+        match route_suggestion(s.notify_account_suggest, notify::focused(app)) {
+            Delivery::Banner => {
+                if let Err(e) = app.emit("account-suggest", &sug) {
+                    eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");
+                }
+            }
+            Delivery::System => {
+                let notice = notify::suggest_notice(&sug, lang);
+                *app.state::<PendingSuggest>()
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(sug);
+                notify::deliver(app, &notice);
+            }
+            Delivery::Drop => {}
+        }
+    }
+    t.delay
 }

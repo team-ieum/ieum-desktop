@@ -84,6 +84,8 @@ pub struct Settings {
     pub notify_manual_start: bool,
     pub notify_manual_end: bool,
     pub notify_watch_end: bool,
+    /// 구독 한도 도달 시 다른 계정 권하기(띠·시스템 알림). 옛 설정엔 없어 `Default`의 true.
+    pub notify_account_suggest: bool,
     /// 이음 BE 주소. 바꾸면 세션을 지운다(`web::save_settings`).
     pub server_url: String,
     /// 로그인된(마지막 활성) 계정. 없으면 로그인 관문.
@@ -107,6 +109,7 @@ impl Default for Settings {
             notify_manual_start: true,
             notify_manual_end: true,
             notify_watch_end: true,
+            notify_account_suggest: true,
             server_url: DEFAULT_SERVER_URL.into(),
             current_account: None,
             notifications_seen_at: String::new(),

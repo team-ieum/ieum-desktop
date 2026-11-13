@@ -1,8 +1,13 @@
 //! 구독 한도 판정(순수 함수).
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use ieum_desktop_lib::limit_watch::{Candidate, Seen, gating, needs_others, next_delay, suggest};
+use ieum_desktop_lib::credentials::{CliAccountMeta, CredentialsView};
+use ieum_desktop_lib::limit_watch::{
+    Candidate, Delivery, Seen, gating, needs_others, next_delay, route_suggestion, suggest, tick,
+};
+use ieum_desktop_lib::notify::Lang;
 use ieum_desktop_lib::plan_usage::{PlanUsage, PlanWindow};
 
 const RESET: &str = "2026-11-13T05:00:00+00:00";
@@ -182,4 +187,76 @@ fn suggest_skips_self_and_ignores_model_windows_of_others() {
     for k in ["company", "fromId", "fromLabel", "toId", "toLabel", "toUsedPct", "windowKind", "resetsAt"] {
         assert!(v.get(k).is_some(), "{k}");
     }
+}
+
+#[test]
+fn route_suggestion_respects_toggle() {
+    assert_eq!(route_suggestion(false, true), Delivery::Drop);
+    assert_eq!(route_suggestion(false, false), Delivery::Drop);
+    assert_eq!(route_suggestion(true, true), Delivery::Banner);
+    assert_eq!(route_suggestion(true, false), Delivery::System);
+}
+
+fn meta(id: &str, is_default: bool) -> CliAccountMeta {
+    CliAccountMeta {
+        id: id.into(),
+        label: format!("{id} 이름"),
+        is_default,
+        created_at: String::new(),
+        email: Some(format!("{id}@x.com")),
+    }
+}
+
+fn view(claude: Vec<CliAccountMeta>) -> CredentialsView {
+    CredentialsView {
+        api_keys: Default::default(),
+        claude_accounts: claude,
+        codex_accounts: vec![],
+        keychain_error: None,
+    }
+}
+
+#[tokio::test]
+async fn tick_skips_fetch_when_signed_out() {
+    let calls = AtomicUsize::new(0);
+    let t = tick(None, Lang::Ko, |_, _| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        async { Some(plan("ok", &[])) }
+    })
+    .await;
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(t.plans.is_empty() && t.suggestions.is_empty());
+    assert_eq!(t.delay, Duration::from_secs(300));
+}
+
+#[tokio::test]
+async fn tick_fetches_others_only_when_default_full() {
+    let fetched = std::sync::Mutex::new(Vec::new());
+    let v = view(vec![meta("system", true), meta("b", false)]);
+    let t = tick(Some(&v), Lang::Ko, |kind, id: String| {
+        fetched.lock().unwrap().push(format!("{kind}:{id}"));
+        let used = if id == "system" { 100.0 } else { 12.4 };
+        async move { Some(plan("ok", &[("five_hour", used)])) }
+    })
+    .await;
+    assert_eq!(*fetched.lock().unwrap(), ["claude:system", "claude:b"]);
+    assert_eq!(t.suggestions.len(), 1);
+    let s = &t.suggestions[0];
+    assert_eq!(
+        (s.from_label.as_str(), s.to_id.as_str()),
+        ("이 Mac의 로그인", "b")
+    );
+    assert!(t.plans.contains_key("claude:system") && t.plans.contains_key("claude:b"));
+    assert_eq!(t.delay, Duration::from_secs(120));
+
+    // 기본 계정이 여유 있으면 다른 계정은 조회하지 않는다.
+    fetched.lock().unwrap().clear();
+    let t = tick(Some(&v), Lang::En, |kind, id: String| {
+        fetched.lock().unwrap().push(format!("{kind}:{id}"));
+        async { Some(plan("ok", &[("five_hour", 10.0)])) }
+    })
+    .await;
+    assert_eq!(*fetched.lock().unwrap(), ["claude:system"]);
+    assert!(t.suggestions.is_empty());
+    assert_eq!(t.delay, Duration::from_secs(300));
 }

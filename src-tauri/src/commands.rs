@@ -282,6 +282,14 @@ pub async fn subscription_usage(
     }
 }
 
+/// 시스템 알림으로 보낸 계정 권하기를 꺼낸다(꺼내면 비운다).
+#[tauri::command]
+pub fn take_account_suggestion(
+    pending: State<'_, crate::limit_watch::PendingSuggest>,
+) -> Option<crate::limit_watch::Suggestion> {
+    pending.0.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
 /// Antigravity 구독 연결 상태. 키체인 읽기·`agy` 실행은 안에서 `spawn_blocking`.
 #[tauri::command]
 pub async fn antigravity_plan_usage(

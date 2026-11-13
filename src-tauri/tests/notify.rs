@@ -2,9 +2,10 @@
 
 use std::time::Duration;
 
+use ieum_desktop_lib::limit_watch::Suggestion;
 use ieum_desktop_lib::notify::{
     BATCH_WINDOW, Batch, Batcher, Lang, Notice, Prefs, Route, Target, lang_from_apple_languages,
-    route, summarize,
+    route, suggest_notice, summarize,
 };
 use ieum_desktop_lib::store::RunTrigger;
 use ieum_desktop_lib::supervisor::{NoticeKind, RunNotice};
@@ -212,4 +213,33 @@ fn system_lang_from_apple_languages() {
     // 읽을 항목이 없으면 Ko.
     assert_eq!(lang_from_apple_languages(""), Lang::Ko);
     assert_eq!(lang_from_apple_languages("(\n)"), Lang::Ko);
+}
+
+#[test]
+fn suggest_notice_ko_en() {
+    let s = Suggestion {
+        company: "claude",
+        from_id: "system".into(),
+        from_label: "이 Mac의 로그인".into(),
+        to_id: "b".into(),
+        to_label: "회사".into(),
+        to_used_pct: 12.4,
+        window_kind: "five_hour",
+        resets_at: "2026-11-13T05:00:00+00:00".into(),
+    };
+    let ko = suggest_notice(&s, Lang::Ko);
+    assert_eq!(
+        (ko.title.as_str(), ko.body.as_str()),
+        (
+            "Claude 한도에 닿았어요",
+            "회사(12% 사용)으로 바꿔서 쓸까요?"
+        )
+    );
+    assert_eq!(ko.target, Target::Suggest);
+    let en = suggest_notice(&s, Lang::En);
+    assert_eq!(
+        (en.title.as_str(), en.body.as_str()),
+        ("Claude limit reached", "Switch to 회사 (12% used)?")
+    );
+    assert!(!ko.body.contains('@') && !en.body.contains('@'));
 }

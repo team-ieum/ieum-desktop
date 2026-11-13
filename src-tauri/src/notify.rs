@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::active::Active;
+use crate::limit_watch::Suggestion;
 use crate::store::{Language, RunTrigger, Settings};
 use crate::supervisor::{NoticeKind, RunNotice};
 
@@ -88,6 +89,8 @@ pub struct Notice {
 pub enum Target {
     Run(String),
     History,
+    /// 다른 계정 권하기(대기 중 제안은 `take_account_suggestion`으로 꺼낸다).
+    Suggest,
 }
 
 impl Target {
@@ -96,7 +99,33 @@ impl Target {
         match self {
             Target::Run(id) => json!({"kind": "run", "runId": id}),
             Target::History => json!({"kind": "history"}),
+            Target::Suggest => json!({"kind": "suggest"}),
         }
+    }
+}
+
+/// 한도 도달 → 다른 계정 권하기 알림. 이메일은 넣지 않는다(이름표만).
+pub fn suggest_notice(s: &Suggestion, lang: Lang) -> Notice {
+    let company = if s.company == "codex" {
+        "Codex"
+    } else {
+        "Claude"
+    };
+    let (to, n) = (&s.to_label, s.to_used_pct.round() as i64);
+    let (title, body) = match lang {
+        Lang::Ko => (
+            format!("{company} 한도에 닿았어요"),
+            format!("{to}({n}% 사용)으로 바꿔서 쓸까요?"),
+        ),
+        Lang::En => (
+            format!("{company} limit reached"),
+            format!("Switch to {to} ({n}% used)?"),
+        ),
+    };
+    Notice {
+        title,
+        body,
+        target: Target::Suggest,
     }
 }
 
@@ -209,13 +238,13 @@ pub fn summarize(
 /// 앱 상태로 둔다.
 pub type Pending = Mutex<Batcher>;
 
-fn settings(app: &AppHandle) -> Settings {
+pub(crate) fn settings(app: &AppHandle) -> Settings {
     app.try_state::<Active>()
         .and_then(|a| a.settings().get_settings().ok())
         .unwrap_or_default()
 }
 
-fn focused(app: &AppHandle) -> bool {
+pub(crate) fn focused(app: &AppHandle) -> bool {
     app.get_webview_window("main")
         .and_then(|w| w.is_focused().ok())
         .unwrap_or(false)

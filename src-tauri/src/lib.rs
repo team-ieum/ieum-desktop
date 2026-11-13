@@ -183,6 +183,8 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(crate::sub_usage::agy_usage_cli),
         crate::plan_usage::CACHE_TTL,
     ));
+    app.manage(crate::limit_watch::PendingSuggest::default());
+    crate::limit_watch::spawn(app.handle().clone());
     tray::create(app)?;
     check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
@@ -260,6 +262,7 @@ pub fn run() {
             commands::set_system_hidden,
             commands::subscription_usage,
             commands::antigravity_plan_usage,
+            commands::take_account_suggestion,
             commands::open_system_settings,
             commands::open_provider_console,
             commands::send_test_notification,
