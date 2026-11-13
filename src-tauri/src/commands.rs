@@ -7,7 +7,7 @@ use ieum_engine::{ValidationError, Workflow};
 use ieum_local::UndoReport;
 use ieum_local::ai::{KeyStore, detect_clis};
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::account::AccountId;
@@ -340,6 +340,27 @@ pub fn open_system_settings(app: AppHandle, pane: String) -> Result<(), String> 
     let url = permissions::system_settings_url(&pane, &app.config().identifier)
         .ok_or("모르는 설정 창이에요.")?;
     open_url(&url)
+}
+
+/// 데이터 폴더를 Finder로 여는 명령 — 화면이 준 경로는 받지 않는다.
+pub fn data_folder_command(dir: &std::path::Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new("/usr/bin/open");
+    cmd.arg(dir);
+    cmd
+}
+
+/// 설정 고급 [데이터 폴더 열기] — 앱 데이터 폴더(고정 경로)만.
+#[tauri::command]
+pub fn open_data_folder(app: AppHandle) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let status = data_folder_command(&dir)
+        .status()
+        .map_err(|e| format!("폴더를 열지 못했어요: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("폴더를 열지 못했어요: {status}"))
+    }
 }
 
 /// 앞 여부·알림 토글과 무관하게 테스트 알림을 보낸다.

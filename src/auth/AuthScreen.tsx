@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRightLeft, ChevronDown, ChevronUp, Globe, Laptop, Serve
 import { useEffect, useState, type FormEvent } from "react";
 import symbol from "../assets/symbol.png";
 import { t } from "../i18n";
+import { TOP_ROW } from "../shell/Sidebar";
 import { useSettings } from "../stores/settings";
 import { ErrorText, LoginForm } from "./LoginForm";
 import { SignupForm } from "./SignupForm";
@@ -91,7 +92,9 @@ export function AuthScreen({ initialEmail, onCancel }: { initialEmail?: string; 
   }, []);
 
   return (
-    <div className="flex h-full overflow-hidden bg-neutral-white">
+    <div className="relative flex h-full overflow-hidden bg-neutral-white">
+      {/* 창 끌기 영역 — 신호등 줄 높이. */}
+      <div data-tauri-drag-region className={`absolute inset-x-0 top-0 z-10 ${TOP_ROW}`} />
       <aside className="relative flex basis-1/2 flex-col justify-between overflow-hidden bg-main-deep-blue px-16 pt-20 pb-14 text-white">
         <div className="absolute -top-24 -right-24 h-[360px] w-[360px] rounded-full bg-sub-blue/35" />
         <div className="absolute top-[230px] right-[120px] h-[90px] w-[90px] rounded-full bg-node-yellow/50" />

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import App from "../App";
 import { api, type Settings } from "../api";
+import { AuthScreen } from "../auth/AuthScreen";
 import { setLang } from "../i18n";
 import { useSettings } from "../stores/settings";
 import { useWeb } from "../stores/web";
@@ -142,4 +143,18 @@ test("new_install_turning_autostart_off_marks_first_run_done", async () => {
   await act(async () => fireEvent.click(screen.getByRole("switch")));
   await click("시작하기");
   expect(api.setSettings).toHaveBeenCalledWith(expect.objectContaining({ onboardingDone: true, firstRunDone: true, autostart: false }));
+});
+
+test("auth_and_onboarding_have_drag_region", async () => {
+  // 신호등 줄 높이(h-12)의 창 끌기 영역 — 없으면 관문·온보딩에서 창을 못 옮긴다.
+  const dragTop = () => document.querySelector('[data-tauri-drag-region].h-12');
+  await act(async () => {
+    render(<AuthScreen />);
+  });
+  expect(dragTop()).toBeTruthy();
+  cleanup();
+  await act(async () => {
+    render(<Onboarding onDone={() => {}} />);
+  });
+  expect(dragTop()).toBeTruthy();
 });

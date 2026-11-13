@@ -45,6 +45,7 @@ const COMMANDS: &[&str] = &[
     "open_system_settings",
     "open_provider_console",
     "send_test_notification",
+    "open_data_folder",
     "check_update_now",
 ];
 

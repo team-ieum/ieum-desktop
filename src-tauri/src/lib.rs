@@ -261,6 +261,7 @@ pub fn run() {
             commands::open_system_settings,
             commands::open_provider_console,
             commands::send_test_notification,
+            commands::open_data_folder,
             commands::check_update_now,
         ])
         .build(tauri::generate_context!())

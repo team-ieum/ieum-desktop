@@ -140,22 +140,23 @@ export default function App() {
     />
   );
 
-  // 설정은 셸 사이드바 대신 설정 전용 사이드바.
+  // 설정은 셸 사이드바 대신 설정 전용 사이드바(창 신호등 자리 포함). 머리줄은 본문 위.
   if (view.page === "settings")
     return (
       <div key={lang} className="flex h-full flex-col">
-        <Header
-          crumb={t("nav.settings")}
-          email={account?.email ?? null}
-          onSearch={() => setSearching(true)}
-          onOpenRun={(run) => setView({ page: "history", run })}
-          inset
-        />
         <SettingsShell
           key={"section" in view ? view.section : ""}
           onBack={() => setView(back)}
           version={version}
           initial={"section" in view ? view.section : undefined}
+          header={
+            <Header
+              crumb={t("nav.settings")}
+              email={account?.email ?? null}
+              onSearch={() => setSearching(true)}
+              onOpenRun={(run) => setView({ page: "history", run })}
+            />
+          }
         />
         <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
         {searchDialog}

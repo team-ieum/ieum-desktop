@@ -48,13 +48,17 @@ test("sidebar_state_remembered", () => {
   expect(screen.getByText("접힘")).toBeTruthy();
 });
 
-test("sidebar_marks_current_page_light_blue", () => {
+test("sidebar_uses_ieum_colors", () => {
   render(<Sidebar {...props} current="history" />);
+  // 웹 이음 사이드바처럼 연한 파랑 바탕, 고른 줄은 남색 + 흰 글자.
+  expect(screen.getByRole("complementary", { name: "사이드바" }).className).toContain("bg-main-light-blue");
   const cur = screen.getByRole("button", { name: "실행 기록" });
   expect(cur.getAttribute("aria-current")).toBe("page");
-  expect(cur.className).toContain("bg-main-light-blue");
-  expect(cur.className).toContain("text-main-deep-blue");
-  expect(screen.getByRole("button", { name: "내 PC" }).className).not.toContain("bg-main-light-blue");
+  expect(cur.className).toContain("bg-main-deep-blue");
+  expect(cur.className).toContain("text-white");
+  const off = screen.getByRole("button", { name: "내 PC" }).className;
+  expect(off).not.toContain("bg-main-deep-blue");
+  expect(off).toContain("text-main-deep-blue");
   // 새 캔버스도 같은 줄 모양(남색 큰 버튼 아님).
   expect(screen.getByRole("button", { name: /새 캔버스/ }).className).not.toContain("bg-main-deep-blue");
 });

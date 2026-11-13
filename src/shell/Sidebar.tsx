@@ -42,11 +42,13 @@ export function ago(iso: string): string {
   return rtf.format(Math.round(min / 1440), "day");
 }
 
-const ROW = "flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] transition-colors";
-const ROW_ON = "bg-main-light-blue font-semibold text-main-deep-blue";
-const ROW_OFF = "text-neutral-700 hover:bg-neutral-200/70";
-const ICON_BTN = "grid size-7 shrink-0 place-items-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-200/70 hover:text-neutral-800";
-const KBD = "font-mono text-[11px] text-neutral-400";
+// 웹 이음 사이드바 색 — 연한 파랑 바탕, 고른 줄은 남색 + 흰 글자. 설정 사이드바도 같이 쓴다.
+export const SIDE = "border-r border-[#cde9f4] bg-main-light-blue";
+export const ROW = "flex h-8 w-full items-center gap-2.5 rounded-md px-2.5 text-[13px] transition-colors";
+export const ROW_ON = "bg-main-deep-blue font-semibold text-white";
+export const ROW_OFF = "text-main-deep-blue hover:bg-white/60";
+const ICON_BTN = "grid size-7 shrink-0 place-items-center rounded-md text-main-deep-blue/70 transition-colors hover:bg-white/60 hover:text-main-deep-blue";
+const KBD = "font-mono text-[11px] text-main-deep-blue/50";
 
 // 접힌 상태는 이 PC에만 기억 — 저장소가 막혀도 펼친 상태로 동작한다.
 const COLLAPSED_KEY = "ieum.sidebarCollapsed";
@@ -102,7 +104,7 @@ export function Sidebar({
   version: string;
 }) {
   return (
-    <aside aria-label={t("nav.sidebar")} className="flex w-64 shrink-0 flex-col border-r border-neutral-200 bg-neutral-100">
+    <aside aria-label={t("nav.sidebar")} className={`flex w-64 shrink-0 flex-col ${SIDE}`}>
       <div data-tauri-drag-region className={`flex ${TOP_ROW} shrink-0 items-center gap-2 pr-2.5 ${LIGHTS_PAD}`}>
         <img src={symbol} className="pointer-events-none h-[18px] w-[18px]" alt="" />
         <span className="pointer-events-none text-[15px] leading-none font-black tracking-wide text-main-deep-blue">{t("app.name")}</span>
@@ -116,7 +118,7 @@ export function Sidebar({
         <button
           type="button"
           onClick={onSearch}
-          className="flex h-8 w-full items-center gap-2 rounded-lg bg-neutral-200/70 px-2.5 text-[13px] text-neutral-500 transition-colors hover:bg-neutral-200"
+          className="flex h-8 w-full items-center gap-2 rounded-lg bg-white/70 px-2.5 text-[13px] text-main-deep-blue/70 ring-1 ring-[#cde9f4] transition-colors hover:bg-white"
         >
           <Search className="size-[15px]" aria-hidden="true" />
           <span className="flex-1 text-left">{t("nav.search")}</span>
@@ -145,29 +147,29 @@ export function Sidebar({
       </nav>
 
       <div className="mt-5 flex min-h-0 flex-1 flex-col px-2.5">
-        <div className="flex h-7 shrink-0 items-center justify-between pr-1 pl-2.5 text-[11px] font-medium text-neutral-500">
+        <div className="flex h-7 shrink-0 items-center justify-between pr-1 pl-2.5 text-[11px] font-medium text-main-gray">
           {t("nav.recent")}
           <MoreHorizontal className="size-[14px]" aria-hidden="true" />
         </div>
         <div className="flex min-h-0 flex-col gap-px overflow-y-auto">
-          {recent.length === 0 && <p className="px-2.5 py-2 text-[12px] text-neutral-500">{t("nav.recentEmpty")}</p>}
+          {recent.length === 0 && <p className="px-2.5 py-2 text-[12px] text-main-gray">{t("nav.recentEmpty")}</p>}
           {recent.map((r) => (
             <button
               key={`${r.kind}:${r.id}`}
               type="button"
               onClick={() => onOpenRecent(r)}
-              className="flex items-start gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-neutral-200/70"
+              className="flex items-start gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-white/60"
             >
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13px] font-semibold text-neutral-800">{r.name}</span>
-                <span className="mt-0.5 flex items-center gap-1 text-[11px] text-neutral-500">
+                <span className="block truncate text-[13px] font-semibold text-main-deep-blue">{r.name}</span>
+                <span className="mt-0.5 flex items-center gap-1 text-[11px] text-main-gray">
                   <span>{r.kind === "local" ? t("nav.local") : t("nav.web")}</span>
                   <span aria-hidden="true">·</span>
                   <span className={`size-1.5 shrink-0 rounded-full ${DOT[r.dot]}`} />
                   <span>{t(`nav.dot.${r.dot}`)}</span>
                 </span>
               </span>
-              <span className="shrink-0 pt-0.5 text-[11px] text-neutral-400">{ago(r.at)}</span>
+              <span className="shrink-0 pt-0.5 text-[11px] text-main-gray/70">{ago(r.at)}</span>
             </button>
           ))}
         </div>
@@ -179,7 +181,7 @@ export function Sidebar({
         <div className="relative text-[13px] leading-snug whitespace-pre-line">{t("banner.tagline")}</div>
       </div>
 
-      <div className="flex h-10 shrink-0 items-center gap-0.5 border-t border-neutral-200 px-2.5">
+      <div className="flex h-10 shrink-0 items-center gap-0.5 border-t border-[#cde9f4] px-2.5">
         <button type="button" onClick={() => onNavigate("settings")} className={ICON_BTN} aria-label={t("nav.settings")} title={t("nav.settings")}>
           <Settings className="size-4" aria-hidden="true" />
         </button>
@@ -192,7 +194,7 @@ export function Sidebar({
         >
           <CircleHelp className="size-4" aria-hidden="true" />
         </button>
-        <span className="ml-auto text-[11px] text-neutral-400">{version && `v${version}`}</span>
+        <span className="ml-auto text-[11px] text-main-gray/70">{version && `v${version}`}</span>
       </div>
     </aside>
   );

@@ -55,9 +55,93 @@ const renderShell = async (initial?: SettingsSection) => {
     render(<SettingsShell onBack={() => {}} version="0.2.0" initial={initial} />);
   });
 };
-const menu = () => within(screen.getByRole("navigation")).getAllByRole("button").map((b) => b.textContent);
+const menu = () => within(screen.getByRole("navigation")).getAllByRole("button").map((b) => b.getAttribute("aria-label"));
 const title = () => screen.getByRole("heading", { level: 2 }).textContent;
-const pages = () => ["account", "general", "permissions", "ai"].filter((id) => document.getElementById(`settings-${id}`));
+const IDS = ["account", "ai", "usage", "general", "notifications", "shortcuts", "macos", "advanced"];
+const pages = () => IDS.filter((id) => document.getElementById(`settings-${id}`));
+const ALL_MENUS = ["이음 계정", "AI 제공자 계정", "통계 및 사용량", "일반", "알림", "단축키", "macOS 권한", "고급"];
+
+test("settings_menu_groups_in_order", async () => {
+  await renderShell();
+  const nav = screen.getByRole("navigation");
+  expect([...nav.querySelectorAll("[data-group]")].map((g) => g.textContent)).toEqual(["계정", "AI 기능", "일반", "개인정보 보호 및 보안", "고급"]);
+  expect(menu()).toEqual(ALL_MENUS);
+  expect(nav.textContent).not.toContain("권한·준비");
+});
+
+test("ai_providers_has_optional_badge", async () => {
+  await renderShell();
+  const ai = screen.getByRole("button", { name: "AI 제공자 계정" });
+  expect(within(ai).getByText("선택 사항")).toBeTruthy();
+  expect(within(screen.getByRole("button", { name: "이음 계정" })).queryByText("선택 사항")).toBeNull();
+});
+
+test("usage_page_shows_usage_card", async () => {
+  const sum = vi.spyOn(api, "usageSummary").mockResolvedValue({
+    totalUsd: 1.85,
+    totalInput: 100_000,
+    totalOutput: 23_000,
+    unpricedCalls: 0,
+    bySource: [{ source: "openai", input: 100_000, output: 23_000, usd: 1.85 }],
+    byCredential: [],
+    byWorkflow: [],
+    byDay: [],
+    asOf: "2026-11-01",
+  });
+  onTestFinished(() => void sum.mockRejectedValue("no command"));
+  await renderShell("usage");
+  expect(pages()).toEqual(["usage"]);
+  const page = within(document.getElementById("settings-usage")!);
+  expect(page.getByText("AI 사용량")).toBeTruthy();
+  expect(page.getByRole("tab", { name: "오늘" })).toBeTruthy();
+  expect(page.getByText("$1.85")).toBeTruthy();
+});
+
+test("notifications_page_has_toggles_and_test", async () => {
+  const open = vi.spyOn(api, "openSystemSettings").mockClear().mockResolvedValue();
+  const send = vi.spyOn(api, "sendTestNotification").mockResolvedValue();
+  await renderShell("notifications");
+  expect(title()).toBe("알림");
+  const page = within(document.getElementById("settings-notifications")!);
+  expect(page.getAllByRole("switch").map((s) => s.getAttribute("aria-label"))).toEqual(["수동 실행 시작", "수동 실행 끝·실패", "폴더 감시 끝·실패"]);
+  await act(async () => fireEvent.click(page.getByRole("button", { name: "테스트 알림 보내기" })));
+  expect(send).toHaveBeenCalledTimes(1);
+  await act(async () => fireEvent.click(page.getByRole("button", { name: "시스템 설정 열기" })));
+  expect(open).toHaveBeenCalledWith("notifications");
+});
+
+test("shortcuts_page_lists_real_shortcuts", async () => {
+  await renderShell("shortcuts");
+  const page = document.getElementById("settings-shortcuts")!;
+  expect([...page.querySelectorAll("kbd")].map((k) => k.textContent)).toEqual(["⌘K", "⌘N", "⌘F", "Esc", "⌫", "↑", "↓", "↵"]);
+  for (const name of ["찾기", "새 캔버스", "설정 검색"]) expect(within(page).getByText(name)).toBeTruthy();
+});
+
+test("macos_permissions_page_replaces_permissions", async () => {
+  await renderShell("macos");
+  expect(title()).toBe("macOS 권한");
+  const page = document.getElementById("settings-macos")!;
+  expect(page.textContent).toContain("폴더 권한은 워크플로우가 처음 그 폴더를 쓸 때 macOS가 물어봐요");
+  expect(page.querySelector('[role="switch"][aria-label="로그인할 때 자동으로 시작"]')).toBeTruthy();
+  expect(within(page).getByRole("button", { name: "로그인 항목 설정 열기" })).toBeTruthy();
+  // 알림·온보딩은 다른 메뉴로 옮겼다.
+  expect(page.textContent).not.toContain("테스트 알림");
+  expect(page.textContent).not.toContain("온보딩 다시 보기");
+});
+
+test("advanced_page_server_url_data_folder_onboarding", async () => {
+  const openDir = vi.spyOn(api, "openDataFolder").mockResolvedValue();
+  await renderShell("advanced");
+  expect(title()).toBe("고급");
+  const page = within(document.getElementById("settings-advanced")!);
+  expect(page.getByText("https://green.kiacms.co.kr")).toBeTruthy();
+  await act(async () => fireEvent.click(page.getByRole("button", { name: "데이터 폴더 열기" })));
+  expect(openDir).toHaveBeenCalledTimes(1);
+  expect(page.getByRole("button", { name: "온보딩 다시 보기" })).toBeTruthy();
+  // 서버 주소는 이음 계정 페이지에서 옮겼다.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "이음 계정" })));
+  expect(document.getElementById("settings-account")!.textContent).not.toContain("green.kiacms.co.kr");
+});
 
 test("settings_shows_only_selected_page", async () => {
   await renderShell();
@@ -72,16 +156,16 @@ test("settings_shows_only_selected_page", async () => {
   expect(screen.getByText("언어")).toBeTruthy();
   expect(screen.queryByText("me@ieum.dev")).toBeNull();
 
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "AI 제공자" })));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "AI 제공자 계정" })));
   expect(pages()).toEqual(["ai"]);
-  expect(screen.getByRole("button", { name: "AI 제공자" }).getAttribute("aria-current")).toBe("true");
+  expect(screen.getByRole("button", { name: "AI 제공자 계정" }).getAttribute("aria-current")).toBe("true");
 });
 
 test("deep_link_opens_ai_page", async () => {
   await renderShell("ai");
   expect(pages()).toEqual(["ai"]);
-  expect(title()).toBe("AI 제공자");
-  expect(screen.getByTestId("settings-crumb").textContent).toBe("AI 제공자");
+  expect(title()).toBe("AI 제공자 계정");
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("AI 제공자 계정");
   cleanup();
 
   // 상태 줄 팝오버 [AI 설정 열기] → AI 제공자 페이지만.
@@ -91,7 +175,7 @@ test("deep_link_opens_ai_page", async () => {
   await act(async () => fireEvent.click(screen.getByText(/오늘 API 예상/)));
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "AI 설정 열기" })));
   expect(pages()).toEqual(["ai"]);
-  expect(title()).toBe("AI 제공자");
+  expect(title()).toBe("AI 제공자 계정");
 });
 
 test("search_narrows_menu_and_switches_page", async () => {
@@ -100,21 +184,22 @@ test("search_narrows_menu_and_switches_page", async () => {
 
   // 지금 페이지(일반)가 걸러지면 남은 첫 메뉴로.
   await act(async () => fireEvent.change(search, { target: { value: "알림" } }));
-  expect(menu()).toEqual(["권한·준비"]);
-  expect(pages()).toEqual(["permissions"]);
+  // 단축키 페이지의 "찾기·알림 목록에서 위아래로"도 걸린다.
+  expect(menu()).toEqual(["알림", "단축키"]);
+  expect(pages()).toEqual(["notifications"]);
   expect(screen.getByRole("button", { name: "테스트 알림 보내기" })).toBeTruthy();
   expect(screen.queryByText("로그인할 때 자동으로 시작")).toBeNull();
 
   // 페이지 안에서는 맞는 부분만 — "API 키"면 구독 칸은 숨는다.
   await act(async () => fireEvent.change(search, { target: { value: "API 키" } }));
-  expect(menu()).toEqual(["AI 제공자"]);
+  expect(menu()).toEqual(["AI 제공자 계정"]);
   expect(pages()).toEqual(["ai"]);
   expect(part(box("OpenAI"), "API 키")).toBeTruthy();
   expect(box("OpenAI").queryByRole("region", { name: "구독" })).toBeNull();
 
   // 지우면 모든 메뉴, 고른 페이지로.
   await act(async () => fireEvent.change(search, { target: { value: "" } }));
-  expect(menu()).toEqual(["이음 계정", "일반", "권한·준비", "AI 제공자"]);
+  expect(menu()).toEqual(ALL_MENUS);
   expect(pages()).toEqual(["general"]);
 });
 
@@ -128,7 +213,7 @@ test("settings_search_filters_rows", async () => {
   expect(screen.queryByText("언어")).toBeNull();
   expect(screen.queryByText("me@ieum.dev")).toBeNull();
   const nav = screen.getByRole("navigation");
-  expect(nav.textContent).toContain("권한·준비");
+  expect(nav.textContent).toContain("macOS 권한");
   expect(document.getElementById("settings-general")).toBeNull();
   expect(nav.textContent).not.toContain("이음 계정");
   expect(nav.textContent).not.toContain("AI 제공자");
@@ -411,7 +496,7 @@ test("settings_search_matches_section_desc_and_button", async () => {
   expect(keys("OpenAI")).toBeTruthy();
   expect(keys("Google")).toBeTruthy();
   expect(screen.queryByRole("region", { name: "구독" })).toBeNull();
-  expect(screen.getByTestId("settings-crumb").textContent).toBe("AI 제공자");
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("AI 제공자 계정");
 
   // 버튼 문구
   await act(async () => fireEvent.change(search, { target: { value: "로그아웃" } }));
@@ -421,14 +506,14 @@ test("settings_search_matches_section_desc_and_button", async () => {
   // 줄 설명
   await act(async () => fireEvent.change(search, { target: { value: "메뉴 막대" } }));
   expect(screen.getByText("로그인할 때 자동으로 시작")).toBeTruthy();
-  expect(screen.getByTestId("settings-crumb").textContent).toBe("권한·준비");
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("macOS 권한");
 });
 
 test("permissions_pane_opens_files_settings_without_checking_folders", async () => {
-  const open = vi.spyOn(api, "openSystemSettings").mockResolvedValue();
-  await renderShell("permissions");
+  const open = vi.spyOn(api, "openSystemSettings").mockClear().mockResolvedValue();
+  await renderShell("macos");
   expect(open).not.toHaveBeenCalled();
-  const perms = document.getElementById("settings-permissions")!;
+  const perms = document.getElementById("settings-macos")!;
   expect(perms.textContent).toContain("폴더 권한은 워크플로우가 처음 그 폴더를 쓸 때 macOS가 물어봐요");
   await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "시스템 설정 열기" })[0]));
   expect(open).toHaveBeenCalledWith("files");
@@ -436,7 +521,7 @@ test("permissions_pane_opens_files_settings_without_checking_folders", async () 
 
 test("notify_toggles_save_settings", async () => {
   const set = vi.spyOn(api, "setSettings").mockResolvedValue();
-  await renderShell("permissions");
+  await renderShell("notifications");
   await act(async () => fireEvent.click(screen.getByRole("switch", { name: "폴더 감시 끝·실패" })));
   expect(set).toHaveBeenCalledWith(expect.objectContaining({ notifyWatchEnd: false, notifyManualStart: true }));
 });
@@ -445,22 +530,22 @@ test("autostart_toggle_lives_only_here", async () => {
   await renderShell("general");
   const general = document.getElementById("settings-general")!;
   expect(general.textContent).not.toContain("로그인할 때 자동으로 시작");
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "권한·준비" })));
-  const perms = document.getElementById("settings-permissions")!;
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "macOS 권한" })));
+  const perms = document.getElementById("settings-macos")!;
   expect(perms.querySelector('[role="switch"][aria-label="로그인할 때 자동으로 시작"]')).toBeTruthy();
 });
 
 test("replay_onboarding_resets_flag", async () => {
   const set = vi.spyOn(api, "setSettings").mockResolvedValue();
-  await renderShell("permissions");
+  await renderShell("advanced");
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "온보딩 다시 보기" })));
   expect(set).toHaveBeenCalledWith(expect.objectContaining({ onboardingDone: false }));
 });
 
-test("settings_search_finds_permissions", async () => {
+test("settings_search_finds_notifications", async () => {
   await renderShell();
   await act(async () => fireEvent.change(screen.getByLabelText("설정 검색"), { target: { value: "알림" } }));
-  expect(screen.getByRole("navigation").textContent).toContain("권한·준비");
+  expect(menu()).toEqual(["알림", "단축키"]);
   expect(screen.getByRole("button", { name: "테스트 알림 보내기" })).toBeTruthy();
 });
 

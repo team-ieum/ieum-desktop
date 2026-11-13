@@ -3,6 +3,7 @@ import { api } from "../api";
 import symbol from "../assets/symbol.png";
 import { t, type Key } from "../i18n";
 import { BUTTON, PRIMARY } from "../screens/Editor";
+import { TOP_ROW } from "../shell/Sidebar";
 import { AiProvidersPane, usePlans } from "../screens/settings/AiPane";
 import { Switch } from "../screens/settings/GeneralPane";
 import { useCredentials } from "../stores/credentials";
@@ -111,7 +112,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <div className="flex h-full items-center justify-center overflow-y-auto bg-main-light-blue px-6 pt-14 pb-10">
+    <div className="relative flex h-full items-center justify-center overflow-y-auto bg-main-light-blue px-6 pt-14 pb-10">
+      {/* 창 끌기 영역 — 신호등 줄 높이. */}
+      <div data-tauri-drag-region className={`absolute inset-x-0 top-0 ${TOP_ROW}`} />
       <div className="w-full max-w-[560px] rounded-brand-lg bg-white px-10 py-9 shadow-[0_12px_32px_-12px_rgba(41,83,124,.25)]">
         <div className="flex items-center justify-between">
           <img src={symbol} className="h-8 w-8" alt="" />
