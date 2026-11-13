@@ -382,6 +382,23 @@ export interface ChatFile {
   usage: { at: string; usage: unknown }[];
 }
 
+/** 채팅 턴 응답에만 실리는 카드. 테스트 값은 없다 — 화면이 `runId`로 실행 기록을 읽는다. */
+export type ChatCard =
+  | { kind: "test"; nodeId: string; runId: string; status: string }
+  | { kind: "pickFolder"; nodeId: string; field: string }
+  | { kind: "finish" };
+export interface ChatTurn {
+  say: string;
+  cards: ChatCard[];
+  error: string | null;
+}
+export interface ChatAi {
+  provider: string;
+  credential: string | null;
+  model: string | null;
+}
+export type ChatStage = { id: string; stage: "designing" | "testing" };
+
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
   saveWorkflow: (wf: StoredWorkflow) => invoke<StoredWorkflow>("save_workflow", { wf }),
@@ -471,6 +488,13 @@ export const api = {
     listen<{ id: string; updatedAt: string }>("workflow-changed", (e) => cb(e.payload)),
   onFinishPending: (cb: (p: { id: string; name: string }) => void): Promise<UnlistenFn> =>
     listen<{ id: string; name: string }>("finish-pending", (e) => cb(e.payload)),
+  // ── 채팅 패널 ──
+  chatSend: (workflowId: string, text: string, ai: ChatAi) =>
+    invoke<ChatTurn>("chat_send", { workflowId, text, provider: ai.provider, credential: ai.credential, model: ai.model }),
+  /** 폴더 고르기 카드의 버튼 — 시스템 폴더 창을 연다. */
+  chatPickFolder: (workflowId: string, nodeId: string, field: string) =>
+    invoke<BuilderReply>("chat_pick_folder", { workflowId, nodeId, field }),
+  onChatStage: (cb: (p: ChatStage) => void): Promise<UnlistenFn> => listen<ChatStage>("chat-stage", (e) => cb(e.payload)),
   onTestUndoFailed: (cb: (p: { id: string; runId: string }) => void): Promise<UnlistenFn> =>
     listen<{ id: string; runId: string }>("test-undo-failed", (e) => cb(e.payload)),
 };

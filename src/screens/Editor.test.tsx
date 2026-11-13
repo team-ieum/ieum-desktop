@@ -19,6 +19,15 @@ beforeAll(() => {
     m22 = 1;
   };
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);
+  // 채팅 패널(갈래 D) — 패널을 여는 테스트가 실제 invoke를 타지 않게.
+  vi.spyOn(api, "getChat").mockResolvedValue({ messages: [], state: { outline: [], baseline: null, tests: {}, pendingFinish: null }, usage: [] });
+  vi.spyOn(api, "onChatStage").mockResolvedValue(() => {});
+  vi.spyOn(api, "listCredentials").mockResolvedValue({
+    apiKeys: { anthropic: [], openai: [], gemini: [] },
+    claudeAccounts: [],
+    codexAccounts: [],
+    keychainError: null,
+  });
 });
 afterEach(cleanup);
 
