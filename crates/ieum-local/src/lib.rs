@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod builder;
 mod files;
 mod journal;
 mod paths;

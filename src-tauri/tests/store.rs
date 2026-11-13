@@ -128,3 +128,23 @@ fn ids_must_be_uuid() {
     assert!(t.path().join("x.json").exists());
     assert!(!t.path().join("workflows").exists());
 }
+
+#[test]
+fn chat_file_default_update_and_deleted_with_workflow() {
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let id = store.save_workflow(stored("")).unwrap().id;
+    assert!(store.get_chat(&id).unwrap().messages.is_empty()); // 없으면 빈 값
+    let after = store
+        .update_chat(&id, |c| c.state.outline = vec!["새 파일".into()])
+        .unwrap();
+    assert_eq!(after.state.outline, ["새 파일"]);
+    assert!(t.path().join("chats").join(format!("{id}.json")).exists());
+    assert_eq!(store.get_chat(&id).unwrap().state.outline, ["새 파일"]);
+    assert!(store.get_chat("../x").is_err()); // id는 UUID만
+    store.delete_workflow(&id).unwrap();
+    assert!(!t.path().join("chats").join(format!("{id}.json")).exists()); // 같이 지운다
+    // 채팅 파일이 없는 워크플로우도 지워진다.
+    let id2 = store.save_workflow(stored("")).unwrap().id;
+    store.delete_workflow(&id2).unwrap();
+}

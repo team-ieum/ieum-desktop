@@ -186,6 +186,7 @@ fn api_provider(p: &str) -> Result<&'static str, String> {
 static LOCK: Mutex<()> = Mutex::new(());
 
 /// 계정 하나의 키·계정 목록. 키 저장소는 범위 없는 vault(`anthropic.<계정 키>...` 전체 이름으로 접근).
+#[derive(Clone)]
 pub struct AccountCredentials {
     root: PathBuf,
     key16: String,

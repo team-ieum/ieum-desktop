@@ -1,5 +1,6 @@
 pub mod account;
 pub mod active;
+pub mod builder_host;
 pub mod commands;
 pub mod credentials;
 pub mod notify;
@@ -135,6 +136,27 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 notify::on_run_notice(&handle, &n);
                 Ok(())
             }
+            AppEvent::WorkflowChanged {
+                workflow_id,
+                updated_at,
+            } => handle.emit(
+                "workflow-changed",
+                json!({"id": workflow_id, "updatedAt": updated_at}),
+            ),
+            AppEvent::FinishPending {
+                workflow_id,
+                workflow_name,
+            } => handle.emit(
+                "finish-pending",
+                json!({"id": workflow_id, "name": workflow_name}),
+            ),
+            AppEvent::TestUndoFailed {
+                workflow_id,
+                run_id,
+            } => handle.emit(
+                "test-undo-failed",
+                json!({"id": workflow_id, "runId": run_id}),
+            ),
         };
         if let Err(e) = sent {
             eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");
@@ -182,6 +204,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(crate::sub_usage::agy_usage_cli),
         crate::plan_usage::CACHE_TTL,
     ));
+    app.manage(builder_host::no_pick());
     tray::create(app)?;
     check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
@@ -264,6 +287,13 @@ pub fn run() {
             commands::send_test_notification,
             commands::open_data_folder,
             commands::check_update_now,
+            // ── 캔버스 채팅: 토대 ──
+            commands::get_chat,
+            commands::pending_finish,
+            commands::confirm_finish,
+            // ── 캔버스 채팅 B(통로·동기화) — 여기 아래에 추가 ──
+            // ── 캔버스 채팅 C(터미널 term_*) — 여기 아래에 추가 ──
+            // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

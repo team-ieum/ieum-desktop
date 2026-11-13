@@ -6,12 +6,14 @@ use std::sync::Arc;
 use ieum_engine::{ValidationError, Workflow};
 use ieum_local::UndoReport;
 use ieum_local::ai::{KeyStore, detect_clis};
+use ieum_local::builder::{ChatFile, PendingFinish, Reply};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::account::AccountId;
 use crate::active::Active;
+use crate::builder_host::{PickFolder, builder_of};
 use crate::credentials::{AccountCredentials, ApiKeyMeta, CliAccountBegin, CredentialsView};
 use crate::permissions;
 use crate::plan_usage::PlanUsage;
@@ -663,4 +665,34 @@ pub async fn web_watch_execution(
 #[tauri::command]
 pub fn web_unwatch_execution(watches: State<'_, Watches>, execution_id: String) {
     watches.unwatch(&execution_id);
+}
+
+/// 채팅 상태 파일(대화·테스트 상태). 없으면 빈 값.
+#[tauri::command]
+pub async fn get_chat(active: State<'_, Active>, workflow_id: String) -> Result<ChatFile, String> {
+    active.sup().await?.store().get_chat(&workflow_id)
+}
+
+/// 사람의 확인을 기다리는 완료 요청(확인 카드 내용). 없으면 None.
+#[tauri::command]
+pub async fn pending_finish(
+    active: State<'_, Active>,
+    pick: State<'_, PickFolder>,
+    workflow_id: String,
+) -> Result<Option<PendingFinish>, String> {
+    Ok(builder_of(&active, &pick).await?.pending(&workflow_id))
+}
+
+/// 확인 카드의 [켜기]/[아직] — 워크플로우를 켜는 유일한 길(사람이 누른다).
+#[tauri::command]
+pub async fn confirm_finish(
+    active: State<'_, Active>,
+    pick: State<'_, PickFolder>,
+    workflow_id: String,
+    accept: bool,
+) -> Result<Reply, String> {
+    Ok(builder_of(&active, &pick)
+        .await?
+        .confirm_finish(&workflow_id, accept)
+        .await)
 }

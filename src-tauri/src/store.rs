@@ -4,8 +4,10 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use ieum_engine::{RunResult, RunStatus, Workflow};
+use ieum_local::builder::ChatFile;
 use ieum_local::{FileOp, UndoReport};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -132,6 +134,9 @@ fn check_id(id: &str) -> Result<(), String> {
     }
 }
 
+/// 채팅 상태 파일 읽기·쓰기를 한 프로세스 안에서 차례로.
+static CHAT_LOCK: Mutex<()> = Mutex::new(());
+
 /// 임시 파일에 쓰고 rename — 쓰다 죽어도 이전 파일이 남는다.
 pub(crate) fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
@@ -199,6 +204,38 @@ impl Store {
         Ok(self.root.join("runs").join(format!("{id}.json")))
     }
 
+    fn chat_path(&self, id: &str) -> Result<PathBuf, String> {
+        check_id(id)?;
+        Ok(self.root.join("chats").join(format!("{id}.json")))
+    }
+
+    /// 채팅 상태 파일(`chats/<워크플로우 id>.json`). 없으면 빈 값.
+    pub fn get_chat(&self, workflow_id: &str) -> Result<ChatFile, String> {
+        let path = self.chat_path(workflow_id)?;
+        if !path.exists() {
+            return Ok(ChatFile::default());
+        }
+        read_json(&path)
+    }
+
+    pub fn save_chat(&self, workflow_id: &str, chat: &ChatFile) -> Result<(), String> {
+        let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        write_atomic(&self.chat_path(workflow_id)?, chat)
+    }
+
+    /// 읽기-고치기-쓰기 한 번. 여러 곳(빌더·채팅 패널)이 같은 파일을 고치므로 늘 이걸로 고친다.
+    pub fn update_chat(
+        &self,
+        workflow_id: &str,
+        f: impl FnOnce(&mut ChatFile),
+    ) -> Result<ChatFile, String> {
+        let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut chat = self.get_chat(workflow_id)?;
+        f(&mut chat);
+        write_atomic(&self.chat_path(workflow_id)?, &chat)?;
+        Ok(chat)
+    }
+
     pub fn list_workflows(&self) -> Result<Vec<StoredWorkflow>, String> {
         let mut list: Vec<StoredWorkflow> = read_all(&self.root.join("workflows"))?;
         list.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
@@ -219,13 +256,21 @@ impl Store {
         Ok(wf)
     }
 
-    /// 워크플로우 정의 파일만 지운다(사용자 파일 아님).
+    /// 워크플로우 정의 파일과 그 채팅 상태 파일만 지운다(사용자 파일 아님).
     pub fn delete_workflow(&self, id: &str) -> Result<(), String> {
         let path = self.workflow_path(id)?;
         if !path.starts_with(self.root.join("workflows")) {
             return Err("앱 데이터 폴더 밖이에요.".into());
         }
-        fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
+        fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let chat = self.chat_path(id)?;
+        let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        match fs::remove_file(&chat) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(format!("{}: {e}", chat.display()))
+            }
+            _ => Ok(()),
+        }
     }
 
     pub fn save_run(&self, run: &StoredRun) -> Result<(), String> {

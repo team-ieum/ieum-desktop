@@ -56,6 +56,9 @@
     "allow-send-test-notification",
     "allow-open-data-folder",
     "allow-check-update-now",
+    "allow-get-chat",
+    "allow-pending-finish",
+    "allow-confirm-finish",
     "dialog:allow-open"
   ]
 }

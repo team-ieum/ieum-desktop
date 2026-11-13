@@ -1,7 +1,7 @@
 //! 실행 감독: 켜진 폴더 트리거 워크플로우마다 감시 하나, 워크플로우별 실행 줄(한 번에 하나), 실행 기록·되돌리기.
 //! Tauri 없이 돈다 — 저장소·휴지통·AI 러너·이벤트 송신을 `Deps`로 주입한다.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -46,7 +46,22 @@ pub enum AppEvent {
     QueueDropped { workflow_id: String, path: String },
     /// 시스템 알림 재료(화면 이벤트 아님) — 실행 시작·끝.
     RunNotice(RunNotice),
+    /// 화면 이벤트 `workflow-changed` — 채팅 빌더가 저장본을 고쳤다.
+    WorkflowChanged {
+        workflow_id: String,
+        updated_at: String,
+    },
+    /// 화면 이벤트 `finish-pending` — 완료 조건 통과, 사람의 [켜기]를 기다린다.
+    FinishPending {
+        workflow_id: String,
+        workflow_name: String,
+    },
+    /// 화면 이벤트 `test-undo-failed` — 테스트가 옮긴 파일 일부를 되돌리지 못했다.
+    TestUndoFailed { workflow_id: String, run_id: String },
 }
+
+/// `save_workflow_expecting`이 기대한 `updated_at`과 저장본이 다를 때의 오류 문자열.
+pub const STALE: &str = "STALE";
 
 #[derive(Debug, Clone)]
 pub struct RunNotice {
@@ -134,6 +149,10 @@ struct Inner {
     watches: Mutex<HashMap<String, Watch>>,
     lanes: Mutex<HashMap<String, Lane>>,
     undo_lock: Mutex<()>,
+    /// 워크플로우 저장을 차례로 — `updated_at` 비교와 쓰기 사이에 다른 저장이 끼지 않게.
+    save_lock: Mutex<()>,
+    /// 편집기에 저장 안 된 편집이 있는 워크플로우 id(메모리만 — 로그아웃·앱 종료로 비워진다).
+    editing: Mutex<HashSet<String>>,
     /// `stop()` 뒤 취소됨 — 새 감시·실행을 받지 않고 재확인 루프가 끝난다.
     stopped: CancellationToken,
 }
@@ -190,6 +209,8 @@ impl Supervisor {
             watches: Mutex::default(),
             lanes: Mutex::default(),
             undo_lock: Mutex::default(),
+            save_lock: Mutex::default(),
+            editing: Mutex::default(),
             stopped: CancellationToken::new(),
         }));
         sup.sync();
@@ -281,12 +302,54 @@ impl Supervisor {
         Ok(())
     }
 
-    pub fn save_workflow(&self, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
+    /// `save_lock`을 잡은 채 부른다.
+    fn save_checked(&self, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
         self.check_folders(&wf.workflow)?;
         self.check_providers(&wf.workflow)?;
         let saved = self.store().save_workflow(wf)?;
         self.sync();
         Ok(saved)
+    }
+
+    pub fn save_workflow(&self, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
+        let _g = lock(&self.0.save_lock);
+        self.save_checked(wf)
+    }
+
+    /// 저장본의 `updated_at`이 `expected_updated_at`과 다르면 `Err(STALE)` — 그사이 다른 쪽이 고쳤다.
+    pub fn save_workflow_expecting(
+        &self,
+        wf: StoredWorkflow,
+        expected_updated_at: &str,
+    ) -> Result<StoredWorkflow, String> {
+        let _g = lock(&self.0.save_lock);
+        if self.store().get_workflow(&wf.id)?.updated_at != expected_updated_at {
+            return Err(STALE.into());
+        }
+        self.save_checked(wf)
+    }
+
+    pub fn emit(&self, e: AppEvent) {
+        (self.0.deps.emit)(e);
+    }
+
+    /// 사용자 폴더 정책 — 채팅 빌더의 `pick-folder`가 고른 폴더를 미리 본다.
+    pub fn check_user_folder(&self, folder: &Path) -> Result<(), String> {
+        self.check_folder(folder)
+    }
+
+    /// 편집기의 미저장 편집 표시.
+    pub fn set_editing(&self, workflow_id: &str, editing: bool) {
+        let mut set = lock(&self.0.editing);
+        if editing {
+            set.insert(workflow_id.to_string());
+        } else {
+            set.remove(workflow_id);
+        }
+    }
+
+    pub fn user_editing(&self, workflow_id: &str) -> bool {
+        lock(&self.0.editing).contains(workflow_id)
     }
 
     pub fn delete_workflow(&self, id: &str) -> Result<(), String> {
