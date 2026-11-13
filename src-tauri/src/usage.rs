@@ -386,9 +386,12 @@ where
         let Ok(at) = DateTime::parse_from_rfc3339(&r.started_at) else {
             continue;
         };
-        totals.runs += 1;
-        if let Ok(end) = DateTime::parse_from_rfc3339(&r.finished_at) {
-            totals.run_seconds += u64::try_from((end - at).num_seconds()).unwrap_or(0);
+        // 노드 테스트는 실행 건수·시간에서 뺀다. 토큰·금액은 실제로 쓴 것이라 아래에서 그대로 센다.
+        if r.trigger != Some(crate::store::RunTrigger::Test) {
+            totals.runs += 1;
+            if let Ok(end) = DateTime::parse_from_rfc3339(&r.finished_at) {
+                totals.run_seconds += u64::try_from((end - at).num_seconds()).unwrap_or(0);
+            }
         }
         if oldest.is_none_or(|(o, _)| at < o) {
             oldest = Some((at, &r.started_at));

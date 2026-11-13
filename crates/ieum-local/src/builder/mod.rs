@@ -1,13 +1,21 @@
 mod core;
+mod edit;
+mod fields;
+mod finish;
+mod guide;
 mod host;
 mod op;
 mod reply;
 mod state;
+mod test;
 mod wire;
 
 pub use self::core::*;
+pub use edit::{AI_LOCKED_FIELDS, FOLDER_FIELDS};
+pub use guide::GUIDE;
 pub use host::*;
 pub use op::*;
 pub use reply::*;
 pub use state::*;
+pub use test::{pick_sample, subgraph_to};
 pub use wire::*;

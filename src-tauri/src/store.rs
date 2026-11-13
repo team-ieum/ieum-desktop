@@ -43,12 +43,14 @@ pub struct StoredRun {
     pub trigger: Option<RunTrigger>,
 }
 
-/// 폴더 감시로 돌았는지, 지금 실행(수동)인지.
+/// 폴더 감시로 돌았는지, 지금 실행(수동)인지, 채팅 빌더의 노드 테스트인지.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RunTrigger {
     Watch,
     Manual,
+    /// 끝나면 바로 되돌린다. 대시보드 실행 건수·알림에서 뺀다.
+    Test,
 }
 
 #[derive(Debug, Clone, Serialize)]

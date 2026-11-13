@@ -1,5 +1,6 @@
 //! 정적 검증(1단계분) — ieum-agent `core/validators/static_validator.py`를 옮겼다(에러 순서·문구 동일).
 //! `REQUIRED`·`TYPE`·`CHOICE`·`CRON`·`TOO_LARGE`는 1단계 범위 밖이라 옮기지 않았다.
+//! 필수 칸·선택지는 채팅 빌더용 `validate_fields`가 따로 본다(`validate`의 결과는 그대로).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::LazyLock;
@@ -24,6 +25,9 @@ pub enum ErrorCode {
     TriggerCount,
     EdgeInvalid,
     OrphanNode,
+    /// `validate_fields`만 낸다(`validate`는 내지 않는다).
+    Required,
+    Choice,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -346,7 +350,7 @@ fn graph_errors(nodes: &[Node], edges: &[Edge], catalog: &Catalog) -> Vec<Valida
 
 /// 분기 노드에서 나가는 엣지가 쓸 수 있는 (conditionType 값, 이름). 새 모양 = 갈래 key들 + otherwise가 stop이
 /// 아니면 else. 레거시(branches 빈 값)는 otherwise를 무시하고 true·false.
-fn condition_branches(node: &Node) -> Vec<(String, String)> {
+pub fn condition_branches(node: &Node) -> Vec<(String, String)> {
     let branches = get_path(node, "config.branches");
     if is_empty(branches) {
         return vec![
@@ -576,8 +580,23 @@ fn ancestors<'a>(nid: &str, preds: &HashMap<&'a str, Vec<&'a str>>) -> HashSet<&
     seen
 }
 
+/// 엣지를 거슬러 닿는 노드 id(자기 제외).
+pub fn upstream_ids(wf: &Workflow, id: &str) -> HashSet<String> {
+    let by_id: HashMap<&str, &Node> = wf
+        .nodes
+        .iter()
+        .filter_map(|n| sid(&n.id).map(|id| (id, n)))
+        .collect();
+    let mut up: HashSet<String> = ancestors(id, &predecessors(&wf.edges, &by_id))
+        .into_iter()
+        .map(String::from)
+        .collect();
+    up.remove(id); // 순환이면 자기 자신도 닿는다
+    up
+}
+
 /// 대상 노드가 내는 최상위 출력 키. 알 수 없으면(카탈로그에 없음·outputDynamic) None = 검사 안 함.
-fn declared_outputs(node: &Node, catalog: &Catalog) -> Option<BTreeSet<String>> {
+pub fn declared_outputs(node: &Node, catalog: &Catalog) -> Option<BTreeSet<String>> {
     let entry = catalog.get(&node.event).filter(|e| !e.output_dynamic)?;
     if let Some(source) = entry.outputs_from.as_deref().filter(|s| !s.is_empty()) {
         match get_path(node, source) {
@@ -762,5 +781,81 @@ fn cut_loc(s: String) -> String {
     match s.char_indices().nth(MAX_LOC) {
         Some((i, _)) => s[..i].to_string(),
         None => s,
+    }
+}
+
+// ── 필수 칸·선택지(채팅 빌더용) ─────────────────────────────
+
+/// 필수 칸 채움·선택지 값. `validate`와 따로 부른다(`validate`·`run_workflow`의 동작은 그대로).
+/// 노드 순서 → 칸은 카탈로그 순서 → 칸마다 REQUIRED 다음 CHOICE. 카탈로그에 없는 event는 건너뛴다.
+pub fn validate_fields(wf: &Workflow, catalog: &Catalog) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    for node in &wf.nodes {
+        let Some(entry) = catalog.get(&node.event) else {
+            continue;
+        };
+        for f in &entry.input_fields {
+            let path = field_path(f);
+            if unused_field(entry, node, &path) {
+                continue;
+            }
+            let mut value = get_path(node, &path);
+            if entry.node_type == NodeType::Condition
+                && is_empty(value)
+                && let Some(alias) = condition_alias(&path)
+            {
+                value = get_path(node, alias);
+            }
+            check_required_choice(f, value, &path, sid(&node.id), &mut errors);
+        }
+    }
+    errors
+}
+
+fn check_required_choice(
+    f: &InputField,
+    value: Option<&Value>,
+    path: &str,
+    nid: Option<&str>,
+    errors: &mut Vec<ValidationError>,
+) {
+    let title = f
+        .title
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .unwrap_or(&f.key);
+    let Some(value) = value.filter(|v| !is_empty(Some(v))) else {
+        if f.required {
+            errors.push(err(
+                Required,
+                format!("'{title}' 칸이 비어 있어요."),
+                nid,
+                Some(path.to_string()),
+            ));
+        }
+        return;
+    };
+    if f.list {
+        for (i, item) in value.as_array().into_iter().flatten().enumerate() {
+            if item.is_object() {
+                for child in &f.children {
+                    let path = format!("{path}.{i}.{}", child.key);
+                    check_required_choice(child, item.get(&child.key), &path, nid, errors);
+                }
+            }
+        }
+        return;
+    }
+    if !f.choices.is_empty()
+        && let Some(s) = value.as_str()
+        && !s.contains("{{")
+        && !f.choices.iter().any(|c| c.id == s)
+    {
+        errors.push(err(
+            Choice,
+            format!("'{title}' 칸의 값이 선택지에 없어요."),
+            nid,
+            Some(path.to_string()),
+        ));
     }
 }
