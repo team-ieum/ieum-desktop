@@ -1,4 +1,4 @@
-//! 구독 CLI 공급원(claude·codex). 감지·실행 모두 `$SHELL -lc`(사용자 PATH), 프롬프트는 stdin.
+//! 구독 CLI 공급원(claude·codex·agy). 감지·실행 모두 `$SHELL -lc`(사용자 PATH), 프롬프트는 stdin.
 //! 빈 폴더에서 도구를 막고 돌린다. 취소·시간 초과 시 프로세스 그룹째 kill.
 
 use std::path::{Path, PathBuf};
@@ -20,16 +20,76 @@ const STDERR_TAIL: usize = 500;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliKind {
     Claude,
-    /// 보류(2026-11-10 사용자 결정): 아래 차단 플래그를 다 붙여도 codex 0.167 exec에 도구가 남는다 —
-    /// functions.exec(code-mode 호스트를 꺼 실행은 실패)·functions.wait·functions.request_user_input_async·
-    /// collaboration.{spawn_agent,send_message,wait_agent,list_agents,interrupt_agent,followup_task}.
-    /// 도구를 완전히 끄는 옵션이 생기면 `AiRunner::new`·`detect_clis`·`local.ai.json`에 다시 켠다.
-    /// 그때까지 코드·fixture·테스트는 유지한다.
+    /// 도구는 모델 카탈로그를 덮어 없앤다(`lock_codex_catalog`). 남는 것은 `request_user_input` 하나(호출은 거부된다).
+    /// 그래도 예상 밖 이벤트가 보이면 그 실행은 즉시 실패한다(`feed_codex`).
     Codex,
+    /// 도구 목록은 못 끈다 → 호출 시점에 거부한다: `finish`만 통과시키는 훅(`AGY_GATE`) + deny 규칙(`AGY_SETTINGS`)
+    /// + 도구 단계가 보이면 즉시 실패(`feed_agy`). 파일 내용은 보내지 않는다(`run_inner`).
+    Agy,
 }
 
+/// agy `--settings` — 이 실행에만 적용된다.
+pub const AGY_SETTINGS: &str = r#"{"permissions":{"deny":["command(*)","write_file(*)","read_file(*)","read_url(*)","execute_url(*)","mcp(*)"]},"toolPermission":"strict","allowNonWorkspaceAccess":false}"#;
+
+/// agy PreToolUse 훅(`<작업 폴더>/.agents/ieum-gate.sh`). 도구 이름을 JSON으로 읽어 `finish`만 통과시킨다 —
+/// 글자 찾기로 하면 인자 속 `"name":"finish"`에 속는다. 못 읽으면 거부.
+pub const AGY_GATE: &str = r#"#!/bin/sh
+n=$(/usr/bin/plutil -extract toolCall.name raw -o - - 2>/dev/null)
+if [ "$n" = finish ]; then printf '%s\n' '{"decision":"allow"}'; else printf '%s\n' '{"decision":"deny","reason":"tools disabled"}'; fi
+"#;
+
+/// `path`의 내용·권한이 다를 때만, 같은 폴더의 임시 파일에 쓰고 rename으로 바꿔치기한다.
+/// 그 자리에서 잘라 쓰면 같은 폴더를 쓰는 다른 실행이 빈·쓰다 만 파일을 읽을 수 있다.
+fn replace_file(path: &Path, content: &str, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let same = std::fs::read(path).is_ok_and(|c| c == content.as_bytes())
+        && std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o777 == mode);
+    if same {
+        return Ok(());
+    }
+    let tmp = path.with_file_name(format!(
+        ".ieum-tmp-{}-{}",
+        std::process::id(),
+        TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let write = || {
+        std::fs::write(&tmp, content)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+        std::fs::rename(&tmp, path)
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// agy 작업 폴더의 훅을 매번 맞춰 둔다(누가 고쳐 놓았어도 원래대로). 못 쓰면 Err — 훅 없이 띄우지 않는다.
+fn write_agy_gate(cwd: &Path) -> Result<(), AiError> {
+    let dir = cwd.join(".agents");
+    let gate = dir.join("ieum-gate.sh");
+    let path = gate.to_string_lossy().into_owned();
+    // 훅 명령은 인용 없이 실행된다 — 공백·셸 글자가 든 경로면 훅이 안 돌 수 있어 띄우지 않는다.
+    let plain = |c: char| c.is_alphanumeric() || "/-_.".contains(c);
+    if !gate.is_absolute() || !path.chars().all(plain) {
+        return Err(AiError(format!(
+            "Antigravity 작업 폴더 경로를 쓸 수 없어요: {path}"
+        )));
+    }
+    let hooks = serde_json::json!({"ieum": {"PreToolUse": [{"matcher": "*",
+        "hooks": [{"type": "command", "command": path, "timeout": 5}]}]}});
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(&dir)?;
+        // 스크립트가 먼저 — hooks.json이 가리킬 때는 이미 있다.
+        replace_file(&gate, AGY_GATE, 0o755)?;
+        replace_file(&dir.join("hooks.json"), &hooks.to_string(), 0o644)
+    };
+    write().map_err(|e| AiError(format!("Antigravity 도구 차단 훅을 못 만들었어요: {e}")))
+}
+
+/// 러너에 등록하고 설치를 찾는 구독 CLI.
+pub(super) const ENABLED: [CliKind; 3] = [CliKind::Claude, CliKind::Codex, CliKind::Agy];
+
 /// codex exec에서 끄는 기본 켜진 기능(`codex features list` 0.167 기준).
-const CODEX_DISABLED_FEATURES: [&str; 20] = [
+const CODEX_DISABLED_FEATURES: [&str; 21] = [
     "apps",
     "browser_use",
     "browser_use_external",
@@ -50,7 +110,55 @@ const CODEX_DISABLED_FEATURES: [&str; 20] = [
     "skill_mcp_dependency_install",
     "code_mode_host",
     "goals",
+    "collaboration_modes",
 ];
+
+/// codex exec에 `-c`로 덮는 설정(조사에서 실호출로 검증한 조합).
+const CODEX_OVERRIDES: [&str; 9] = [
+    "web_search=\"disabled\"",
+    "skills.include_instructions=false",
+    "skills.bundled.enabled=false",
+    "include_permissions_instructions=false",
+    "include_environment_context=false",
+    "include_apps_instructions=false",
+    "include_collaboration_mode_instructions=false",
+    "project_doc_max_bytes=0",
+    "mcp_servers={}",
+];
+
+const CODEX_CATALOG_ERROR: &str =
+    "Codex 모델 목록을 읽지 못했어요. Codex CLI 버전을 확인해 주세요.";
+/// `codex debug models --bundled` 시간 상한.
+const CODEX_CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `codex debug models --bundled` 출력의 모든 모델에서 도구를 만드는 네 칸을 덮는다. 모델이 하나도 없으면 Err.
+pub fn lock_codex_catalog(raw: &str) -> Result<Value, AiError> {
+    let err = || AiError(CODEX_CATALOG_ERROR.into());
+    let mut v: Value = serde_json::from_str(raw).map_err(|_| err())?;
+    let models = v
+        .get_mut("models")
+        .and_then(Value::as_array_mut)
+        .filter(|m| !m.is_empty())
+        .ok_or_else(err)?;
+    for m in models {
+        let m = m.as_object_mut().ok_or_else(err)?;
+        m.insert("tool_mode".into(), "direct".into());
+        m.insert("multi_agent_version".into(), Value::Null);
+        m.insert("apply_patch_tool_type".into(), Value::Null);
+        m.insert("shell_type".into(), "disabled".into());
+        // gpt-6 계열은 여기로 `request_user_input_async`·`clock.curr_time`을 싣는다.
+        // 새 칸이 생기면 `live_codex_request_has_no_tools`(모든 모델)가 잡는다.
+        m.insert("experimental_supported_tools".into(), Value::Array(vec![]));
+    }
+    Ok(v)
+}
+
+/// 실행 줄에 넘기는 임시 파일.
+struct RunFiles<'a> {
+    schema: Option<&'a Path>,
+    /// codex 잠긴 모델 카탈로그.
+    catalog: Option<&'a Path>,
+}
 
 impl CliKind {
     /// `local.ai` provider 값.
@@ -58,6 +166,7 @@ impl CliKind {
         match self {
             CliKind::Claude => "cli:claude",
             CliKind::Codex => "cli:codex",
+            CliKind::Agy => "cli:agy",
         }
     }
 
@@ -65,6 +174,7 @@ impl CliKind {
         match self {
             CliKind::Claude => "claude",
             CliKind::Codex => "codex",
+            CliKind::Agy => "agy",
         }
     }
 
@@ -73,12 +183,13 @@ impl CliKind {
         match self {
             CliKind::Claude => "Claude (구독)",
             CliKind::Codex => "Codex (구독)",
+            CliKind::Agy => "Antigravity (구독)",
         }
     }
 
     /// 도구 차단 포함 인자. claude: 내장 도구 0 + MCP 0 + 사용자 설정 파일 안 읽음 + safe-mode(CLAUDE.md·스킬·
-    /// 플러그인·훅 끔) + 세션 저장 안 함. codex: 읽기 전용 샌드박스.
-    fn args(self, req: &AiRequest, schema_file: Option<&Path>) -> Vec<String> {
+    /// 플러그인·훅 끔) + 세션 저장 안 함. codex: 읽기 전용 샌드박스 + 도구를 없앤 모델 카탈로그 + 기능·안내문 끄기.
+    fn args(self, req: &AiRequest, files: &RunFiles) -> Vec<String> {
         let mut a: Vec<String> = match self {
             CliKind::Claude => {
                 let mut a: Vec<String> = [
@@ -111,30 +222,52 @@ impl CliKind {
                     "--ignore-user-config",
                     "--ignore-rules",
                     "--ephemeral",
-                    "-c",
-                    "web_search=\"disabled\"",
                 ]
                 .map(String::from)
                 .to_vec();
+                for c in CODEX_OVERRIDES {
+                    a.push("-c".into());
+                    a.push(c.into());
+                }
+                if let Some(c) = files.catalog {
+                    a.push("-c".into());
+                    // TOML 문자열 = JSON 문자열 인용.
+                    let path = Value::String(c.to_string_lossy().into_owned());
+                    a.push(format!("model_catalog_json={path}"));
+                }
                 for f in CODEX_DISABLED_FEATURES {
                     a.push("--disable".into());
                     a.push(f.into());
                 }
                 a
             }
+            CliKind::Agy => [
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--sandbox",
+                "--disable-slash-commands",
+                "--settings",
+                AGY_SETTINGS,
+                "--print-timeout",
+                "280s",
+            ]
+            .map(String::from)
+            .to_vec(),
         };
         if let Some(m) = &req.model {
             a.push(
-                if self == CliKind::Claude {
-                    "--model"
-                } else {
+                if self == CliKind::Codex {
                     "-m"
+                } else {
+                    "--model"
                 }
                 .into(),
             );
             a.push(m.clone());
         }
-        match (self, &req.schema, schema_file) {
+        match (self, &req.schema, files.schema) {
             (CliKind::Claude, Some(s), _) => {
                 a.push("--json-schema".into());
                 a.push(s.to_string());
@@ -143,7 +276,14 @@ impl CliKind {
                 a.push("--output-schema".into());
                 a.push(f.to_string_lossy().into_owned());
             }
+            (CliKind::Agy, _, Some(f)) => {
+                a.push("--json-schema".into());
+                a.push(f.to_string_lossy().into_owned());
+            }
             _ => {}
+        }
+        if self == CliKind::Agy {
+            a.extend(["-p".into(), String::new()]); // 프롬프트는 stdin NDJSON
         }
         if self == CliKind::Codex {
             a.push("-".into()); // 프롬프트를 stdin에서
@@ -169,7 +309,9 @@ struct StreamState {
     error: Option<String>,
     /// codex `error`·`turn.failed` — 재연결 경고일 수 있어 답이 없거나 rc≠0일 때만 실패 이유로 쓴다.
     warnings: Vec<String>,
-    /// claude `result` 이벤트의 `usage`(Anthropic 모양).
+    /// 허용 목록 밖 이벤트를 봤다 — 더 읽지 않고 프로세스 그룹을 죽인다.
+    fatal: bool,
+    /// claude `result`·codex `turn.completed`의 `usage`. `finish`에서 종류별로 바꾼다.
     usage: Option<Value>,
     /// 요청한 모델(사용량 기록용). 비우면 CLI 기본 모델.
     model: Option<String>,
@@ -182,6 +324,7 @@ impl StreamState {
             answer: None,
             error: None,
             warnings: Vec::new(),
+            fatal: false,
             usage: None,
             model: None,
         }
@@ -215,22 +358,82 @@ impl StreamState {
                     self.answer = Some(r.to_string());
                 }
             }
-            (CliKind::Codex, "item.completed") if v["item"]["type"] == "agent_message" => {
+            (CliKind::Claude, _) => {}
+            (CliKind::Codex, _) => self.feed_codex(ty, &v, chunk),
+            (CliKind::Agy, _) => self.feed_agy(&v),
+        }
+    }
+
+    /// codex는 허용 목록이다 — 답·생각·오류 밖의 이벤트(되살아난 도구 등)가 보이면 그 실행은 실패다.
+    fn feed_codex(&mut self, ty: &str, v: &Value, chunk: &(dyn Fn(&str) + '_)) {
+        let item = v["item"]["type"].as_str();
+        match (ty, item) {
+            ("thread.started" | "turn.started", _) => {}
+            ("turn.completed", _) => {
+                if v["usage"].is_object() {
+                    self.usage = Some(v["usage"].clone());
+                }
+            }
+            ("turn.failed", _) => {
+                self.warnings
+                    .extend(v["error"]["message"].as_str().map(String::from));
+            }
+            ("error", _) => {
+                self.warnings
+                    .extend(v["message"].as_str().map(String::from));
+            }
+            ("item.completed", Some("agent_message")) => {
                 if let Some(t) = v["item"]["text"].as_str() {
                     chunk(t);
                     self.answer = Some(t.to_string());
                 }
             }
-            (CliKind::Codex, "turn.failed") => {
-                self.warnings
-                    .extend(v["error"]["message"].as_str().map(String::from));
-            }
-            (CliKind::Codex, "error") => {
-                self.warnings
-                    .extend(v["message"].as_str().map(String::from));
-            }
-            _ => {}
+            (
+                "item.started" | "item.updated" | "item.completed",
+                Some("agent_message" | "reasoning" | "error"),
+            ) => {}
+            _ => self.deny(item.unwrap_or(ty)),
         }
+    }
+
+    /// agy도 허용 목록이다. 도구 단계는 거부된 것(`ERROR`)이라도 보이면 실패 — 거부된 도구를 모델이 되풀이하면
+    /// 토큰이 불어나고, deny 규칙을 지나는 도구(`search_web`)는 훅이 유일한 차단이다.
+    fn feed_agy(&mut self, v: &Value) {
+        let event = v["event"].as_str().unwrap_or("");
+        match event {
+            "init" => {}
+            "step_update" => {
+                let ty = v["step_update"]["step_type"].as_str();
+                if !matches!(ty, Some("user_input" | "agent_response" | "finish")) {
+                    self.deny(ty.unwrap_or(event));
+                }
+            }
+            "result" => {
+                let r = &v["result"];
+                if r["usage"].is_object() {
+                    self.usage = Some(r["usage"].clone());
+                }
+                let response = r["response"].as_str();
+                if r["status"] != "SUCCESS" {
+                    if !self.fatal {
+                        let msg = response.filter(|s| !s.trim().is_empty());
+                        let msg = msg.or(r["status"].as_str()).unwrap_or("알 수 없는 오류");
+                        self.error = Some(msg.to_string());
+                    }
+                } else if !r["structured_output"].is_null() {
+                    self.answer = Some(r["structured_output"].to_string());
+                } else if let Some(t) = response {
+                    self.answer = Some(t.to_string());
+                }
+            }
+            _ => self.deny(event),
+        }
+    }
+
+    /// 허용하지 않은 이벤트 — 답이 있어도 실패하고, 읽는 쪽이 곧바로 프로세스를 죽인다.
+    fn deny(&mut self, what: &str) {
+        self.error = Some(format!("허용하지 않은 동작({what})이 감지돼 멈췄어요."));
+        self.fatal = true;
     }
 
     fn finish(self, exited_ok: bool, stderr: &str) -> Result<AiAnswer, AiError> {
@@ -239,9 +442,11 @@ impl StreamState {
             return Err(AiError(format!("{name}: {e}")));
         }
         let (kind, model) = (self.kind, self.model.as_deref());
-        let usage = self
-            .usage
-            .map(|u| AiUsage::from_anthropic(kind.id(), model, &u));
+        let usage = self.usage.map(|u| match kind {
+            CliKind::Claude => AiUsage::from_anthropic(kind.id(), model, &u),
+            CliKind::Codex => AiUsage::from_codex(model, &u),
+            CliKind::Agy => AiUsage::from_agy(model, &u),
+        });
         match self.answer {
             Some(text) if exited_ok => Ok(AiAnswer { text, usage }),
             _ if !self.warnings.is_empty() => {
@@ -306,31 +511,70 @@ fn valid_model(m: &str) -> bool {
     !m.starts_with('-') && !m.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
-static SCHEMA_SEQ: AtomicU64 = AtomicU64::new(0);
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// codex `--output-schema`용 임시 파일. 버려질 때 지운다.
-struct SchemaFile(PathBuf);
+/// 실행 한 번 동안만 쓰는 임시 파일(스키마·codex 카탈로그). 버려질 때 지운다.
+struct TempFile(PathBuf);
 
-impl SchemaFile {
-    fn write(schema: &Value) -> Result<Self, AiError> {
+impl TempFile {
+    /// `<임시 폴더>/<prefix>-<pid>-<seq>.json` — 아직 만들지 않는다.
+    fn named(prefix: &str) -> Self {
+        TempFile(std::env::temp_dir().join(format!(
+            "{prefix}-{}-{}.json",
+            std::process::id(),
+            TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        )))
+    }
+
+    fn schema(schema: &Value) -> Result<Self, AiError> {
         // codex(OpenAI strict)는 additionalProperties: false를 요구한다.
         let mut s = schema.clone();
         s["additionalProperties"] = Value::Bool(false);
-        let p = std::env::temp_dir().join(format!(
-            "ieum-schema-{}-{}.json",
-            std::process::id(),
-            SCHEMA_SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::write(&p, s.to_string())
+        let f = Self::named("ieum-schema");
+        std::fs::write(&f.0, s.to_string())
             .map_err(|e| AiError(format!("스키마 임시 파일을 못 만들었어요: {e}")))?;
-        Ok(SchemaFile(p))
+        Ok(f)
     }
 }
 
-impl Drop for SchemaFile {
+impl Drop for TempFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
     }
+}
+
+/// 이 codex의 내장 모델 목록을 받아 도구를 없앤 패치본 파일을 만든다. 못 만들면 Err — 잠금 없이 띄우지 않는다.
+// ponytail: 호출마다 만든다(로그인 셸 1회 추가). 느리면 codex --version을 키로 캐시.
+async fn codex_catalog(program: &str) -> Result<TempFile, AiError> {
+    let err = || AiError(CODEX_CATALOG_ERROR.into());
+    // 출력이 약 745KB라 `shell_output`(64KB 파이프 한도)이 아니라 파일로 받는다.
+    let raw = TempFile::named("ieum-codex-bundled");
+    let line = format!(
+        "{} debug models --bundled > {}",
+        sh_quote(program),
+        sh_quote(&raw.0.to_string_lossy())
+    );
+    let mut child = Command::new(shell())
+        .arg("-lc")
+        .arg(&line)
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| err())?;
+    let _group = child.id().map(|pid| KillGroup(pid as i32));
+    let done = tokio::time::timeout(CODEX_CATALOG_TIMEOUT, child.wait()).await;
+    if !matches!(done, Ok(Ok(s)) if s.success()) {
+        return Err(err());
+    }
+    let text = std::fs::read_to_string(&raw.0).map_err(|_| err())?;
+    let locked = lock_codex_catalog(&text)?;
+    let out = TempFile::named("ieum-codex-catalog");
+    std::fs::write(&out.0, locked.to_string()).map_err(|_| err())?;
+    Ok(out)
 }
 
 pub struct CliProvider {
@@ -338,6 +582,7 @@ pub struct CliProvider {
     program: String,
     cwd: PathBuf,
     timeout: Duration,
+    extra: Vec<String>,
 }
 
 impl CliProvider {
@@ -345,9 +590,22 @@ impl CliProvider {
         CliProvider {
             kind,
             program: kind.program().into(),
-            cwd: std::env::temp_dir().join("ieum-ai-cwd"),
+            // agy 폴더에는 훅 파일이 있다 — claude·codex의 빈 폴더와 따로.
+            cwd: std::env::temp_dir().join(if kind == CliKind::Agy {
+                "ieum-ai-cwd-agy"
+            } else {
+                "ieum-ai-cwd"
+            }),
             timeout: DEFAULT_TIMEOUT,
+            extra: Vec::new(),
         }
+    }
+
+    /// 테스트용 — codex 인자 끝 `-` 앞에 덧붙인다(실호출 테스트가 요청을 가로챌 공급자 설정).
+    #[doc(hidden)]
+    pub fn extra_args(mut self, extra: Vec<String>) -> Self {
+        self.extra = extra;
+        self
     }
 
     /// 실행할 프로그램(이름 또는 경로).
@@ -379,27 +637,49 @@ impl AiProvider for CliProvider {
         }
         std::fs::create_dir_all(&self.cwd)
             .map_err(|e| AiError(format!("작업 폴더를 못 만들었어요: {e}")))?;
+        let catalog = match self.kind {
+            CliKind::Codex => Some(codex_catalog(&self.program).await?),
+            CliKind::Claude | CliKind::Agy => None,
+        };
         let schema_file = match (&req.schema, self.kind) {
-            (Some(s), CliKind::Codex) => Some(SchemaFile::write(s)?),
+            (Some(s), CliKind::Codex | CliKind::Agy) => Some(TempFile::schema(s)?),
             _ => None,
         };
         // 고른 구독 계정의 설정 폴더는 명령 줄 앞에 — 로그인 셸이 읽는 프로필이 덮지 못하게.
         // 없으면 앱이 물려받은 값만 지운다(사용자 프로필의 값은 셸이 다시 넣는다).
         let mut cmd = Command::new(shell());
-        let mut line = match (&req.config_dir, self.kind) {
-            (Some(d), CliKind::Claude) => {
-                format!("CLAUDE_CONFIG_DIR={} ", sh_quote(&d.to_string_lossy()))
+        let mut line = match self.kind {
+            CliKind::Agy => {
+                write_agy_gate(&self.cwd)?;
+                // 계정 폴더 옵션이 없다(이 Mac의 로그인 하나).
+                "AGY_CLI_DISABLE_AUTO_UPDATE=true ".to_string()
             }
-            _ => {
-                cmd.env_remove("CLAUDE_CONFIG_DIR");
-                String::new()
+            CliKind::Claude | CliKind::Codex => {
+                let home_var = if self.kind == CliKind::Claude {
+                    "CLAUDE_CONFIG_DIR"
+                } else {
+                    "CODEX_HOME"
+                };
+                match &req.config_dir {
+                    Some(d) => format!("{home_var}={} ", sh_quote(&d.to_string_lossy())),
+                    None => {
+                        cmd.env_remove(home_var);
+                        String::new()
+                    }
+                }
             }
         };
         line.push_str(&sh_quote(&self.program));
-        for a in self
-            .kind
-            .args(&req, schema_file.as_ref().map(|f| f.0.as_path()))
-        {
+        let files = RunFiles {
+            schema: schema_file.as_ref().map(|f| f.0.as_path()),
+            catalog: catalog.as_ref().map(|f| f.0.as_path()),
+        };
+        let mut args = self.kind.args(&req, &files);
+        if !self.extra.is_empty() {
+            let at = args.len() - 1; // codex의 마지막 인자 `-` 앞
+            args.splice(at..at, self.extra.iter().cloned());
+        }
+        for a in args {
             line.push(' ');
             line.push_str(&sh_quote(&a));
         }
@@ -422,7 +702,17 @@ impl AiProvider for CliProvider {
             child.stderr.take().expect("piped"),
         );
         let kind = self.kind;
-        let (prompt, model) = (req.prompt, req.model);
+        // codex에는 system 자리 플래그가 없다 → 프롬프트 맨 앞에.
+        let prompt = match kind {
+            CliKind::Claude => req.prompt,
+            CliKind::Codex => format!("{}\n\n{}", system_text(&req), req.prompt),
+            CliKind::Agy => {
+                let content = format!("{}\n\n{}", system_text(&req), req.prompt);
+                let msg = serde_json::json!({"event": "user", "message": {"role": "user", "content": content}});
+                format!("{msg}\n")
+            }
+        };
+        let model = req.model;
 
         let work = async {
             let write = async {
@@ -442,6 +732,16 @@ impl AiProvider for CliProvider {
                     total += n as u64;
                     st.feed(String::from_utf8_lossy(&buf).trim_end(), chunk);
                     buf.clear();
+                    if st.fatal {
+                        if let Some(g) = pgid {
+                            kill_group(g);
+                            // 그 순간 fork 중이던 자식은 첫 kill을 빠져나가 stderr를 물고 남는다
+                            // (그러면 끝까지 기다리게 된다) → 잠깐 뒤 한 번 더.
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                            kill_group(g);
+                        }
+                        break;
+                    }
                 }
                 if total >= MAX_STDOUT {
                     if let Some(g) = pgid {
@@ -479,7 +779,7 @@ impl AiProvider for CliProvider {
 
 #[derive(Debug, Clone)]
 pub struct DetectedCli {
-    /// `cli:claude`·`cli:codex`
+    /// `cli:claude`·`cli:codex`·`cli:agy`
     pub id: &'static str,
     pub path: PathBuf,
     pub version: String,
@@ -520,9 +820,9 @@ pub fn shell_output(cmd: &str, limit: Duration) -> Option<String> {
     Some(out)
 }
 
-/// 설치된 구독 CLI. 사용자 로그인 셸 PATH로 찾는다. CLI당 5초 상한. codex는 보류라 claude만.
+/// 설치된 구독 CLI. 사용자 로그인 셸 PATH로 찾는다. CLI당 5초 상한.
 pub fn detect_clis() -> Vec<DetectedCli> {
-    [CliKind::Claude]
+    ENABLED
         .into_iter()
         .filter_map(|k| {
             let p = k.program();

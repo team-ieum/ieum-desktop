@@ -156,7 +156,6 @@ pub async fn undo_run(active: State<'_, Active>, run_id: String) -> Result<UndoR
     active.sup().await?.undo_run(&run_id)
 }
 
-/// 구독 CLI는 claude만(codex·gemini 보류).
 #[tauri::command]
 pub async fn detect_providers(active: State<'_, Active>) -> Result<Providers, String> {
     with_credentials(&active, |c| {
@@ -167,7 +166,6 @@ pub async fn detect_providers(active: State<'_, Active>) -> Result<Providers, St
         Ok(Providers {
             clis: detect_clis()
                 .into_iter()
-                .filter(|c| c.id == "cli:claude")
                 .map(|c| CliInfo {
                     id: c.id.to_string(),
                     path: c.path,

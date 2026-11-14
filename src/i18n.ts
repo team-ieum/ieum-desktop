@@ -414,6 +414,7 @@ const ko = {
   "editor.removeItem": "빼기",
   "editor.deleteNode": "노드 삭제",
   "editor.sendContentWarning": "파일 내용이 AI 회사(Anthropic·OpenAI·Google)로 전송돼요.",
+  "editor.sendContentAgy": "Antigravity (구독)는 파일 내용을 보낼 수 없어요. 이름·확장자·크기만 가요.",
   "editor.branchName": "갈래",
   "editor.local": "내 PC",
   "editor.noModel": "모델 정보 없음",
@@ -595,6 +596,8 @@ const ko = {
   "field.branch.if.caseSensitive": "대소문자 구분",
 
   "choice.provider.cli:claude": "Claude (구독)",
+  "choice.provider.cli:codex": "Codex (구독)",
+  "choice.provider.cli:agy": "Antigravity (구독)",
   "choice.provider.api:anthropic": "Anthropic API 키",
   "choice.provider.api:openai": "OpenAI API 키",
   "choice.provider.api:gemini": "Gemini API 키",
@@ -1063,6 +1066,7 @@ const en: Record<Key, string> = {
   "editor.removeItem": "Remove",
   "editor.deleteNode": "Delete node",
   "editor.sendContentWarning": "File contents will be sent to the AI company (Anthropic, OpenAI, Google).",
+  "editor.sendContentAgy": "Antigravity (subscription) can't receive file contents. Only name, extension and size are sent.",
   "editor.branchName": "Branch",
   "editor.local": "Local",
   "editor.noModel": "No model info",
@@ -1244,6 +1248,8 @@ const en: Record<Key, string> = {
   "field.branch.if.caseSensitive": "Case sensitive",
 
   "choice.provider.cli:claude": "Claude (subscription)",
+  "choice.provider.cli:codex": "Codex (subscription)",
+  "choice.provider.cli:agy": "Antigravity (subscription)",
   "choice.provider.api:anthropic": "Anthropic API key",
   "choice.provider.api:openai": "OpenAI API key",
   "choice.provider.api:gemini": "Gemini API key",

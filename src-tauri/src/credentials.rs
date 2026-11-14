@@ -555,6 +555,20 @@ impl CredentialResolver for AccountCredentials {
         };
         self.cli_dir("claude", &id)
     }
+
+    /// `claude_config_dir`와 같은 규칙 — codex 계정의 `CODEX_HOME`.
+    fn codex_home(&self, credential: Option<&str>) -> Result<Option<PathBuf>, String> {
+        let id = match credential {
+            Some(id) => id.to_string(),
+            None => self
+                .read_file()?
+                .codex_accounts
+                .into_iter()
+                .find(|m| m.is_default)
+                .map_or(SYSTEM_ID.into(), |m| m.id),
+        };
+        self.cli_dir("codex", &id)
+    }
 }
 
 /// 계정 추가 [확인]: 그 폴더 기준으로 사용량·이메일을 새로 읽고(허용 창이 뜰 수 있음),
