@@ -371,6 +371,7 @@ async fn usage_records_credential_id() {
     let table = serde_json::from_value(json!({"asOf": "x", "models": {}})).unwrap();
     let s = summarize(
         &[stored],
+        &[],
         at("2026-11-11T00:00:00Z"),
         at("2026-11-13T00:00:00Z"),
         &table,

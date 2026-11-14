@@ -144,7 +144,8 @@ pub async fn usage_summary(
     let now = chrono::Local::now();
     let from = usage::range_start(&range, now)?;
     let runs = sup.store().all_runs()?;
-    Ok(usage::summarize(&runs, from, now, pricing::table()))
+    let chats = sup.store().all_chat_usage()?;
+    Ok(usage::summarize(&runs, &chats, from, now, pricing::table()))
 }
 
 /// 활성 계정의 통계 및 사용량 화면 — 합계·최근 30일 개요·공급자별 분석(로컬 시각대).
@@ -153,6 +154,7 @@ pub async fn usage_report(active: State<'_, Active>) -> Result<UsageReport, Stri
     let sup = active.sup().await?;
     let store = sup.store();
     let runs = store.all_runs()?;
+    let chats = store.all_chat_usage()?;
     let names = store
         .list_workflows()?
         .into_iter()
@@ -160,6 +162,7 @@ pub async fn usage_report(active: State<'_, Active>) -> Result<UsageReport, Stri
         .collect();
     Ok(usage::report(
         &runs,
+        &chats,
         &names,
         chrono::Local::now(),
         pricing::table(),

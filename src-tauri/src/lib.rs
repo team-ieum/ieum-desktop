@@ -2,6 +2,7 @@ pub mod account;
 pub mod active;
 pub mod builder_host;
 pub mod channel;
+pub mod chat;
 pub mod commands;
 pub mod credentials;
 pub mod notify;
@@ -309,6 +310,8 @@ pub fn run() {
             terminal::term_kill,
             terminal::term_tools,
             // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
+            chat::chat_send,
+            chat::chat_pick_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

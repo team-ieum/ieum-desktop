@@ -36,6 +36,7 @@ beforeEach(() => {
     ],
   });
   vi.spyOn(api, "onChatStage").mockImplementation(async (cb) => ((stage = cb), () => {}));
+  vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [], apiKeys: [] });
   send = vi.spyOn(api, "chatSend").mockResolvedValue({ say: "만들게요", cards: [], error: null });
 });
 afterEach(() => {
@@ -53,6 +54,26 @@ test("ai_choices_order_and_default_first", () => {
   expect(aiChoices(VIEW).map((c) => c.value)).toEqual(["cli:claude|system", "api:anthropic|k2", "api:anthropic|k1", "api:openai|o1"]);
   expect(aiChoices(VIEW).map((c) => c.label)).toEqual(["Claude (구독) · 이 Mac", "Anthropic · k2", "Anthropic · k1", "OpenAI · o1"]);
   expect(aiChoices(null)).toEqual([]);
+});
+
+test("ai_choices_add_codex_and_agy_only_when_the_cli_is_enabled", async () => {
+  const view = { ...VIEW, codexAccounts: [{ id: "c1", label: "회사", isDefault: true, createdAt: "", email: null }] };
+  // 감지되지 않은(등록 안 됐거나 설치 안 된) CLI는 계정이 있어도 안 보인다.
+  expect(aiChoices(view).map((c) => c.provider)).not.toContain("cli:codex");
+  // AI 노드 공급원과 같은 순서: Claude → Codex → Antigravity → API 키.
+  const all = aiChoices(view, ["cli:claude", "cli:codex", "cli:agy"]);
+  expect(all.map((c) => c.value)).toEqual(["cli:claude|system", "cli:codex|c1", "cli:agy|", "api:anthropic|k2", "api:anthropic|k1", "api:openai|o1"]);
+  expect(all.slice(1, 3).map((c) => c.label)).toEqual(["Codex (구독) · 회사", "Antigravity (구독)"]);
+  // 화면: 감지 결과가 오면 선택지에 들고, 계정이 따로 없는 Antigravity는 credential 없이 보낸다.
+  useCredentials.setState({ view });
+  vi.mocked(api.detectProviders).mockResolvedValue({ clis: [{ id: "cli:agy", path: "", version: "" }], apiKeys: [] });
+  await open();
+  const select = screen.getByLabelText("채팅에 쓸 키·계정") as HTMLSelectElement;
+  expect([...select.options].map((o) => o.value)).toEqual(["cli:claude|system", "cli:agy|", "api:anthropic|k2", "api:anthropic|k1", "api:openai|o1"]);
+  await act(async () => fireEvent.change(select, { target: { value: "cli:agy|" } }));
+  await type("안녕");
+  await enter();
+  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "cli:agy", credential: null, model: null });
 });
 
 test("chat_restores_messages_and_sends_on_enter_but_not_while_composing", async () => {
@@ -165,10 +186,13 @@ test("test_card_shows_values_from_run_record_not_from_turn", async () => {
     allowedRoots: [],
     undo: { restored: [], skipped: [[{ kind: "move", from: "/in/a.pdf", to: "/out/a.pdf" }, { reason: "missingNow" }]] },
   } as never);
-  await open();
+  // 노드 이름은 편집기가 넘긴 맵에서 — 맵에 없는 노드는 상태만 보인다.
+  await act(async () => render(<ChatSlot workflowId="w1" visible nodeNames={{ a: "분류" }} />));
   await type("테스트");
   await enter();
   const card = screen.getByRole("group", { name: "테스트 결과" });
+  expect(within(card).getByText("분류 · 성공")).toBeTruthy();
+  expect(within(card).getByText("실패")).toBeTruthy();
   expect(within(card).getByText(/category: 영수증/)).toBeTruthy();
   expect(within(card).getByText(/옮길 파일이 없어요/)).toBeTruthy();
   expect(within(card).getByText("되돌리지 못한 파일")).toBeTruthy();

@@ -29,9 +29,20 @@ const Face = () => (
 );
 
 /** 채팅 패널 본문. 닫혀도 언마운트되지 않고 `visible`만 바뀐다. 카드는 저장되지 않아 다시 열면 말풍선만 복원된다. */
-export function ChatSlot({ workflowId, visible }: { workflowId: string; visible: boolean }) {
+export function ChatSlot({
+  workflowId,
+  visible,
+  nodeNames,
+}: {
+  workflowId: string;
+  visible: boolean;
+  /** 노드 id → 이름(테스트 결과 카드용). 없으면 카드에 상태만 보인다. */
+  nodeNames?: Record<string, string>;
+}) {
   const view = useCredentials((s) => s.view);
-  const choices = aiChoices(view);
+  // 앱이 켜 두었고 설치된 구독 CLI — Codex·Antigravity 선택지를 여는 조건.
+  const [clis, setClis] = useState<string[]>([]);
+  const choices = aiChoices(view, clis);
   const [items, setItems] = useState<Item[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -55,6 +66,12 @@ export function ChatSlot({ workflowId, visible }: { workflowId: string; visible:
       .getState()
       .load()
       .catch(() => {});
+    Promise.resolve()
+      .then(() => api.detectProviders())
+      .then(
+        (p) => setClis(p.clis.map((c) => c.id)),
+        () => {},
+      );
   }, [visible, workflowId]);
 
   useEffect(() => {
@@ -92,7 +109,7 @@ export function ChatSlot({ workflowId, visible }: { workflowId: string; visible:
     try {
       const turn = await api.chatSend(workflowId, said, {
         provider: choice.provider,
-        credential: choice.credential,
+        credential: choice.credential || null,
         model: ai.model.trim() || null,
       });
       setItems((now) => [
@@ -123,7 +140,7 @@ export function ChatSlot({ workflowId, visible }: { workflowId: string; visible:
           item.kind === "card" ? (
             <div key={i} className="pl-9">
               {item.card.kind === "test" ? (
-                <TestCard runId={item.card.runId} status={item.card.status} />
+                <TestCard runId={item.card.runId} status={item.card.status} nodeNames={nodeNames} />
               ) : item.card.kind === "pickFolder" ? (
                 <PickFolderCard
                   workflowId={workflowId}

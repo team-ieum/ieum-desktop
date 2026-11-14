@@ -27,7 +27,16 @@ export function availableMode(saved: string | null, ok: { terminal: boolean; cha
 }
 
 /** 캔버스 우상단 마스코트 버튼 + 떠 있는 패널(캔버스를 밀지 않는다). 한 번 연 뒤에는 닫아도 숨기기만 한다 — 터미널 세션이 살아 있어야 한다. */
-export function AssistantPanel({ workflowId, onOpenChange }: { workflowId: string; onOpenChange?: (open: boolean) => void }) {
+export function AssistantPanel({
+  workflowId,
+  onOpenChange,
+  nodeNames,
+}: {
+  workflowId: string;
+  onOpenChange?: (open: boolean) => void;
+  /** 노드 id → 이름. 채팅의 테스트 결과 카드가 쓴다. */
+  nodeNames?: Record<string, string>;
+}) {
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState(false);
   const [saved, setSaved] = useState(lastMode);
@@ -118,7 +127,7 @@ export function AssistantPanel({ workflowId, onOpenChange }: { workflowId: strin
           {workflowId && (
             <>
               <TerminalSlot workflowId={workflowId} visible={open && mode === "terminal"} />
-              <ChatSlot workflowId={workflowId} visible={open && mode === "chat"} />
+              <ChatSlot workflowId={workflowId} visible={open && mode === "chat"} nodeNames={nodeNames} />
             </>
           )}
         </aside>
