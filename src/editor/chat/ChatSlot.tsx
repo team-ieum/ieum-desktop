@@ -254,8 +254,9 @@ export function ChatSlot({
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              // Enter = 보내기, Shift+Enter = 줄바꿈. 한글 조합 중 Enter는 글자 확정이라 무시.
-              if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+              // Enter = 보내기, Shift+Enter = 줄바꿈. 한글 조합 중 Enter는 글자 확정이라 무시 —
+              // WKWebView는 조합 확정 Enter를 isComposing 없이 keyCode 229로 보내기도 한다.
+              if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing || e.keyCode === 229) return;
               e.preventDefault();
               void submit();
             }}

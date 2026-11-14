@@ -19,7 +19,7 @@ pub struct ModelChoice {
 
 const LIST_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// 가격표에서 이름이 `prefix`로 시작하는 모델, 표의 순서대로.
+/// 가격표에서 이름이 `prefix`로 시작하는 모델, 표의 순서대로. 화면 이름은 표의 `name`, 없으면 `readable(id)`.
 pub fn priced(prefix: &str) -> Vec<ModelChoice> {
     let v: Value = serde_json::from_str(include_str!("../pricing.json")).unwrap_or_default();
     v["models"]
@@ -27,11 +27,36 @@ pub fn priced(prefix: &str) -> Vec<ModelChoice> {
         .into_iter()
         .flatten()
         .filter(|(id, _)| id.starts_with(prefix))
-        .map(|(id, _)| ModelChoice {
+        .map(|(id, p)| ModelChoice {
             id: id.clone(),
-            label: id.clone(),
+            label: p["name"]
+                .as_str()
+                .map_or_else(|| readable(id), String::from),
         })
         .collect()
+}
+
+/// id → 읽기 쉬운 이름: `-`로 나눠 낱말은 첫 글자를 크게, 이어진 숫자 조각은 `.`로 잇는다.
+/// `gpt` 뒤 판 번호는 `GPT-6.1`처럼 붙인다. (`claude-haiku-5-5` → `Claude Haiku 5.5`)
+pub fn readable(id: &str) -> String {
+    let num = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit() || c == '.');
+    let mut words: Vec<String> = Vec::new();
+    let mut prev_num = false;
+    for part in id.split('-').filter(|p| !p.is_empty()) {
+        let is_num = num(part);
+        match words.last_mut() {
+            Some(w) if is_num && prev_num => *w += &format!(".{part}"),
+            Some(w) if is_num && w == "GPT" => *w += &format!("-{part}"),
+            _ if part == "gpt" => words.push("GPT".into()),
+            _ => {
+                let mut c = part.chars();
+                let first = c.next().map(|f| f.to_uppercase().collect::<String>());
+                words.push(first.unwrap_or_default() + c.as_str());
+            }
+        }
+        prev_num = is_num;
+    }
+    words.join(" ")
 }
 
 /// `codex debug models --bundled` 출력 → 목록에 보이는 모델(`visibility: "list"`)만, 출력 순서대로.

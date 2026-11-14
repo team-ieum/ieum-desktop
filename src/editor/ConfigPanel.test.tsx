@@ -183,6 +183,27 @@ test("ai_node_model_is_a_dropdown_of_the_provider_models", async () => {
   useCredentials.setState({ view: null });
 });
 
+test("openai_node_without_model_asks_to_pick_one_instead_of_showing_the_first", async () => {
+  setLang("ko");
+  vi.mocked(api.listModels).mockResolvedValue([
+    { id: "gpt-6-astra", label: "GPT-6 Astra" },
+    { id: "gpt-6-luna", label: "GPT-6 Luna" },
+  ]);
+  const onChange = vi.fn();
+  const node = aiNode({ provider: "api:openai" });
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
+  // 저장본에 모델이 없다 — 첫 모델을 고른 것처럼 보이면 안 된다.
+  const model = await screen.findByRole("button", { name: "모델: 모델을 고르세요" });
+  fireEvent.click(model);
+  const names = within(screen.getByRole("listbox", { name: "모델" }))
+    .getAllByRole("option")
+    .map((o) => o.textContent);
+  expect(names).toEqual(["모델을 고르세요", "GPT-6 Astra", "GPT-6 Luna"]); // "기본 모델"은 없다
+  expect(onChange).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("option", { name: "GPT-6 Luna" }));
+  expect(onChange.mock.lastCall![0].config.model).toBe("gpt-6-luna"); // 저장은 원래 id
+});
+
 test("ai_node_model_list_failure_is_shown_not_swallowed", async () => {
   setLang("ko");
   vi.mocked(api.listModels).mockRejectedValue("codex 없음");

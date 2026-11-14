@@ -26,6 +26,34 @@ fn priced_models_follow_table_order_per_company() {
     assert!(list("cli:shell").is_err());
 }
 
+/// 화면에는 읽기 쉬운 이름, 값은 원래 id. 가격표에 `name`이 있으면 그것, 없으면 id에서 만든다.
+#[test]
+fn priced_models_show_readable_names_and_keep_ids() {
+    use ieum_desktop_lib::models::readable;
+    for (id, name) in [
+        ("claude-haiku-5-5", "Claude Haiku 5.5"),
+        ("claude-fable-5-2", "Claude Fable 5.2"),
+        ("gpt-6-astra", "GPT-6 Astra"),
+        ("gpt-6.1-sol", "GPT-6.1 Sol"),
+        ("gpt-5.6-luna", "GPT-5.6 Luna"),
+        ("gemini-4-argon", "Gemini 4 Argon"),
+        ("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"),
+    ] {
+        assert_eq!(readable(id), name, "{id}");
+    }
+    let claude = list("cli:claude").unwrap();
+    assert_eq!(
+        (claude[0].id.as_str(), claude[0].label.as_str()),
+        ("claude-haiku-5-5", "Claude Haiku 5.5")
+    );
+    assert!(
+        list("api:openai")
+            .unwrap()
+            .iter()
+            .all(|m| m.label != m.id && m.label.starts_with("GPT-"))
+    );
+}
+
 #[test]
 fn codex_keeps_only_listed_models_in_order() {
     let json = r#"{"models":[

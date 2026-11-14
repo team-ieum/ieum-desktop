@@ -179,6 +179,16 @@ test("empty_chat_greets_with_example_chips_that_send_right_away", async () => {
   expect(screen.queryByText("어떤 자동화를 만들어 볼까요?")).toBeNull();
 });
 
+test("korean_ime_enter_reported_as_keycode_229_does_not_send", async () => {
+  await open();
+  await type("정리해 줘");
+  // WKWebView는 조합 확정 Enter를 isComposing 없이 keyCode 229로 보낸다.
+  await enter({ keyCode: 229 });
+  expect(send).not.toHaveBeenCalled();
+  await enter();
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
 test("shift_enter_makes_a_new_line_instead_of_sending", async () => {
   await open();
   await type("첫 줄");

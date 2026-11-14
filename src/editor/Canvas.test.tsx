@@ -9,7 +9,7 @@ import { AnimatedEdge } from "./AnimatedEdge";
 import { Canvas, FOLLOW_QUIET_MS, modelLabel, shouldFollow } from "./Canvas";
 
 // ReactFlow는 진짜로 그리되, Canvas가 넘긴 핸들러를 꺼내 직접 부를 수 있게 한다.
-const probe = vi.hoisted(() => ({ props: null as unknown as Record<string, any> }));
+const probe = vi.hoisted(() => ({ props: null as unknown as Record<string, any>, fitView: vi.fn(async (_opts?: unknown) => true) }));
 vi.mock("@xyflow/react", async (orig) => {
   const m = await orig<typeof import("@xyflow/react")>();
   return {
@@ -18,6 +18,8 @@ vi.mock("@xyflow/react", async (orig) => {
       probe.props = p;
       return <m.ReactFlow {...p} />;
     },
+    // 따라가기가 부르는 fitView를 잡는다(나머지는 진짜).
+    useReactFlow: () => ({ ...m.useReactFlow(), fitView: probe.fitView }),
     // jsdom에선 엣지 라벨 층이 없다 — 보일 때 그 자리에 그린다.
     EdgeToolbar: ({ isVisible, children }: { isVisible?: boolean; children: React.ReactNode }) => (isVisible ? <div>{children}</div> : null),
   };
@@ -214,12 +216,57 @@ test("read_only_hides_edge_delete", () => {
   expect(screen.queryByRole("button", { name: "연결 삭제" })).toBeNull();
 });
 
-test("패널이 열려 있고 노드가 늘었을 때만 따라간다 — 사용자가 방금 움직였으면 뺏지 않는다", () => {
+test("패널이 열려 있고 노드가 늘었을 때만 따라간다 — 조작 중이거나 조작이 막 끝났으면 뺏지 않는다", () => {
   const now = 100_000;
-  expect(shouldFollow(2, 3, 396, 0, now)).toBe(true);
-  expect(shouldFollow(3, 3, 396, 0, now)).toBe(false); // 늘지 않음
-  expect(shouldFollow(3, 2, 396, 0, now)).toBe(false); // 줄어듦
-  expect(shouldFollow(2, 3, 0, 0, now)).toBe(false); // 패널 닫힘
-  expect(shouldFollow(2, 3, 396, now - FOLLOW_QUIET_MS + 1, now)).toBe(false); // 방금 움직임
-  expect(shouldFollow(2, 3, 396, now - FOLLOW_QUIET_MS, now)).toBe(true);
+  const idle = { active: false, endedAt: 0 };
+  expect(shouldFollow(2, 3, 396, idle, now)).toBe(true);
+  expect(shouldFollow(3, 3, 396, idle, now)).toBe(false); // 늘지 않음
+  expect(shouldFollow(3, 2, 396, idle, now)).toBe(false); // 줄어듦
+  expect(shouldFollow(2, 3, 0, idle, now)).toBe(false); // 패널 닫힘
+  // 끄는 중이면 시작한 지 오래여도 뺏지 않는다.
+  expect(shouldFollow(2, 3, 396, { active: true, endedAt: 0 }, now)).toBe(false);
+  // 3초는 조작이 끝난 시각부터.
+  expect(shouldFollow(2, 3, 396, { active: false, endedAt: now - FOLLOW_QUIET_MS + 1 }, now)).toBe(false);
+  expect(shouldFollow(2, 3, 396, { active: false, endedAt: now - FOLLOW_QUIET_MS }, now)).toBe(true);
+});
+
+test("follow_calls_fitView_with_panel_padding_and_waits_for_any_user_move_to_end", async () => {
+  let now = 1_000_000;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  probe.fitView.mockClear();
+  const node = (id: string, x: number) => ({ id, event: "local.file_trash", type: "ACTION", position: { x, y: 0 }, config: {} });
+  const view = (n: number) => (
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas workflow={{ nodes: [...wf.nodes, ...Array.from({ length: n }, (_, i) => node(`n${i}`, 600 + i * 300))], edges: [] }} rightCover={396} />
+    </div>
+  );
+  const r = render(view(0));
+  now += FOLLOW_QUIET_MS;
+  await act(async () => r.rerender(view(1)));
+  expect(probe.fitView).toHaveBeenCalledTimes(1);
+  expect(probe.fitView.mock.calls[0][0]).toMatchObject({ padding: { right: "444px", left: "48px" } });
+
+  // 확대 버튼·미니맵처럼 이벤트가 null인 이동도 사람 조작으로 본다. 길게 끄는 중이면 뺏지 않는다.
+  act(() => probe.props.onMoveStart(null));
+  now += FOLLOW_QUIET_MS * 3;
+  await act(async () => r.rerender(view(2)));
+  expect(probe.fitView).toHaveBeenCalledTimes(1);
+  act(() => probe.props.onMoveEnd(null));
+  await act(async () => r.rerender(view(3)));
+  expect(probe.fitView).toHaveBeenCalledTimes(1); // 막 끝났다
+  now += FOLLOW_QUIET_MS;
+  await act(async () => r.rerender(view(4)));
+  expect(probe.fitView).toHaveBeenCalledTimes(2);
+
+  // 노드 끌기도 끝날 때까지 기다린다.
+  now += FOLLOW_QUIET_MS;
+  act(() => probe.props.onNodeDragStart());
+  now += FOLLOW_QUIET_MS * 3;
+  await act(async () => r.rerender(view(5)));
+  expect(probe.fitView).toHaveBeenCalledTimes(2);
+  act(() => probe.props.onNodeDragStop());
+  now += FOLLOW_QUIET_MS;
+  await act(async () => r.rerender(view(6)));
+  expect(probe.fitView).toHaveBeenCalledTimes(3);
+  clock.mockRestore();
 });

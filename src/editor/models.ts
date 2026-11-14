@@ -25,11 +25,16 @@ export function useModels(provider: string | undefined): { models: ModelChoice[]
 export const needsModel = (provider: string | undefined) => provider === "api:openai";
 
 /**
- * 드롭다운 항목: "기본 모델"(빈 값, `needsModel`이면 뺀다) → 목록 → 저장된 값이 목록에 없으면 "(목록에 없음)"으로 그대로.
+ * 드롭다운 항목: "기본 모델"(빈 값, `needsModel`이면 비어 있을 때만 "모델을 고르세요") → 목록 → 저장된 값이 목록에 없으면 "(목록에 없음)"으로 그대로.
  * 읽는 중(`models` null)에는 저장된 값을 표시만 한다.
  */
 export function modelItems(provider: string | undefined, models: ModelChoice[] | null, value: string): DropItem<string>[] {
-  const items: DropItem<string>[] = needsModel(provider) ? [] : [{ id: "", name: t("model.default"), icon: null }];
+  // 모델이 꼭 필요한데 비어 있으면 "모델을 고르세요" — 첫 모델을 고른 것처럼 보이지 않게(저장본엔 없다).
+  const items: DropItem<string>[] = !needsModel(provider)
+    ? [{ id: "", name: t("model.default"), icon: null }]
+    : value
+      ? []
+      : [{ id: "", name: t("model.pick"), icon: null }];
   for (const m of models ?? []) items.push({ id: m.id, name: m.label, icon: null });
   if (value && !(models ?? []).some((m) => m.id === value))
     items.push({ id: value, name: models ? `${value} ${t("model.notListed")}` : value, icon: null });
