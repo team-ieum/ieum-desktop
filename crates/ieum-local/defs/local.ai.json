@@ -57,6 +57,13 @@
       "description": "비우면 공급원의 기본 모델을 써요."
     },
     {
+      "key": "effort",
+      "title": "추론 수준",
+      "type": "string",
+      "ref": false,
+      "description": "비우면 공급원·모델의 기본 수준을 써요. 고를 수 있는 수준은 모델마다 달라요."
+    },
+    {
       "key": "prompt",
       "title": "지시",
       "type": "text",

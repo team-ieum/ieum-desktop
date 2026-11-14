@@ -38,7 +38,7 @@ actions를 내면 앱이 차례로 실행하고 결과를 "이번 턴에 실행�
    - 첫 노드는 항상 local.folder_new_file(폴더에 새 파일)입니다.
    - 앞 노드 값은 {{nodes.<노드 id>.output.<이름>}}로 참조합니다. 이름은 fields의 upstream outputs에 있는 것만 씁니다.
    - 폴더 칸(folder, baseFolder)은 set으로 채울 수 없습니다. pick-folder를 내면 사용자에게 폴더 고르기 카드가 뜨고 턴이 끝납니다. 사용자가 고른 뒤 다음 턴에 이어서 합니다.
-   - AI 노드의 provider, credential, model은 앱이 이 채팅의 키와 모델로 채웁니다. set하지 않습니다.
+   - AI 노드의 provider, credential, model, effort는 앱이 이 채팅의 키·모델·추론 수준으로 채웁니다. set하지 않습니다.
    - 조건 분기(branch.if)는 branches 칸을 set하면 갈래 key를 돌려줍니다. 그 key를 add와 connect의 branch에 씁니다. 어느 갈래에도 안 맞는 경우의 key는 else입니다.
    - 자동으로 정할 수 없는 값(AI에게 시킬 지시, 새 이름 규칙 등)은 사용자에게 묻습니다.
 3. 모든 노드가 통과하면 finish를 냅니다. 남은 일(remaining)이 있으면 그것부터 합니다.

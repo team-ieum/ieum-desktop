@@ -18,8 +18,8 @@ use crate::paths::AllowedRoots;
 
 pub use api::{API_TIMEOUT, ApiKind, ApiProvider};
 pub use cli::{
-    AGY_GATE, AGY_SETTINGS, CliKind, CliProvider, DetectedCli, detect_clis, lock_codex_catalog,
-    parse_stream, shell_output,
+    AGY_EFFORTS, AGY_GATE, AGY_SETTINGS, CliKind, CliProvider, DetectedCli, agy_listed_ids,
+    agy_run_id, agy_split, detect_clis, lock_codex_catalog, parse_stream, shell_output,
 };
 pub use content::{MAX_CHARS, MAX_PDF_BYTES, Skip, file_text, file_text_bounded, read_file_text};
 pub use keys::{ApiKey, KeyStore, Keychain};
@@ -32,6 +32,8 @@ pub struct AiError(pub String);
 pub struct AiRequest {
     pub prompt: String,
     pub model: Option<String>,
+    /// 추론 수준(`EFFORTS` 중 하나). None이면 CLI·API 기본.
+    pub effort: Option<String>,
     /// 출력 칸에서 만든 JSON Schema. 없으면 텍스트로 받는다.
     pub schema: Option<Value>,
     /// API 키 공급원이 읽을 키 저장소 이름(`CredentialResolver`가 고른 것). None이면 공급원 기본.
@@ -40,6 +42,19 @@ pub struct AiRequest {
     pub config_dir: Option<PathBuf>,
     /// 고정 시스템 지시 뒤에 붙일 추가 지시. 채팅 루프만 쓴다.
     pub system: Option<String>,
+}
+
+/// 받는 추론 수준 이름(공급원마다 그중 일부). codex `ultra`는 자동 위임을 켜서 뺀다(`models.rs` 주석).
+pub const EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// 추론 수준이 아는 이름인가 — CLI 인자·모델 id에 들어가므로 모든 공급원이 보내기 전에 검사한다.
+pub fn check_effort(effort: Option<&str>) -> Result<(), AiError> {
+    match effort {
+        Some(e) if !EFFORTS.contains(&e) => {
+            Err(AiError(format!("추론 수준이 올바르지 않아요: {e:?}")))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// 고른 키·계정을 찾지 못했을 때 노드 오류 문구. 다른 키로 대신하지 않는다.
@@ -514,6 +529,7 @@ impl AiRunner {
                 )
                 .await,
                 model: model.map(str::to_string),
+                effort: opt_str(cfg, "effort").map(str::to_string),
                 schema: fields.as_deref().map(build_output_schema),
                 key_name,
                 config_dir,

@@ -121,6 +121,7 @@ async fn go(script: Arc<Script>, fake: &Fake, limits: Limits) -> (TurnResult, Ve
         provider: "api:anthropic".into(),
         credential: Some("k1".into()),
         model: Some("m".into()),
+        effort: None,
     };
     let history = [
         ChatMessage {
@@ -227,6 +228,7 @@ async fn results_and_status_are_wrapped_as_data() {
         provider: "cli:claude".into(),
         credential: None,
         model: None,
+        effort: None,
     };
     let turn = Turn {
         text: "a@b.c로",
@@ -266,6 +268,7 @@ async fn cli_prompt_has_no_at_sign_anywhere() {
             provider: provider.into(),
             credential: None,
             model: None,
+            effort: None,
         };
         let turn = Turn {
             text: "이번 글 @/t",

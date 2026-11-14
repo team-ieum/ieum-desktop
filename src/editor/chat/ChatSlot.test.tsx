@@ -40,11 +40,22 @@ beforeEach(() => {
   send = vi.spyOn(api, "chatSend").mockResolvedValue({ say: "만들게요", cards: [], error: null });
   vi.spyOn(api, "listModels").mockImplementation(async (p) =>
     p === "api:openai"
-      ? [
-          { id: "gpt-6-astra", label: "gpt-6-astra" },
-          { id: "gpt-6-luna", label: "gpt-6-luna" },
-        ]
-      : [{ id: "claude-haiku-5-5", label: "claude-haiku-5-5" }],
+      ? {
+          models: [
+            { id: "gpt-6-astra", label: "gpt-6-astra", efforts: ["low", "high"] },
+            { id: "gpt-6-luna", label: "gpt-6-luna", efforts: ["low", "xhigh"] },
+          ],
+          defaultEfforts: [],
+        }
+      : p === "cli:agy"
+        ? {
+            models: [
+              { id: "gemini-4-argon", label: "Gemini 4 Argon", efforts: ["low", "medium", "high"] },
+              { id: "gemini-pro-orchestrator-g1-pro", label: "Orchestrator", efforts: [] },
+            ],
+            defaultEfforts: [],
+          }
+        : { models: [{ id: "claude-haiku-5-5", label: "claude-haiku-5-5", efforts: ["low", "max"] }], defaultEfforts: ["low", "max"] },
   );
 });
 afterEach(() => {
@@ -89,7 +100,7 @@ test("ai_choices_add_codex_and_agy_only_when_the_cli_is_enabled", async () => {
   await act(async () => fireEvent.click(screen.getByRole("option", { name: "Antigravity (구독)" })));
   await type("안녕");
   await enter();
-  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "cli:agy", credential: null, model: null });
+  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "cli:agy", credential: null, model: null, effort: null });
 });
 
 test("chat_restores_messages_and_sends_on_enter_but_not_while_composing", async () => {
@@ -100,7 +111,7 @@ test("chat_restores_messages_and_sends_on_enter_but_not_while_composing", async 
   await enter({ isComposing: true }); // 한글 조합 중 Enter
   expect(send).not.toHaveBeenCalled();
   await enter();
-  expect(send).toHaveBeenCalledWith("w1", "정리해 줘", { provider: "cli:claude", credential: "system", model: null });
+  expect(send).toHaveBeenCalledWith("w1", "정리해 줘", { provider: "cli:claude", credential: "system", model: null, effort: null });
   expect(screen.getByText("정리해 줘").className).toContain("bg-main-blue");
   expect(screen.getByText("만들게요").className).toContain("rounded-[0_14px_14px_14px]");
   expect(input().value).toBe("");
@@ -140,12 +151,66 @@ test("chat_model_is_picked_from_the_provider_list_and_remembered", async () => {
   await act(async () => fireEvent.click(screen.getByRole("option", { name: "gpt-6-luna" })));
   await type("안녕");
   await enter();
-  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "api:openai", credential: "o1", model: "gpt-6-luna" });
-  expect(JSON.parse(localStorage.getItem(AI_KEY)!)).toEqual({ value: "api:openai|o1", model: "gpt-6-luna" });
+  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "api:openai", credential: "o1", model: "gpt-6-luna", effort: null });
+  expect(JSON.parse(localStorage.getItem(AI_KEY)!)).toEqual({ value: "api:openai|o1", model: "gpt-6-luna", effort: "" });
   cleanup();
   await open();
   expect(chip("채팅에 쓸 키·계정").getAttribute("aria-label")).toBe("채팅에 쓸 키·계정: OpenAI · o1");
   expect(chip("모델").getAttribute("aria-label")).toBe("모델: gpt-6-luna");
+});
+
+test("chat_effort_lists_only_what_the_model_takes_and_is_remembered", async () => {
+  await open();
+  // Claude 구독: 기본 모델이어도 --effort를 고를 수 있다.
+  await act(async () => fireEvent.click(chip("추론 수준")));
+  expect(options()).toEqual(["기본", "Low", "Max"]);
+  await act(async () => fireEvent.click(screen.getByRole("option", { name: "Max" })));
+  await type("안녕");
+  await enter();
+  expect(send).toHaveBeenLastCalledWith("w1", "안녕", { provider: "cli:claude", credential: "system", model: null, effort: "max" });
+  // 모델을 바꾸면 수준은 기본으로, 목록은 그 모델의 것.
+  await choose("채팅에 쓸 키·계정", "OpenAI · o1");
+  await choose("모델", "gpt-6-luna");
+  expect(chip("추론 수준").getAttribute("aria-label")).toBe("추론 수준: 기본");
+  await act(async () => fireEvent.click(chip("추론 수준")));
+  expect(options()).toEqual(["기본", "Low", "XHigh"]);
+  await act(async () => fireEvent.click(screen.getByRole("option", { name: "XHigh" })));
+  expect(JSON.parse(localStorage.getItem(AI_KEY)!)).toEqual({ value: "api:openai|o1", model: "gpt-6-luna", effort: "xhigh" });
+  cleanup();
+  await open();
+  expect(chip("추론 수준").getAttribute("aria-label")).toBe("추론 수준: XHigh");
+});
+
+test("chat_effort_chip_is_off_with_a_reason_when_the_model_takes_none", async () => {
+  const view = { ...VIEW };
+  useCredentials.setState({ view });
+  vi.mocked(api.detectProviders).mockResolvedValue({ clis: [{ id: "cli:agy", path: "", version: "" }], apiKeys: [] });
+  localStorage.setItem(AI_KEY, JSON.stringify({ value: "cli:agy|", model: "" }));
+  await open();
+  // Antigravity 기본 모델: 수준이 모델 id에 묶여 못 고른다.
+  expect((chip("추론 수준") as HTMLButtonElement).disabled).toBe(true);
+  expect(chip("추론 수준").getAttribute("title")).toBe("Antigravity는 모델을 골라야 추론 수준을 고를 수 있어요.");
+  await choose("모델", "Orchestrator");
+  expect(chip("추론 수준").getAttribute("title")).toBe("이 모델은 추론 수준을 고를 수 없어요.");
+  await choose("모델", "Gemini 4 Argon");
+  expect((chip("추론 수준") as HTMLButtonElement).disabled).toBe(false);
+});
+
+test("chat_splits_an_old_antigravity_model_without_rewriting_it", async () => {
+  vi.mocked(api.detectProviders).mockResolvedValue({ clis: [{ id: "cli:agy", path: "", version: "" }], apiKeys: [] });
+  localStorage.setItem(AI_KEY, JSON.stringify({ value: "cli:agy|", model: "gemini-4-argon-high" }));
+  await open();
+  expect(chip("모델").getAttribute("aria-label")).toBe("모델: Gemini 4 Argon");
+  expect(chip("추론 수준").getAttribute("aria-label")).toBe("추론 수준: High");
+  // 같은 모델을 다시 골라도 저장본은 그대로.
+  await choose("모델", "Gemini 4 Argon");
+  expect(JSON.parse(localStorage.getItem(AI_KEY)!)).toEqual({ value: "cli:agy|", model: "gemini-4-argon-high" });
+  await type("안녕");
+  await enter();
+  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "cli:agy", credential: null, model: "gemini-4-argon-high", effort: null });
+  // 수준을 고르면 모델은 수준을 뗀 이름으로.
+  await choose("추론 수준", "Low");
+  expect(JSON.parse(localStorage.getItem(AI_KEY)!)).toEqual({ value: "cli:agy|", model: "gemini-4-argon", effort: "low" });
 });
 
 test("chat_keeps_a_remembered_model_that_is_not_in_the_list", async () => {
@@ -154,7 +219,7 @@ test("chat_keeps_a_remembered_model_that_is_not_in_the_list", async () => {
   expect(chip("모델").getAttribute("aria-label")).toBe("모델: claude-old-1 (목록에 없음)");
   await type("안녕");
   await enter();
-  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "cli:claude", credential: "system", model: "claude-old-1" });
+  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "cli:claude", credential: "system", model: "claude-old-1", effort: null });
 });
 
 test("openai_without_a_model_list_cannot_send_and_says_why", async () => {

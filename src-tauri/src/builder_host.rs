@@ -113,6 +113,7 @@ fn pick_ai_default(
             provider: id.to_string(),
             credential,
             model: None,
+            effort: None,
         });
     }
     None

@@ -14,7 +14,7 @@ beforeAll(() => setLang("ko"));
 beforeEach(() => {
   vi.stubGlobal("localStorage", memoryStorage());
   vi.spyOn(api, "termTools").mockResolvedValue({ tools: ["claude"], clis: [{ tool: "claude", state: "ready" }], running: null });
-  vi.spyOn(api, "listModels").mockResolvedValue([]);
+  vi.spyOn(api, "listModels").mockResolvedValue({ models: [], defaultEfforts: [] });
   // 채팅 자리가 실제 invoke를 타지 않게.
   vi.spyOn(api, "getChat").mockResolvedValue({ messages: [], state: { outline: [], baseline: null, tests: {}, pendingFinish: null }, usage: [] });
   vi.spyOn(api, "onChatStage").mockResolvedValue(() => {});

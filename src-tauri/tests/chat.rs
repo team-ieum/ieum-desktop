@@ -185,6 +185,7 @@ fn ai() -> AiDefault {
         provider: "fake".into(),
         credential: None,
         model: None,
+        effort: None,
     }
 }
 
@@ -306,6 +307,7 @@ async fn rejects_before_touching_chat_file() {
         provider: "api:openai".into(),
         credential: None,
         model: Some(" ".into()),
+        effort: None,
     };
     assert_eq!(
         go(id, "안녕", openai).await.unwrap_err(),

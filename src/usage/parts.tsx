@@ -54,6 +54,7 @@ export function Dropdown<T extends string>({
   trigger = TRIGGER,
   root: rootClass = "relative shrink-0",
   disabled = false,
+  title,
 }: {
   label: string;
   items: DropItem<T>[];
@@ -64,6 +65,8 @@ export function Dropdown<T extends string>({
   trigger?: string;
   root?: string;
   disabled?: boolean;
+  /** 마우스를 올리면 보이는 글(못 고르는 이유 등). 꺼진 단추는 마우스 이벤트가 없어 바깥에도 단다. */
+  title?: string;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -95,13 +98,15 @@ export function Dropdown<T extends string>({
     }
   };
   return (
-    <div ref={root} className={rootClass}>
+    <div ref={root} className={rootClass} title={title}>
       <button
         ref={button}
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`${label}: ${cur.name}`}
+        aria-description={title}
+        title={title}
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         className={trigger}

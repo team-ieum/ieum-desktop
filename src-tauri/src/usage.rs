@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Datelike, Days, Local, TimeZone};
-use ieum_local::ai::AiUsage;
+use ieum_local::ai::{AiUsage, agy_split};
 use serde::Serialize;
 
 use crate::pricing::{Pricing, estimate_usd};
@@ -392,10 +392,12 @@ impl Groups {
         let d = self.day.entry(day.to_string()).or_default();
         d.0 += n;
         d.1 += cost;
-        let m = self
-            .model
-            .entry((p, u.model.clone().unwrap_or_default()))
-            .or_default();
+        let mut model = u.model.clone().unwrap_or_default();
+        // agy는 추론 수준이 id에 붙는다(`-high`) — 수준과 상관없이 같은 모델로 묶는다.
+        if u.source == "cli:agy" {
+            model = agy_split(&model).0.to_string();
+        }
+        let m = self.model.entry((p, model)).or_default();
         m.0 += n;
         m.1 += 1;
         m.2 += cost;

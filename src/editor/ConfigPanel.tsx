@@ -8,7 +8,7 @@ import { choicesFor, useCredentials } from "../stores/credentials";
 import { DEFS, fieldKey, FOLDER_FIELDS, newItem, outputKeys, upstream, type Field } from "../nodes/defs";
 import { Dropdown } from "../usage/parts";
 import { nodeTitle } from "./Canvas";
-import { modelItems, useModels } from "./models";
+import { effortItems, effortLevels, modelItems, shownModel, useModels } from "./models";
 
 type Ref = { value: string; label: string };
 type Obj = Record<string, unknown>;
@@ -27,8 +27,10 @@ interface FieldProps {
   onChange: (v: unknown) => void;
   refs: Ref[];
   pickFolder: () => Promise<string | null>;
-  /** AI 노드의 지금 공급원 — 키·계정 칸이 본다. */
+  /** AI 노드의 지금 공급원 — 키·계정·모델·수준 칸이 본다. */
   provider?: unknown;
+  /** AI 노드의 저장된 모델·수준 — 모델·수준 칸이 서로 본다(예전 Antigravity 값 나눠 보기, 모델별 수준). */
+  ai?: { model: string; effort: string };
 }
 
 const PROVIDER_LOGO: Record<string, LogoId> = { "cli:claude": "claude", "cli:codex": "openai", "cli:agy": "antigravity", "api:anthropic": "anthropic", "api:openai": "openai", "api:gemini": "gemini" };
@@ -64,20 +66,25 @@ function CredentialSelect({ id, provider, value, onChange }: { id: string; provi
   );
 }
 
-/** AI 노드 "모델" — 고른 공급원의 모델 목록. "기본 모델"이면 칸을 저장하지 않는다(`undefined`). 목록에 없는 저장값은 그대로 둔다. */
-function ModelSelect({ label, provider, value, onChange }: { label: string; provider: unknown; value: string; onChange: (v: unknown) => void }) {
+const SELECT_TRIGGER = `${INPUT} flex items-center justify-between gap-2 text-left hover:bg-neutral-50 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400`;
+const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+/** AI 노드 "모델" — 고른 공급원의 모델 목록. "기본 모델"이면 칸을 저장하지 않는다(`undefined`). 목록에 없는 저장값은 그대로 둔다.
+ *  예전 Antigravity 값(`…-high`)은 수준을 뗀 모델로 보여 주고, 같은 것을 다시 골라도 저장본을 고치지 않는다. */
+function ModelSelect({ label, provider, ai, onChange }: { label: string; provider: unknown; ai: { model: string; effort: string }; onChange: (v: unknown) => void }) {
   const p = typeof provider === "string" ? provider : undefined;
   const { models, failed } = useModels(p);
+  const shown = shownModel(p, ai.model, ai.effort).model;
   return (
     <div className="flex flex-col gap-1.5">
       <Dropdown
         label={label}
-        items={modelItems(p, models, value)}
-        sel={value}
-        onSel={(id) => onChange(id || undefined)}
+        items={modelItems(p, models, shown)}
+        sel={shown}
+        onSel={(id) => id !== shown && onChange(id || undefined)}
         left
         root="relative w-full"
-        trigger={`${INPUT} flex items-center justify-between gap-2 text-left hover:bg-neutral-50`}
+        trigger={SELECT_TRIGGER}
       />
       {failed && (
         <p role="alert" className="typo-caption1_regular text-danger-700">
@@ -88,7 +95,28 @@ function ModelSelect({ label, provider, value, onChange }: { label: string; prov
   );
 }
 
-function FieldInput({ event, field, path, value, onChange, refs, pickFolder, provider }: FieldProps) {
+/** AI 노드 "추론 수준" — 고른 공급원·모델이 받는 수준만. "기본"이면 칸을 저장하지 않는다. 못 고르면 꺼지고 이유는 마우스를 올리면. */
+function EffortSelect({ label, provider, ai, onChange }: { label: string; provider: unknown; ai: { model: string; effort: string }; onChange: (v: unknown) => void }) {
+  const p = typeof provider === "string" ? provider : undefined;
+  const got = useModels(p);
+  const shown = shownModel(p, ai.model, ai.effort);
+  const { levels, off } = effortLevels(p, got, shown.model);
+  return (
+    <Dropdown
+      label={label}
+      items={effortItems(levels, shown.effort)}
+      sel={shown.effort}
+      onSel={(e) => e !== shown.effort && onChange(e || undefined)}
+      left
+      root="relative w-full"
+      trigger={SELECT_TRIGGER}
+      disabled={!!off}
+      title={off ? t(off) : undefined}
+    />
+  );
+}
+
+function FieldInput({ event, field, path, value, onChange, refs, pickFolder, provider, ai = { model: "", effort: "" } }: FieldProps) {
   const id = useId();
   const label = tDyn(fieldKey(event, path)) ?? field.title ?? field.key;
   const desc = tDyn(`fieldDesc.${event}.${path}`);
@@ -163,7 +191,9 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
   } else if (event === "local.ai" && field.key === "credential") {
     input = <CredentialSelect id={id} provider={provider} value={str} onChange={onChange} />;
   } else if (event === "local.ai" && field.key === "model") {
-    input = <ModelSelect label={label} provider={provider} value={str} onChange={onChange} />;
+    input = <ModelSelect label={label} provider={provider} ai={ai} onChange={onChange} />;
+  } else if (event === "local.ai" && field.key === "effort") {
+    input = <EffortSelect label={label} provider={provider} ai={ai} onChange={onChange} />;
   } else if (field.choices) {
     const logo = event === "local.ai" && field.key === "provider" ? PROVIDER_LOGO[str] : undefined;
     input = (
@@ -275,18 +305,28 @@ export function ConfigPanel({ node, workflow, onChange, pickFolder = () => api.p
           path={f.key}
           value={node.config[f.key]}
           onChange={(v) => {
-            // undefined = 칸을 뺀다. 공급원을 바꾸면 고른 키·계정·모델(다른 공급원의 것)도 뺀다.
+            // undefined = 칸을 뺀다. 공급원을 바꾸면 고른 키·계정·모델·수준(다른 공급원의 것)도 뺀다.
             const { [f.key]: _old, ...rest } = node.config;
             if (node.event === "local.ai" && f.key === "provider") {
               delete rest.credential;
               delete rest.model;
+              delete rest.effort;
               if (v === "cli:agy") delete rest.sendContent;
+            }
+            // 모델마다 받는 수준이 달라 모델을 바꾸면 수준은 기본으로.
+            if (node.event === "local.ai" && f.key === "model") delete rest.effort;
+            // 예전 Antigravity 값(`…-high`)에서 수준을 고르면 모델은 수준을 뗀 이름으로 함께 저장한다.
+            if (node.event === "local.ai" && f.key === "effort") {
+              const model = str(node.config.model);
+              const base = shownModel(str(node.config.provider), model, "").model;
+              if (base !== model) rest.model = base;
             }
             onChange({ ...node, config: v === undefined ? rest : { ...rest, [f.key]: v } });
           }}
           refs={refs}
           pickFolder={pickFolder}
           provider={node.config.provider}
+          ai={{ model: str(node.config.model), effort: str(node.config.effort) }}
         />
       ))}
     </div>

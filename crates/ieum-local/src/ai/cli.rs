@@ -11,7 +11,9 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use super::{AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, system_text};
+use super::{
+    AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, check_effort, system_text,
+};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 /// 실패 메시지에 붙이는 stderr 끝부분(글자).
@@ -256,6 +258,18 @@ impl CliKind {
             .map(String::from)
             .to_vec(),
         };
+        // agy는 수준이 모델 id에 붙는다(`ask`가 `agy_run_id`로 이미 합쳤다).
+        if let Some(e) = &req.effort {
+            match self {
+                CliKind::Claude => a.extend(["--effort".into(), e.clone()]),
+                // TOML 문자열 = JSON 문자열 인용.
+                CliKind::Codex => a.extend([
+                    "-c".into(),
+                    format!("model_reasoning_effort={}", Value::String(e.clone())),
+                ]),
+                CliKind::Agy => {}
+            }
+        }
         if let Some(m) = &req.model {
             a.push(
                 if self == CliKind::Codex {
@@ -290,6 +304,51 @@ impl CliKind {
         }
         a
     }
+}
+
+/// agy 모델 id 끝에 붙는 추론 수준(`agy models`의 `gemini-4-argon-high` 식).
+pub const AGY_EFFORTS: [&str; 4] = ["low", "medium", "high", "xhigh"];
+
+/// `gemini-4-argon-high` → (`gemini-4-argon`, Some(`high`)). 접미사가 없으면 (id, None).
+pub fn agy_split(id: &str) -> (&str, Option<&'static str>) {
+    for e in AGY_EFFORTS {
+        if let Some(base) = id.strip_suffix(e).and_then(|b| b.strip_suffix('-'))
+            && !base.is_empty()
+        {
+            return (base, Some(e));
+        }
+    }
+    (id, None)
+}
+
+/// 실행할 agy 모델 id. 수준을 골랐으면 묶음 이름 + `-수준`. 안 골랐으면(기본):
+/// 이미 접미사가 붙은 id(예전 저장값)는 그대로, 아니면 `listed`(`agy models`의 id들)에서 그 묶음의 `-medium`,
+/// 없으면 묶음의 첫 것 — agy 기본 모델들이 보통 medium이라 그에 맞춘다. 묶음이 없으면(접미사 없는 모델) 그대로.
+pub fn agy_run_id(model: &str, effort: Option<&str>, listed: &[String]) -> String {
+    let (base, suffix) = agy_split(model);
+    if let Some(e) = effort {
+        return format!("{base}-{e}");
+    }
+    if suffix.is_some() {
+        return model.to_string();
+    }
+    let group: Vec<&String> = listed
+        .iter()
+        .filter(|id| matches!(agy_split(id), (b, Some(_)) if b == base))
+        .collect();
+    group
+        .iter()
+        .find(|id| id.ends_with("-medium"))
+        .or(group.first())
+        .map_or_else(|| model.to_string(), |id| id.to_string())
+}
+
+/// `agy models` 출력(`<id>\t<이름>` 줄들) → id 목록. 앞의 안내 줄은 탭이 없어 빠진다.
+pub fn agy_listed_ids(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| Some(l.split_once('\t')?.0.trim().to_string()))
+        .filter(|id| !id.is_empty())
+        .collect()
 }
 
 /// 셸 작은따옴표 인용.
@@ -628,12 +687,30 @@ impl CliProvider {
 
 #[async_trait]
 impl AiProvider for CliProvider {
-    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
+    async fn ask(&self, mut req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
         let name = self.kind.label();
         if let Some(m) = req.model.as_deref().filter(|m| !valid_model(m)) {
             return Err(AiError(format!(
                 "모델 이름이 올바르지 않아요(‘-’로 시작하거나 공백·제어문자가 있음): {m:?}"
             )));
+        }
+        check_effort(req.effort.as_deref())?;
+        if self.kind == CliKind::Agy
+            && let Some(m) = req.model.take()
+        {
+            // 기본 수준인데 묶음 이름만 있으면 목록을 읽어 실제 id를 고른다. 못 읽으면 그대로(agy가 알린다).
+            let listed = if req.effort.is_none() && agy_split(&m).1.is_none() {
+                let line = format!("{} models", sh_quote(&self.program));
+                tokio::task::spawn_blocking(move || shell_output(&line, DETECT_TIMEOUT * 4))
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|out| agy_listed_ids(&out))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            req.model = Some(agy_run_id(&m, req.effort.as_deref(), &listed));
         }
         std::fs::create_dir_all(&self.cwd)
             .map_err(|e| AiError(format!("작업 폴더를 못 만들었어요: {e}")))?;
