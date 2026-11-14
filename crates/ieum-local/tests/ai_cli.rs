@@ -2183,3 +2183,97 @@ async fn agy_effort_joins_model_id() {
         .unwrap();
     assert_eq!(model_arg(&t), "gemini-3.8-flash-medium");
 }
+
+const AGY_MODELS: &str = "Fetching available models...\n\
+    gemini-4-argon-high\tA\ngemini-4-argon-medium\tA\ngemini-4-argon-low\tA\n\
+    gemini-pro-orchestrator-g1-pro\tO\n";
+
+fn agy_req(model: Option<&str>, effort: Option<&str>) -> AiRequest {
+    let mut r = req(model);
+    r.effort = effort.map(String::from);
+    r
+}
+
+/// 기본 수준 풀이용 `agy models`는 실행마다가 아니라 한 번만, 자동 업데이트를 끄고 부른다.
+#[tokio::test(flavor = "multi_thread")]
+async fn agy_model_list_is_read_once_without_auto_update() {
+    let (t, provider) = agy();
+    fs::write(t.path().join("models.txt"), AGY_MODELS).unwrap();
+    for _ in 0..3 {
+        provider
+            .ask(agy_req(Some("gemini-4-argon"), None), &|_: &str| {})
+            .await
+            .unwrap();
+    }
+    let calls = fs::read_to_string(t.path().join("models.calls")).unwrap();
+    assert_eq!(calls, "true\n", "{calls:?}");
+}
+
+/// 목록을 못 읽으면 묶음 이름을 그대로 넘기지 않고, 원인이 보이는 코드·문구로 CLI를 띄우기 전에 끝난다.
+#[tokio::test(flavor = "multi_thread")]
+async fn agy_model_list_failure_says_why() {
+    let (t, provider) = agy(); // models.txt 없음 → `agy models` 실패
+    let err = provider
+        .ask(agy_req(Some("gemini-4-argon"), None), &|_: &str| {})
+        .await
+        .unwrap_err();
+    assert_eq!(err.0, ieum_local::ai::AGY_LIST_FAILED);
+    assert!(!t.path().join("cwd/args.txt").exists(), "CLI를 띄웠다");
+    let runner = AiRunner::empty().with_provider("cli:agy", Arc::new(provider));
+    let e = run(
+        &runner,
+        json!({"provider": "cli:agy", "prompt": "p", "model": "gemini-4-argon"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code.as_deref(), Some("AI_MODEL_LIST_FAILED"));
+}
+
+/// 공급원·모델이 받지 않는 수준은 실행 직전에 거절한다(CLI를 띄우지 않는다).
+#[tokio::test(flavor = "multi_thread")]
+async fn unsupported_effort_rejected_before_running() {
+    let (t, provider) = agy();
+    fs::write(t.path().join("models.txt"), AGY_MODELS).unwrap();
+    for (model, effort) in [
+        (Some("gemini-4-argon"), "max"), // agy 접미사에 없는 수준
+        (Some("gemini-4-argon"), "minimal"),
+        (Some("gemini-pro-orchestrator-g1-pro"), "high"), // 접미사 없는 모델
+        (None, "high"),                                   // 기본 모델 — 수준이 id에 묶인다
+    ] {
+        let err = provider
+            .ask(agy_req(model, Some(effort)), &|_: &str| {})
+            .await
+            .unwrap_err();
+        assert!(
+            err.0.starts_with(ieum_local::ai::EFFORT_NOT_SUPPORTED),
+            "{model:?} {effort}: {err}"
+        );
+        assert!(!t.path().join("cwd/args.txt").exists(), "CLI를 띄웠다");
+    }
+    // 받는 수준은 통과.
+    provider
+        .ask(agy_req(Some("gemini-4-argon"), Some("low")), &|_: &str| {})
+        .await
+        .unwrap();
+
+    // claude `--effort`는 minimal이 없다.
+    let (t, claude) = sleeper(Duration::from_secs(30));
+    let err = claude
+        .ask(agy_req(None, Some("minimal")), &|_: &str| {})
+        .await
+        .unwrap_err();
+    assert!(
+        err.0.starts_with(ieum_local::ai::EFFORT_NOT_SUPPORTED),
+        "{err}"
+    );
+    assert!(!t.path().join("cwd/cli.pid").exists(), "CLI를 띄웠다");
+    // 노드 경로는 칸 오류 코드로.
+    let runner = AiRunner::empty().with_provider("cli:claude", Arc::new(claude));
+    let e = run(
+        &runner,
+        json!({"provider": "cli:claude", "prompt": "p", "effort": "minimal"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code.as_deref(), Some("FIELD_INVALID effort"));
+}

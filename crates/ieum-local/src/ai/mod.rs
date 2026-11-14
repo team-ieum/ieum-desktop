@@ -18,8 +18,9 @@ use crate::paths::AllowedRoots;
 
 pub use api::{API_TIMEOUT, ApiKind, ApiProvider};
 pub use cli::{
-    AGY_EFFORTS, AGY_GATE, AGY_SETTINGS, CliKind, CliProvider, DetectedCli, agy_listed_ids,
-    agy_run_id, agy_split, detect_clis, lock_codex_catalog, parse_stream, shell_output,
+    AGY_EFFORTS, AGY_GATE, AGY_LIST_FAILED, AGY_SETTINGS, CliKind, CliProvider, DetectedCli,
+    EFFORT_NOT_SUPPORTED, agy_listed_ids, agy_run_id, agy_split, detect_clis, lock_codex_catalog,
+    parse_stream, shell_output,
 };
 pub use content::{MAX_CHARS, MAX_PDF_BYTES, Skip, file_text, file_text_bounded, read_file_text};
 pub use keys::{ApiKey, KeyStore, Keychain};
@@ -47,12 +48,12 @@ pub struct AiRequest {
 /// 받는 추론 수준 이름(공급원마다 그중 일부). codex `ultra`는 자동 위임을 켜서 뺀다(`models.rs` 주석).
 pub const EFFORTS: [&str; 6] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
+const EFFORT_INVALID: &str = "추론 수준이 올바르지 않아요";
+
 /// 추론 수준이 아는 이름인가 — CLI 인자·모델 id에 들어가므로 모든 공급원이 보내기 전에 검사한다.
 pub fn check_effort(effort: Option<&str>) -> Result<(), AiError> {
     match effort {
-        Some(e) if !EFFORTS.contains(&e) => {
-            Err(AiError(format!("추론 수준이 올바르지 않아요: {e:?}")))
-        }
+        Some(e) if !EFFORTS.contains(&e) => Err(AiError(format!("{EFFORT_INVALID}: {e:?}"))),
         _ => Ok(()),
     }
 }
@@ -345,6 +346,18 @@ fn fail_code(code: &str, message: impl Into<String>) -> NodeError {
     }
 }
 
+/// 공급원 오류 → 노드 오류. 원인을 아는 것은 그 코드로(수준 칸, agy 모델 목록), 나머지는 `AI_FAILED`.
+fn provider_failed(e: AiError) -> NodeError {
+    let code = if e.0 == AGY_LIST_FAILED {
+        "AI_MODEL_LIST_FAILED"
+    } else if e.0.starts_with(EFFORT_NOT_SUPPORTED) || e.0.starts_with(EFFORT_INVALID) {
+        "FIELD_INVALID effort"
+    } else {
+        "AI_FAILED"
+    };
+    fail_code(code, e.0)
+}
+
 fn opt_str<'a>(cfg: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     cfg.get(key)
         .and_then(Value::as_str)
@@ -540,7 +553,7 @@ impl AiRunner {
                 let AiAnswer { text, usage } = provider
                     .ask(req.clone(), &chunk)
                     .await
-                    .map_err(|e| fail_code("AI_FAILED", e.0))?;
+                    .map_err(provider_failed)?;
                 if let Some(mut u) = usage {
                     u.credential = credential.clone();
                     let mut g = used.lock().unwrap_or_else(|e| e.into_inner());
