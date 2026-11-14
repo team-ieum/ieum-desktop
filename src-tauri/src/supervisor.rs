@@ -13,6 +13,7 @@ use ieum_engine::{
     ValidationError, Workflow, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
+use ieum_local::builder::TestRun;
 use ieum_local::{
     AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, Journal,
     NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo, user_folders,
@@ -133,6 +134,8 @@ struct Job {
     /// 감시가 보낸 일이면 그 감시 폴더. 시험 실행(`run_now`)은 None.
     folder: Option<PathBuf>,
     reply: Option<Reply>,
+    /// 채팅 빌더의 노드 테스트면 저장본 대신 돌릴 그래프(대상까지 자른 것).
+    test: Option<Workflow>,
 }
 
 #[derive(Default)]
@@ -498,6 +501,7 @@ impl Supervisor {
                 trigger,
                 folder: Some(folder.to_path_buf()),
                 reply: None,
+                test: None,
             },
         );
     }
@@ -545,7 +549,9 @@ impl Supervisor {
                     }
                 }
             };
-            let result = self.run_one(workflow_id, job.folder, job.trigger).await;
+            let result = self
+                .run_one(workflow_id, job.folder, job.trigger, job.test)
+                .await;
             if let Err(e) = &result {
                 eprintln!("[ieum] 실행하지 못했어요: 워크플로우 {workflow_id}: {e}");
             }
@@ -561,13 +567,18 @@ impl Supervisor {
         workflow_id: &str,
         folder: Option<PathBuf>,
         trigger: Map<String, Value>,
+        test: Option<Workflow>,
     ) -> Result<String, String> {
-        let wf = self.store().get_workflow(workflow_id)?;
-        let run_trigger = if folder.is_some() {
-            RunTrigger::Watch
-        } else {
-            RunTrigger::Manual
+        let mut wf = self.store().get_workflow(workflow_id)?;
+        let run_trigger = match (&test, &folder) {
+            (Some(_), _) => RunTrigger::Test,
+            (None, Some(_)) => RunTrigger::Watch,
+            (None, None) => RunTrigger::Manual,
         };
+        // 노드 테스트는 저장본 대신 대상까지 자른 그래프를 돌린다.
+        if let Some(test) = test {
+            wf.workflow = test;
+        }
         // 감시가 보낸 뒤 꺼졌거나 폴더가 바뀐 워크플로우의 늦은 트리거는 버린다.
         if let Some(f) = folder
             && trigger_folder(&wf) != Some(f)
@@ -682,8 +693,21 @@ impl Supervisor {
             ),
             forward
         );
-        let stored = stored(run, now());
+        let mut stored = stored(run, now());
+        // 노드 테스트는 여기서(실행 줄 안에서) 바로 되돌린다 — 요청한 쪽이 사라졌거나 기록 저장이
+        // 실패해도 파일이 옮겨진 채 남지 않고, 줄 선 다음 실행은 되돌려진 상태에서 시작한다.
+        if run_trigger == RunTrigger::Test {
+            let _one_at_a_time = lock(&self.0.undo_lock);
+            stored.undo = Some(self.undo_ops(&stored));
+        }
         let saved = self.store().save_run(&stored);
+        // 못 되돌린 경로는 화면이 기록에서 읽는다 — 기록을 쓴 뒤에 알린다.
+        if stored.undo.as_ref().is_some_and(|u| !u.skipped.is_empty()) {
+            emit(AppEvent::TestUndoFailed {
+                workflow_id: workflow_id.to_string(),
+                run_id: stored.run.run_id.clone(),
+            });
+        }
         if let Some(event) = finished {
             emit(AppEvent::Exec {
                 workflow_id: workflow_id.to_string(),
@@ -717,7 +741,57 @@ impl Supervisor {
     /// 파일은 그 워크플로우의 허용 폴더 안 일반 파일(심볼릭 링크 아님)이어야 한다.
     pub async fn run_now(&self, workflow_id: &str, file: &Path) -> Result<String, String> {
         let wf = self.store().get_workflow(workflow_id)?;
-        self.check_folders(&wf.workflow)?;
+        let trigger = self.file_trigger(&wf.workflow, file)?;
+        self.queue(workflow_id, trigger, None).await
+    }
+
+    /// 실행 줄에 넣고 끝나길 기다린다. 끝나면 run_id.
+    async fn queue(
+        &self,
+        workflow_id: &str,
+        trigger: Map<String, Value>,
+        test: Option<Workflow>,
+    ) -> Result<String, String> {
+        let (tx, rx) = oneshot::channel();
+        self.push(
+            workflow_id,
+            Job {
+                trigger,
+                folder: None,
+                reply: Some(tx),
+                test,
+            },
+        );
+        rx.await.map_err(|_| "실행이 취소됐어요.".to_string())?
+    }
+
+    /// `wf`를 `sample` 파일로 실행 줄에서 한 번 돌리고(기록 trigger = Test) 바로 되돌린다.
+    /// 되돌리기는 파일 작업이 없어도 항상 한다. 못 되돌린 것이 있으면 화면에 알린다(`TestUndoFailed`).
+    pub async fn run_test(
+        &self,
+        workflow_id: &str,
+        wf: Workflow,
+        sample: &Path,
+    ) -> Result<TestRun, String> {
+        let trigger = self.file_trigger(&wf, sample)?;
+        // 되돌리기는 실행 줄(`run_one`)이 한다 — 이 future가 버려져도 끝까지 간다.
+        let run_id = self.queue(workflow_id, trigger, Some(wf)).await?;
+        let stored = self.store().get_run(&run_id)?;
+        Ok(TestRun {
+            run_id,
+            status: stored.run.status,
+            nodes: stored.run.nodes,
+            undo: stored.undo.unwrap_or_default(),
+        })
+    }
+
+    pub fn ai(&self) -> &AiRunner {
+        &self.0.deps.ai
+    }
+
+    /// `file`로 만든 트리거 출력. 파일은 `wf`의 허용 폴더 안 일반 파일(심볼릭 링크 아님)이어야 한다.
+    fn file_trigger(&self, wf: &Workflow, file: &Path) -> Result<Map<String, Value>, String> {
+        self.check_folders(wf)?;
         let meta = fs::symlink_metadata(file).map_err(|e| format!("{}: {e}", file.display()))?;
         if !meta.file_type().is_file() {
             return Err(format!(
@@ -728,7 +802,7 @@ impl Supervisor {
         let real = file
             .canonicalize()
             .map_err(|e| format!("{}: {e}", file.display()))?;
-        if !roots_for_workflow(&wf.workflow).contains(&real) {
+        if !roots_for_workflow(wf).contains(&real) {
             return Err(format!(
                 "이 워크플로우가 다루는 폴더 밖 파일이에요: {}",
                 real.display()
@@ -738,22 +812,12 @@ impl Supervisor {
             s.map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default()
         };
-        let trigger = trigger_output(&NewFile {
+        Ok(trigger_output(&NewFile {
             name: lossy(real.file_name()),
             extension: lossy(real.extension()),
             path: real.clone(),
             size: meta.len(),
-        });
-        let (tx, rx) = oneshot::channel();
-        self.push(
-            workflow_id,
-            Job {
-                trigger,
-                folder: None,
-                reply: Some(tx),
-            },
-        );
-        rx.await.map_err(|_| "실행이 취소됐어요.".to_string())?
+        }))
     }
 
     /// 기록의 `allowed_roots`·휴지통·앱 전역 `RecentWrites`로 되돌린다. 이미 되돌렸으면 에러.
@@ -767,6 +831,14 @@ impl Supervisor {
         if run.finished_at.is_empty() {
             return Err("아직 끝나지 않은 실행이에요.".into());
         }
+        let report = self.undo_ops(&run);
+        run.undo = Some(report.clone());
+        self.store().save_run(&run)?;
+        Ok(report)
+    }
+
+    /// 기록의 파일 작업을 되돌린다(기록은 쓰지 않는다). `undo_lock`을 잡은 채 부른다.
+    fn undo_ops(&self, run: &StoredRun) -> UndoReport {
         // 기록이 심어졌어도 정책 밖 폴더에서는 움직이지 않는다.
         let roots = AllowedRoots::new(
             run.allowed_roots
@@ -774,14 +846,11 @@ impl Supervisor {
                 .filter(|r| self.check_folder(r).is_ok())
                 .cloned(),
         );
-        let report = undo(
+        undo(
             &run.file_ops,
             &roots,
             &self.0.deps.trash_dir,
             &self.0.recent,
-        );
-        run.undo = Some(report.clone());
-        self.store().save_run(&run)?;
-        Ok(report)
+        )
     }
 }

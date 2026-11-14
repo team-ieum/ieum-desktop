@@ -64,6 +64,21 @@ fn route_manual_start_sent_even_when_focused() {
     assert_eq!(r, Route::Drop);
 }
 
+/// 채팅 빌더의 노드 테스트 실행은 알리지 않는다.
+#[test]
+fn route_test_runs_dropped() {
+    for kind in [
+        NoticeKind::Started,
+        finished(true, None),
+        finished(false, Some("옮기기")),
+    ] {
+        assert_eq!(
+            route(&notice(RunTrigger::Test, kind), &ALL, false, Lang::Ko),
+            Route::Drop
+        );
+    }
+}
+
 #[test]
 fn route_manual_end_respects_toggle() {
     let n = notice(RunTrigger::Manual, finished(true, None));

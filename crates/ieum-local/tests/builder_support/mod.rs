@@ -72,6 +72,61 @@ impl MemHost {
         doc.updated_at = self.next_version();
     }
 
+    // ── 테스트가 칸을 만지는 한 줄짜리 도우미 ──
+
+    pub fn saves(&self) -> usize {
+        self.saves.load(Ordering::SeqCst)
+    }
+
+    pub fn set_ai(&self, ai: Option<AiDefault>) {
+        *self.ai.lock().unwrap() = ai;
+    }
+
+    pub fn set_ai_ok(&self, ok: bool) {
+        self.ai_ok.store(ok, Ordering::SeqCst);
+    }
+
+    pub fn push_pick(&self, pick: Option<PathBuf>) {
+        self.picks.lock().unwrap().push_back(pick);
+    }
+
+    pub fn on_pick(&self, f: impl FnMut(&MemHost) + Send + 'static) {
+        *self.on_pick.lock().unwrap() = Some(Box::new(f));
+    }
+
+    pub fn bad_folder(&self, path: impl Into<PathBuf>) {
+        self.bad_folders.lock().unwrap().push(path.into());
+    }
+
+    pub fn fail_next_save(&self, e: SaveError) {
+        *self.next_save_error.lock().unwrap() = Some(e);
+    }
+
+    pub fn set_editing(&self, id: &str, editing: bool) {
+        let mut set = self.editing.lock().unwrap();
+        if editing {
+            set.insert(id.to_string());
+        } else {
+            set.remove(id);
+        }
+    }
+
+    pub fn pick_titles(&self) -> Vec<String> {
+        self.pick_titles.lock().unwrap().clone()
+    }
+
+    pub fn push_test_run(&self, run: Result<TestRun, String>) {
+        self.test_runs.lock().unwrap().push_back(run);
+    }
+
+    pub fn tested(&self) -> Vec<(Workflow, PathBuf)> {
+        self.tested.lock().unwrap().clone()
+    }
+
+    pub fn pending_notices(&self) -> Vec<String> {
+        self.pending_notices.lock().unwrap().clone()
+    }
+
     fn is_bad(&self, path: &Path) -> bool {
         self.bad_folders.lock().unwrap().iter().any(|b| b == path)
     }

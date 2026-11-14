@@ -197,6 +197,23 @@ fn provider<'a>(v: &'a Value, id: &str) -> &'a Value {
         .unwrap()
 }
 
+/// 테스트 실행은 실행 건수·시간에서 빼고, 실제로 쓴 토큰은 그대로 센다.
+#[test]
+fn test_runs_keep_tokens_but_not_run_count() {
+    let started = "2026-11-12T10:00:00.000Z";
+    let mut tested = run("w1", started, &[usage("anthropic", "claude-x", 10, 10)]);
+    tested.trigger = Some(ieum_desktop_lib::store::RunTrigger::Test);
+    tested.finished_at = "2026-11-12T10:00:30.000Z".into();
+    let runs = vec![
+        run("w1", started, &[usage("anthropic", "claude-x", 10, 10)]),
+        tested,
+    ];
+    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    assert_eq!(r.totals.runs, 1);
+    assert_eq!(r.totals.run_seconds, 0);
+    assert_eq!(r.totals.ai_calls, 2);
+}
+
 #[test]
 fn usage_report_groups_providers_and_days() {
     let mut first = run(

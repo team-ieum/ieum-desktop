@@ -208,6 +208,35 @@ fn runner(kind: ApiKind, base: &str) -> AiRunner {
     AiRunner::empty().with_provider(kind.id(), Arc::new(provider(kind, base, Some(KEY))))
 }
 
+/// 항상 실패하는 공급원 — 원문에 사용자 데이터가 섞인 경우.
+struct Failing;
+
+#[async_trait::async_trait]
+impl AiProvider for Failing {
+    async fn ask(
+        &self,
+        _req: AiRequest,
+        _chunk: &ieum_local::ai::ChunkFn<'_>,
+    ) -> Result<ieum_local::ai::AiAnswer, AiError> {
+        Err(AiError("서버 500: 비밀".into()))
+    }
+}
+
+#[tokio::test]
+async fn ai_errors_carry_codes() {
+    let r = AiRunner::empty().with_provider("fake", Arc::new(Failing));
+    let cancel = CancellationToken::new();
+    let code = |r: Result<Map<String, Value>, NodeError>| r.unwrap_err().code;
+    let (out, _) = run_with(&r, json!({"provider": "nope", "prompt": "p"}), &cancel).await;
+    assert_eq!(code(out).as_deref(), Some("AI_NOT_CONNECTED"));
+    let (out, _) = run_with(&r, json!({"provider": "fake"}), &cancel).await;
+    assert_eq!(code(out).as_deref(), Some("FIELD_EMPTY prompt"));
+    let (out, _) = run_with(&r, json!({"provider": "fake", "prompt": "p"}), &cancel).await;
+    let e = out.unwrap_err();
+    assert_eq!(e.code.as_deref(), Some("AI_FAILED"));
+    assert!(e.message.contains("비밀")); // 원문은 message에만
+}
+
 #[tokio::test]
 async fn anthropic_streams_text() {
     let (base, log) = serve(anthropic_text(&["파", "랑"])).await;

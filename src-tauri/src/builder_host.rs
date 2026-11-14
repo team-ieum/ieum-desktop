@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ieum_engine::Workflow;
+use ieum_local::ai::detect_clis;
 use ieum_local::builder::{AiDefault, Builder, ChatFile, Doc, Host, SaveError, TestRun};
 
 use crate::active::Active;
@@ -30,18 +31,91 @@ pub fn no_pick() -> PickFolder {
     PickFolder(Arc::new(|_, _| Box::pin(async { None })))
 }
 
+/// 터미널용 기본 AI 연결을 고르는 순서(설계 3절). 러너에 등록된 것 중 연결된 첫 번째를 쓴다.
+pub const AI_ORDER: [&str; 6] = [
+    "cli:claude",
+    "cli:codex",
+    "cli:agy",
+    "api:anthropic",
+    "api:openai",
+    "api:gemini",
+];
+
+type DetectClis = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
 pub struct AppHost {
     sup: Supervisor,
-    // AI 연결 확인(`ai_default`·`ai_ready`)이 쓴다.
-    #[allow(dead_code)]
     creds: AccountCredentials,
     pick: PickFolder,
+    /// 설치된 구독 CLI의 공급원 id(`cli:claude` 등).
+    clis: DetectClis,
 }
 
 impl AppHost {
     pub fn new(sup: Supervisor, creds: AccountCredentials, pick: PickFolder) -> Self {
-        AppHost { sup, creds, pick }
+        let clis = || {
+            detect_clis()
+                .into_iter()
+                .map(|c| c.id.to_string())
+                .collect()
+        };
+        AppHost {
+            sup,
+            creds,
+            pick,
+            clis: Arc::new(clis),
+        }
     }
+
+    /// CLI 감지를 바꿔 끼운다(테스트용).
+    pub fn with_clis(mut self, detect: DetectClis) -> Self {
+        self.clis = detect;
+        self
+    }
+}
+
+/// `AI_ORDER`에서 러너에 등록돼 있고 연결된 첫 번째. 키체인·셸을 읽으니 blocking 스레드에서 부른다.
+fn pick_ai_default(
+    sup: &Supervisor,
+    creds: &AccountCredentials,
+    clis: &DetectClis,
+) -> Option<AiDefault> {
+    let listed = creds.list();
+    let mut detected: Option<Vec<String>> = None; // CLI 감지는 느리다 — 필요할 때 한 번만
+    for id in AI_ORDER {
+        if !sup.ai().has_provider(id) {
+            continue;
+        }
+        let credential = match id.strip_prefix("api:") {
+            Some(provider) => {
+                let Some(keys) = listed.api_keys.get(provider).filter(|k| !k.is_empty()) else {
+                    continue;
+                };
+                keys.iter().find(|k| k.is_default).map(|k| k.id.clone())
+            }
+            None => {
+                if !detected
+                    .get_or_insert_with(|| clis())
+                    .iter()
+                    .any(|c| c == id)
+                {
+                    continue;
+                }
+                let accounts = match id {
+                    "cli:claude" => listed.claude_accounts.as_slice(),
+                    "cli:codex" => listed.codex_accounts.as_slice(),
+                    _ => &[],
+                };
+                accounts.iter().find(|a| a.is_default).map(|a| a.id.clone())
+            }
+        };
+        return Some(AiDefault {
+            provider: id.to_string(),
+            credential,
+            model: None,
+        });
+    }
+    None
 }
 
 #[async_trait]
@@ -108,20 +182,30 @@ impl Host for AppHost {
     }
 
     async fn ai_default(&self) -> Option<AiDefault> {
-        None
+        let (sup, creds, clis) = (self.sup.clone(), self.creds.clone(), self.clis.clone());
+        tokio::task::spawn_blocking(move || pick_ai_default(&sup, &creds, &clis))
+            .await
+            .ok()?
     }
 
-    async fn ai_ready(&self, _provider: &str, _credential: Option<&str>) -> bool {
-        false
+    async fn ai_ready(&self, provider: &str, credential: Option<&str>) -> bool {
+        if provider.is_empty() {
+            return false;
+        }
+        let (sup, provider) = (self.sup.clone(), provider.to_string());
+        let credential = credential.map(str::to_string);
+        tokio::task::spawn_blocking(move || sup.ai().can_resolve(&provider, credential.as_deref()))
+            .await
+            .unwrap_or(false)
     }
 
     async fn run_test(
         &self,
-        _workflow_id: &str,
-        _wf: Workflow,
-        _sample: &Path,
+        workflow_id: &str,
+        wf: Workflow,
+        sample: &Path,
     ) -> Result<TestRun, String> {
-        Err("미구현".into())
+        self.sup.run_test(workflow_id, wf, sample).await
     }
 
     fn finish_pending(&self, workflow_id: &str, workflow_name: &str) {

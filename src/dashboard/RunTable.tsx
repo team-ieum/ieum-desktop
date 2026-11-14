@@ -58,6 +58,7 @@ export const webRow = (e: WebDashboardExecution): Row => ({
 const TRIGGER: Record<string, Key> = {
   watch: "dashboard.trigger.watch",
   manual: "dashboard.trigger.manual",
+  test: "dashboard.trigger.test",
   MANUAL: "dashboard.trigger.manual",
   SCHEDULE: "dashboard.trigger.schedule",
   CRON: "dashboard.trigger.schedule",

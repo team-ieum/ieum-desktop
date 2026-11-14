@@ -156,13 +156,17 @@ impl AiRunner {
             return Ok((None, None, credential.map(str::to_string)));
         };
         if let Some(p) = provider_id.strip_prefix("api:") {
-            let name = r.api_key_name(p, credential).map_err(fail)?;
+            let name = r
+                .api_key_name(p, credential)
+                .map_err(|e| fail_code("AI_NOT_CONNECTED", e))?;
             // `<공급자>.<계정 키>.<id>` — 옛 이름(`<공급자>.<계정 키>`)은 `default`.
             let id = name.splitn(3, '.').nth(2).unwrap_or("default").to_string();
             return Ok((Some(name), None, Some(id)));
         }
         if provider_id == CliKind::Claude.id() {
-            let dir = r.claude_config_dir(credential).map_err(fail)?;
+            let dir = r
+                .claude_config_dir(credential)
+                .map_err(|e| fail_code("AI_NOT_CONNECTED", e))?;
             // 계정 폴더 이름 = 계정 id(`.../claude/<id>`), 없으면 이 Mac의 로그인.
             let id = dir
                 .as_deref()
@@ -178,18 +182,32 @@ impl AiRunner {
         self.providers.contains_key(id)
     }
 
+    /// 그 공급원이 등록돼 있고 키·계정이 풀리는가(키체인을 읽는다).
+    pub fn can_resolve(&self, provider: &str, credential: Option<&str>) -> bool {
+        self.has_provider(provider) && self.resolve(provider, credential).is_ok()
+    }
+
     /// `file` 칸 → 실제 경로. 허용 폴더 밖(심볼릭 링크로 빠져나가는 경우 포함)이면 실패.
     fn allowed_file(&self, file: &str) -> Result<PathBuf, NodeError> {
         let p = Path::new(file);
-        let real = p
-            .canonicalize()
-            .map_err(|e| fail(format!("파일을 찾을 수 없어요: {file}: {e}")))?;
+        let real = p.canonicalize().map_err(|e| {
+            fail_code(
+                "FILE_MISSING",
+                format!("파일을 찾을 수 없어요: {file}: {e}"),
+            )
+        })?;
         if !p.is_absolute() || !self.roots.contains(&real) {
-            return Err(fail("허용된 폴더 밖 파일은 AI에 보낼 수 없어요."));
+            return Err(fail_code(
+                "FOLDER_NOT_ALLOWED",
+                "허용된 폴더 밖 파일은 AI에 보낼 수 없어요.",
+            ));
         }
         // FIFO·장치 등은 열기에서 멈출 수 있다. 여는 쪽(content)도 O_NONBLOCK + fstat으로 다시 본다.
         if !std::fs::symlink_metadata(&real).is_ok_and(|m| m.file_type().is_file()) {
-            return Err(fail(format!("일반 파일이 아니에요: {file}")));
+            return Err(fail_code(
+                "FILE_MISSING",
+                format!("일반 파일이 아니에요: {file}"),
+            ));
         }
         Ok(real)
     }
@@ -227,6 +245,15 @@ impl Default for AiRunner {
 fn fail(message: impl Into<String>) -> NodeError {
     NodeError {
         message: message.into(),
+        code: None,
+    }
+}
+
+/// `code` = AI에게 보여도 되는 코드(`NodeError.code`). 원문은 `message`에만 싣는다.
+fn fail_code(code: &str, message: impl Into<String>) -> NodeError {
+    NodeError {
+        message: message.into(),
+        code: Some(code.to_string()),
     }
 }
 
@@ -340,13 +367,17 @@ impl AiRunner {
         used: &std::sync::Mutex<Option<AiUsage>>,
     ) -> Result<Map<String, Value>, NodeError> {
         let cfg = &ctx.config;
-        let fields = validate_output_fields(cfg.get("outputFields")).map_err(fail)?;
+        let fields = validate_output_fields(cfg.get("outputFields"))
+            .map_err(|e| fail_code("FIELD_INVALID outputFields", e))?;
         let provider_id = cfg.get("provider").and_then(Value::as_str).unwrap_or("");
-        let provider = self
-            .providers
-            .get(provider_id)
-            .ok_or_else(|| fail(format!("지원하지 않는 공급원이에요: {provider_id}")))?;
-        let prompt = opt_str(cfg, "prompt").ok_or_else(|| fail("'prompt' 칸이 비었어요."))?;
+        let provider = self.providers.get(provider_id).ok_or_else(|| {
+            fail_code(
+                "AI_NOT_CONNECTED",
+                format!("지원하지 않는 공급원이에요: {provider_id}"),
+            )
+        })?;
+        let prompt = opt_str(cfg, "prompt")
+            .ok_or_else(|| fail_code("FIELD_EMPTY prompt", "'prompt' 칸이 비었어요."))?;
         let model = opt_str(cfg, "model");
         let extra = opt_str(cfg, "data");
         let send_content = cfg.get("sendContent").and_then(Value::as_bool) == Some(true);
@@ -386,7 +417,7 @@ impl AiRunner {
                 let AiAnswer { text, usage } = provider
                     .ask(req.clone(), &chunk)
                     .await
-                    .map_err(|e| fail(e.0))?;
+                    .map_err(|e| fail_code("AI_FAILED", e.0))?;
                 if let Some(mut u) = usage {
                     u.credential = credential.clone();
                     let mut g = used.lock().unwrap_or_else(|e| e.into_inner());
@@ -405,9 +436,10 @@ impl AiRunner {
                     Err(e) => mismatch = e,
                 }
             }
-            Err(fail(format!(
-                "AI 응답이 출력 칸 모양과 달라요({ATTEMPTS}번 시도): {mismatch}"
-            )))
+            Err(fail_code(
+                "AI_FAILED",
+                format!("AI 응답이 출력 칸 모양과 달라요({ATTEMPTS}번 시도): {mismatch}"),
+            ))
         };
         // 취소되면 work가 버려지며 CLI 자식 프로세스(그룹)가 kill된다.
         tokio::select! {

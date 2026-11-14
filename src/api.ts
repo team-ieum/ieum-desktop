@@ -56,6 +56,8 @@ export interface NodeRecord {
   status: NodeStatus;
   output: Obj | null;
   error: string | null;
+  /** AI에게 보여도 되는 오류 코드(`<CODE>` 또는 `<CODE> <칸 key>`). 옛 기록에는 없다. */
+  errorCode?: string | null;
 }
 export type RejectReason =
   | { kind: "TOO_LARGE" }
@@ -110,7 +112,7 @@ export interface StoredRun {
   trigger?: RunTrigger | null;
 }
 /** 폴더 감시·수동. 옛 기록은 없음. */
-export type RunTrigger = "watch" | "manual";
+export type RunTrigger = "watch" | "manual" | "test";
 export interface RunSummary {
   runId: string;
   workflowId: string;
