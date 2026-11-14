@@ -1,6 +1,6 @@
 [package]
 name = "ieum-desktop"
-version = "0.1.0"
+version = "0.1.1"
 description = "IEUM 데스크톱 — 내 PC에서 도는 폴더·파일 자동화"
 authors = ["IEUM"]
 edition = "2024"
