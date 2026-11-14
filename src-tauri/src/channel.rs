@@ -11,10 +11,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use ieum_local::builder::{Code, Op, Reply, Request};
+use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+use crate::active::{Active, NOT_SIGNED_IN};
+use crate::builder_host::{PickFolder, builder_of};
+use crate::terminal::{Gate, GateEnv};
 
 pub const ENV_SOCKET: &str = "IEUM_SOCKET";
 pub const ENV_TOKEN: &str = "IEUM_TOKEN";
@@ -145,6 +150,105 @@ impl Channel {
     /// 토큰 전부 폐기 + 받기 중단 + 소켓 파일 삭제. 여러 번 불러도 된다.
     pub fn close(&self) {
         close_open(lock(&self.state).take());
+    }
+}
+
+// ── 앱에 잇기: 세션 발급, 소켓 요청 → Builder ──
+
+/// 터미널 세션이 받는 환경: `ENV_SOCKET`=socket, `ENV_TOKEN`=token, `PATH`=bin_dir:$PATH.
+pub struct TermEnv {
+    pub socket: PathBuf,
+    pub token: String,
+    pub bin_dir: PathBuf,
+}
+
+/// `ieum`이 있는 폴더 = 앱 실행 파일 옆(번들 `Contents/MacOS`, 개발 `target/debug`).
+pub fn bin_dir() -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe.parent().ok_or("앱 실행 파일의 폴더를 찾지 못했어요")?;
+    Ok(dir.to_path_buf())
+}
+
+impl Channel {
+    /// 활성 계정의 소켓을 열고(이미 열렸으면 그대로) 이 워크플로우에 묶인 새 토큰을 준다.
+    /// 로그인 전이면 `NOT_SIGNED_IN`, 저장된 적 없는 id면 Err.
+    pub async fn session(&self, active: &Active, workflow_id: &str) -> Result<TermEnv, String> {
+        let key = active
+            .account_key()
+            .await
+            .ok_or_else(|| NOT_SIGNED_IN.to_string())?;
+        let sup = active.sup().await?;
+        sup.store().get_workflow(workflow_id)?;
+        let socket = self.open(&key, sup.store().root())?;
+        Ok(TermEnv {
+            socket,
+            token: self.issue(workflow_id)?,
+            bin_dir: bin_dir()?,
+        })
+    }
+}
+
+/// 소켓 요청 하나를 Builder로. 세션의 계정이 지금 활성 계정이 아니거나 로그인 전이면 `UNAUTHORIZED`
+/// (계정이 바뀐 뒤 남은 터미널이 옛 계정도 새 계정도 건드리지 못한다).
+pub async fn apply_op(active: &Active, pick: &PickFolder, session: Session, op: Op) -> Reply {
+    if active.account_key().await.as_deref() != Some(session.account.as_str()) {
+        return Reply::err(Code::Unauthorized);
+    }
+    match builder_of(active, pick).await {
+        // 터미널은 AI를 고르지 않는다(None → 앱 기본 AI).
+        Ok(builder) => builder.apply(&session.workflow_id, op, None).await,
+        Err(_) => Reply::err(Code::Unauthorized),
+    }
+}
+
+/// 터미널 `Gate::open`의 내용 — 세션을 만들어 터미널 환경으로 옮긴다. `Gate::close(token)`은 `Channel::revoke(token)`.
+pub async fn open_gate(
+    channel: &Channel,
+    active: &Active,
+    workflow_id: &str,
+) -> Result<Option<GateEnv>, String> {
+    let env = channel.session(active, workflow_id).await?;
+    Ok(Some(GateEnv {
+        socket: env.socket,
+        token: env.token,
+        bin_dir: env.bin_dir,
+    }))
+}
+
+/// 앱의 Channel — 소켓 요청을 활성 계정의 Builder로 넘긴다.
+pub fn app_channel(app: &AppHandle) -> Channel {
+    let app = app.clone();
+    let handler: Handler = Arc::new(move |session, op| {
+        let app = app.clone();
+        Box::pin(async move {
+            apply_op(
+                &app.state::<Active>(),
+                &app.state::<PickFolder>(),
+                session,
+                op,
+            )
+            .await
+        })
+    });
+    Channel::new(handler, std::env::temp_dir())
+}
+
+/// 앱의 터미널 Gate — 세션마다 토큰을 만들고(`open`) 세션이 끝나면 버린다(`close`).
+pub fn app_gate(app: &AppHandle) -> Gate {
+    let (opener, closer) = (app.clone(), app.clone());
+    Gate {
+        open: Arc::new(move |workflow_id| {
+            let app = opener.clone();
+            Box::pin(async move {
+                open_gate(
+                    &app.state::<Channel>(),
+                    &app.state::<Active>(),
+                    &workflow_id,
+                )
+                .await
+            })
+        }),
+        close: Arc::new(move |token| closer.state::<Channel>().revoke(token)),
     }
 }
 
