@@ -38,9 +38,32 @@ n=$(/usr/bin/plutil -extract toolCall.name raw -o - - 2>/dev/null)
 if [ "$n" = finish ]; then printf '%s\n' '{"decision":"allow"}'; else printf '%s\n' '{"decision":"deny","reason":"tools disabled"}'; fi
 "#;
 
-/// agy 작업 폴더에 훅을 매번 덮어쓴다(누가 고쳐 놓았어도 원래대로). 못 쓰면 Err — 훅 없이 띄우지 않는다.
-fn write_agy_gate(cwd: &Path) -> Result<(), AiError> {
+/// `path`의 내용·권한이 다를 때만, 같은 폴더의 임시 파일에 쓰고 rename으로 바꿔치기한다.
+/// 그 자리에서 잘라 쓰면 같은 폴더를 쓰는 다른 실행이 빈·쓰다 만 파일을 읽을 수 있다.
+fn replace_file(path: &Path, content: &str, mode: u32) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
+    let same = std::fs::read(path).is_ok_and(|c| c == content.as_bytes())
+        && std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o777 == mode);
+    if same {
+        return Ok(());
+    }
+    let tmp = path.with_file_name(format!(
+        ".ieum-tmp-{}-{}",
+        std::process::id(),
+        TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let write = || {
+        std::fs::write(&tmp, content)?;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+        std::fs::rename(&tmp, path)
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// agy 작업 폴더의 훅을 매번 맞춰 둔다(누가 고쳐 놓았어도 원래대로). 못 쓰면 Err — 훅 없이 띄우지 않는다.
+fn write_agy_gate(cwd: &Path) -> Result<(), AiError> {
     let dir = cwd.join(".agents");
     let gate = dir.join("ieum-gate.sh");
     let path = gate.to_string_lossy().into_owned();
@@ -55,9 +78,9 @@ fn write_agy_gate(cwd: &Path) -> Result<(), AiError> {
         "hooks": [{"type": "command", "command": path, "timeout": 5}]}]}});
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(&gate, AGY_GATE)?;
-        std::fs::set_permissions(&gate, std::fs::Permissions::from_mode(0o755))?;
-        std::fs::write(dir.join("hooks.json"), hooks.to_string())
+        // 스크립트가 먼저 — hooks.json이 가리킬 때는 이미 있다.
+        replace_file(&gate, AGY_GATE, 0o755)?;
+        replace_file(&dir.join("hooks.json"), &hooks.to_string(), 0o644)
     };
     write().map_err(|e| AiError(format!("Antigravity 도구 차단 훅을 못 만들었어요: {e}")))
 }
@@ -123,6 +146,9 @@ pub fn lock_codex_catalog(raw: &str) -> Result<Value, AiError> {
         m.insert("multi_agent_version".into(), Value::Null);
         m.insert("apply_patch_tool_type".into(), Value::Null);
         m.insert("shell_type".into(), "disabled".into());
+        // gpt-6 계열은 여기로 `request_user_input_async`·`clock.curr_time`을 싣는다.
+        // 새 칸이 생기면 `live_codex_request_has_no_tools`(모든 모델)가 잡는다.
+        m.insert("experimental_supported_tools".into(), Value::Array(vec![]));
     }
     Ok(v)
 }
@@ -705,6 +731,10 @@ impl AiProvider for CliProvider {
                     buf.clear();
                     if st.fatal {
                         if let Some(g) = pgid {
+                            kill_group(g);
+                            // 그 순간 fork 중이던 자식은 첫 kill을 빠져나가 stderr를 물고 남는다
+                            // (그러면 끝까지 기다리게 된다) → 잠깐 뒤 한 번 더.
+                            tokio::time::sleep(Duration::from_millis(50)).await;
                             kill_group(g);
                         }
                         break;

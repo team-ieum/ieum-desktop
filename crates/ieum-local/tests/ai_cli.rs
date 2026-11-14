@@ -780,6 +780,7 @@ fn locked(v: &Value) {
         assert_eq!(m["shell_type"], "disabled");
         assert!(m["multi_agent_version"].is_null() && m["apply_patch_tool_type"].is_null());
         assert!(m.as_object().unwrap().contains_key("multi_agent_version")); // 지우지 않고 null
+        assert_eq!(m["experimental_supported_tools"], json!([]));
     }
 }
 
@@ -1352,6 +1353,45 @@ async fn agy_args_settings_hook_and_stdin() {
     assert_eq!(fs::read_to_string(&gate).unwrap(), ieum_local::ai::AGY_GATE);
 }
 
+/// 훅 파일은 그 자리에서 잘라 쓰지 않는다 — 같은 폴더를 쓰는 다른 agy 실행이 빈·쓰다 만 훅을 읽지 않게.
+/// 내용이 같으면 건드리지 않고, 다르면 새 파일로 바꿔치기한다(inode가 바뀐다).
+#[tokio::test(flavor = "multi_thread")]
+async fn agy_hook_files_are_replaced_atomically() {
+    use std::os::unix::fs::MetadataExt;
+    let (t, provider) = agy();
+    let dir = t.path().join("cwd/.agents");
+    let (gate, hooks) = (dir.join("ieum-gate.sh"), dir.join("hooks.json"));
+    let inodes = || {
+        (
+            fs::metadata(&gate).unwrap().ino(),
+            fs::metadata(&hooks).unwrap().ino(),
+        )
+    };
+    provider.ask(req(None), &|_: &str| {}).await.unwrap();
+    let first = inodes();
+    provider.ask(req(None), &|_: &str| {}).await.unwrap();
+    assert_eq!(inodes(), first, "같은 내용을 다시 썼다");
+    // 누가 고쳐 놓으면(내용·실행 권한) 원래대로 — 잘라 쓰지 않고 바꿔치기.
+    fs::write(&gate, "#!/bin/sh\necho '{\"decision\":\"allow\"}'\n").unwrap();
+    fs::write(&hooks, "{}").unwrap();
+    provider.ask(req(None), &|_: &str| {}).await.unwrap();
+    assert_eq!(fs::read_to_string(&gate).unwrap(), ieum_local::ai::AGY_GATE);
+    assert!(fs::read_to_string(&hooks).unwrap().contains("PreToolUse"));
+    let second = inodes();
+    assert!(
+        second.0 != first.0 && second.1 != first.1,
+        "그 자리에서 덮어썼다"
+    );
+    fs::set_permissions(&gate, fs::Permissions::from_mode(0o644)).unwrap();
+    provider.ask(req(None), &|_: &str| {}).await.unwrap();
+    assert_eq!(
+        fs::metadata(&gate).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    // 임시 파일이 남지 않는다.
+    assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+}
+
 /// 훅 스크립트를 실제로 돌려 본다(조사에서 받은 입력 모양).
 #[tokio::test(flavor = "multi_thread")]
 async fn agy_gate_allows_only_finish() {
@@ -1570,8 +1610,8 @@ async fn live_codex_request_has_no_tools() {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
-    let first: Arc<Mutex<Option<Vec<u8>>>> = Arc::default();
-    let seen = first.clone();
+    let bodies: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let seen = bodies.clone();
     std::thread::spawn(move || {
         for mut s in listener.incoming().flatten() {
             let (mut buf, mut tmp) = (Vec::new(), [0u8; 8192]);
@@ -1601,9 +1641,7 @@ async fn live_codex_request_has_no_tools() {
                 );
                 continue;
             }
-            seen.lock()
-                .unwrap()
-                .get_or_insert_with(|| buf[head_end..].to_vec());
+            seen.lock().unwrap().push(buf[head_end..].to_vec());
             let events = [
                 json!({"type": "response.created", "response": {"id": "r1"}}),
                 json!({"type": "response.output_item.done", "item": {"type": "message", "role": "assistant", "id": "m1",
@@ -1636,21 +1674,41 @@ async fn live_codex_request_has_no_tools() {
             "-c".into(),
             r#"model_provider="probe""#.into(),
         ]);
-    let mut r = req(Some("gpt-5.6-luna"));
-    r.schema =
-        Some(json!({"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}));
-    let a = provider.ask(r, &|_: &str| {}).await.unwrap();
-    assert_eq!(a.text, "ok");
-    let raw = first.lock().unwrap().clone().expect("요청이 오지 않았다");
-    let body: Value = serde_json::from_slice(&raw).expect("요청 본문이 JSON이 아니다");
-    let mut names = Vec::new();
-    tool_names(&body, &mut names);
-    eprintln!("live codex tools: {names:?}");
-    assert!(
-        names.iter().all(|n| n == "request_user_input"),
-        "도구가 되살아났다: {names:?}"
-    );
-    assert!(!body.to_string().contains("mcp__"), "MCP 도구가 실렸다");
+    // 모델 칸을 비운 기본 모델 + 이 codex 카탈로그의 모든 모델 — 새 모델·새 칸이 도구를 되살리면 여기서 걸린다.
+    let out = std::process::Command::new(std::env::var("SHELL").unwrap_or("/bin/zsh".into()))
+        .args(["-lc", "codex debug models --bundled"])
+        .output()
+        .unwrap();
+    let catalog: Value = serde_json::from_slice(&out.stdout).expect("codex 모델 목록");
+    let mut models: Vec<Option<String>> = vec![None];
+    for m in catalog["models"].as_array().unwrap() {
+        models.push(Some(m["slug"].as_str().unwrap().to_string()));
+    }
+    assert!(models.len() > 1);
+    let mut bad = Vec::new();
+    for model in &models {
+        let mut r = req(model.as_deref());
+        r.schema = Some(
+            json!({"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}),
+        );
+        let a = provider.ask(r, &|_: &str| {}).await;
+        let got: Vec<Vec<u8>> = std::mem::take(&mut *bodies.lock().unwrap());
+        let mut names = Vec::new();
+        for raw in &got {
+            let body: Value = serde_json::from_slice(raw).expect("요청 본문이 JSON이 아니다");
+            tool_names(&body, &mut names);
+            // 본문 글자에서 `mcp__`를 찾지 않는다 — gpt-6 계열 지시문에 설명으로 들어 있다. 도구 이름만 본다.
+        }
+        eprintln!(
+            "live codex {model:?}: 요청 {}건, 도구 {names:?}, 답 {:?}",
+            got.len(),
+            a.as_ref().map(|a| a.text.as_str())
+        );
+        if got.is_empty() || a.is_err() || names.iter().any(|n| n != "request_user_input") {
+            bad.push(format!("{model:?}: {names:?} / {a:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "도구가 되살아났거나 요청이 없다: {bad:#?}");
 }
 
 /// 켜는 조건 ②: 이 Mac의 codex 구독으로 한 번 실제 호출한다.
