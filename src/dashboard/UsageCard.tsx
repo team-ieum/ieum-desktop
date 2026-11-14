@@ -4,7 +4,7 @@ import { api, type UsageRange, type UsageSummary } from "../api";
 import { ProviderLogo } from "../assets/providers";
 import { formatRelative } from "./format";
 import { t } from "../i18n";
-import { PROVIDERS, type SubId } from "../screens/settings/AiPane";
+import { apiName, PROVIDERS, type SubId } from "../screens/settings/AiPane";
 import { connectedSubs } from "../shell/UsagePopover";
 import { useCredentials } from "../stores/credentials";
 import { useDefaultPlans } from "../stores/plans";
@@ -113,9 +113,9 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
                       return (
                         <li key={p.id} className="typo-caption1_medium text-neutral-700">
                           <div className="flex justify-between gap-2">
-                            <span>{p.name}</span>
+                            <span>{apiName(p.name)}</span>
                             <span className="tabular-nums text-neutral-500">
-                              {formatTokens(n)} · {formatUsd(s ? s.usd : 0)}
+                              {formatTokens(n)} {t("usage.tokens")} · {formatUsd(s ? s.usd : 0)}
                             </span>
                           </div>
                           <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-100">
@@ -139,7 +139,7 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
                           <li key={w.workflowId} className="flex justify-between gap-2 typo-caption1_medium text-neutral-700">
                             <span className="truncate">{name(w.workflowId)}</span>
                             <span className="shrink-0 tabular-nums text-neutral-500">
-                              {formatTokens(tokens(w))} · {formatUsd(w.usd)}
+                              {formatTokens(tokens(w))} {t("usage.tokens")} · {formatUsd(w.usd)}
                             </span>
                           </li>
                         ))}

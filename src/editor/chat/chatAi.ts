@@ -13,13 +13,13 @@ export interface AiChoice {
 export const AI_KEY = "ieum.chat.ai";
 
 const API_NAMES: [ApiProvider, string][] = [
-  ["anthropic", "Anthropic"],
+  ["anthropic", "Claude API"], // "Claude (구독)"과 갈리게
   ["openai", "OpenAI"],
   ["gemini", "Gemini"],
 ];
 
 /**
- * AI 노드 공급원과 같은 순서: Claude 구독 → Codex 구독 → Antigravity 구독 → Anthropic → OpenAI → Gemini 키. 묶음 안에서는 기본이 먼저.
+ * AI 노드 공급원과 같은 순서: Claude 구독 → Codex 구독 → Antigravity 구독 → Claude API → OpenAI → Gemini 키. 묶음 안에서는 기본이 먼저.
  * `clis` = 앱이 켜 두었고 이 Mac에 설치된 구독 CLI의 공급원 id(`api.detectProviders`). Codex·Antigravity는 여기 있을 때만 보인다.
  */
 export function aiChoices(view: CredentialsView | null, clis: string[] = []): AiChoice[] {

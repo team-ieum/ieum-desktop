@@ -51,6 +51,9 @@ test("usage_card_switches_range", async () => {
   expect(summary).toHaveBeenLastCalledWith("today");
   expect(screen.getByText("$1.85")).toBeTruthy();
   expect(screen.getByText(/2026-11-01/)).toBeTruthy();
+  // 키별·워크플로우별 줄도 숫자가 토큰임을 밝힌다. Anthropic 키는 "Claude API"로 부른다.
+  expect(screen.getAllByText("12.3만 토큰 · $1.85")).toHaveLength(2);
+  expect(screen.getByText("Claude API")).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole("tab", { name: "이번 주" })));
   expect(summary).toHaveBeenLastCalledWith("week");
 });

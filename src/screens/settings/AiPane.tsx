@@ -19,7 +19,8 @@ import { GHOST, matches, QueryContext } from "./Row";
 
 // 키 받기 주소는 Rust 고정값(open_provider_console) — 화면은 주소를 들고 있지 않는다.
 export const PROVIDERS: { id: ApiProvider; name: string; logo: LogoId }[] = [
-  { id: "anthropic", name: "Anthropic", logo: "anthropic" },
+  // 화면 이름은 Claude(구독과 같은 회사 이름) — id·로고는 그대로 anthropic.
+  { id: "anthropic", name: "Claude", logo: "anthropic" },
   { id: "openai", name: "OpenAI", logo: "openai" },
   { id: "gemini", name: "Gemini", logo: "gemini" },
 ];
@@ -593,7 +594,8 @@ function ApiKeyBody({ p, keys, state, refresh }: { p: (typeof PROVIDERS)[number]
 
 const apiTexts = (p: (typeof PROVIDERS)[number], view: CredentialsView | null | undefined) => {
   const state = view ? keyStates(view)[p.id] : undefined;
-  return [apiName(p.name), t("settings.getKey"), t("settings.addKey"), ...(view?.apiKeys[p.id] ?? []).map(credLabel), ...(state ? [t(BADGE_TEXT[state])] : [])];
+  // 화면 이름을 Claude로 바꿨어도 회사 이름(Anthropic)으로 찾을 수 있게.
+  return [apiName(p.name), ...(p.id === "anthropic" ? ["Anthropic"] : []), t("settings.getKey"), t("settings.addKey"), ...(view?.apiKeys[p.id] ?? []).map(credLabel), ...(state ? [t(BADGE_TEXT[state])] : [])];
 };
 
 /** 박스 하나의 칸 제목·설명·검색 문구. 본문은 화면에서 붙인다. */

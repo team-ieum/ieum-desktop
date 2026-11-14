@@ -40,9 +40,14 @@ test("config_panel_renders_choices_and_ref_fields", async () => {
   const wf: Workflow = { nodes: [branch, move], edges: [] };
 
   // branch.if: 갈래 조건의 비교 방식 선택지 20개
-  const r = render(<ConfigPanel node={branch} workflow={wf} onChange={() => {}} />);
-  const op = screen.getByLabelText(/^비교 방식/) as HTMLSelectElement;
-  expect([...op.options].filter((o) => o.value !== "").length).toBe(20);
+  const onBranch = vi.fn();
+  const r = render(<ConfigPanel node={branch} workflow={wf} onChange={onBranch} />);
+  expect(screen.queryByRole("combobox")).toBeNull(); // 브라우저 기본 select 없음
+  expect(optionsOf(/^비교 방식/).length).toBe(20);
+  // 비어 있으면 자리표시 — 첫 선택지를 고른 것처럼 보이지 않게
+  expect(screen.getByRole("button", { name: /^여러 갈래가 맞으면/ }).textContent).toBe("고르세요");
+  choose(/^여러 갈래가 맞으면/, "맞는 갈래 전부");
+  expect(onBranch.mock.lastCall![0].config.pick).toBe("all");
   r.unmount();
 
   // local.file_move: 기준 폴더는 텍스트 입력 없이 폴더 고르기 버튼만
@@ -73,10 +78,16 @@ test("config_panel_no_ref_picker_in_ref_false_list", () => {
     config: { outputFields: [{ key: "folder", type: "text", description: "" }] },
   };
   const wf: Workflow = { nodes: [trig, ai], edges: [{ source: "t", target: "a" }] };
-  render(<ConfigPanel node={ai} workflow={wf} onChange={() => {}} />);
+  const onChange = vi.fn();
+  render(<ConfigPanel node={ai} workflow={wf} onChange={onChange} />);
   // 참조 가능한 칸(추가 데이터)엔 뜨고, ref:false 목록(출력 칸)의 이름·설명엔 안 뜬다
-  expect(screen.getByTestId("field-data").querySelector('select[aria-label="앞 단계 값 넣기"]')).not.toBeNull();
-  expect(screen.getByTestId("field-outputFields").querySelector('select[aria-label="앞 단계 값 넣기"]')).toBeNull();
+  const data = within(screen.getByTestId("field-data"));
+  expect(within(screen.getByTestId("field-outputFields")).queryByRole("button", { name: /^앞 단계 값 넣기/ })).toBeNull();
+  // 고르면 글 끝에 참조식을 붙이고, 단추는 다시 "앞 단계 값 넣기"
+  fireEvent.click(data.getByRole("button", { name: /^앞 단계 값 넣기/ }));
+  fireEvent.click(within(screen.getByRole("listbox")).getAllByRole("option")[1]);
+  expect(onChange.mock.lastCall![0].config.data).toMatch(/^\{\{nodes\.t\.output\.\w+\}\}$/);
+  expect(data.getByRole("button", { name: /^앞 단계 값 넣기/ }).textContent).toBe("앞 단계 값 넣기");
 });
 
 const VIEW: CredentialsView = {
