@@ -86,7 +86,11 @@ pub fn launch_line(tool: Tool, l: &Launch) -> String {
             "exec claude {prompt} --allowedTools {}",
             sh_quote(CLAUDE_ALLOW)
         ),
-        Tool::Codex => format!("exec codex {prompt}"),
+        // `--no-daemon` — 공용 데몬(ChatGPT 앱 등이 띄움)에 붙으면 명령이 데몬 환경에서 돌아
+        // PATH·IEUM_SOCKET·IEUM_TOKEN이 닿지 않는다(`ieum: command not found`, 11-15 실측).
+        // `-a on-request` — 샌드박스가 앱 소켓을 막으므로 ieum 명령마다 사람에게 허용을 묻게 한다.
+        // 기본 정책(granular, sandbox_approval=false)이면 묻지 않고 포기한다(11-15 실측).
+        Tool::Codex => format!("exec codex --no-daemon -a on-request {prompt}"),
         Tool::Agy => format!("exec agy -i {prompt}"),
     };
     line

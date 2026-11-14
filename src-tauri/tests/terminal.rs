@@ -23,7 +23,7 @@ fn launch_lines_are_exact() {
     );
     assert_eq!(
         launch_line(Tool::Codex, &none),
-        format!("stty -echo; exec codex {Q}")
+        format!("stty -echo; exec codex --no-daemon -a on-request {Q}")
     );
     // 반향 끄기 — agy가 원시 모드 전에 보낸 단말 질의의 답이 `^[[?1;2c`로 찍히지 않게.
     assert_eq!(
@@ -44,10 +44,9 @@ fn launch_line_exports_bin_and_account_dir() {
             "export PATH='/App'\\''s/bin':\"$PATH\"; export CLAUDE_CONFIG_DIR='/a b/c1'; stty -echo; exec claude {Q} --allowedTools 'Bash(ieum workflow *)'"
         )
     );
-    assert!(
-        launch_line(Tool::Codex, &l)
-            .contains("; export CODEX_HOME='/a b/c1'; stty -echo; exec codex ")
-    );
+    assert!(launch_line(Tool::Codex, &l).contains(
+        "; export CODEX_HOME='/a b/c1'; stty -echo; exec codex --no-daemon -a on-request "
+    ));
     assert!(!launch_line(Tool::Agy, &l).contains("/a b/c1")); // agy는 계정 폴더 옵션이 없다
 }
 
