@@ -384,7 +384,10 @@ impl AntigravityUsageClient {
             Ok(TokenRead::Found(e)) => self.run_usage(e).await,
             // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
             Ok(TokenRead::Denied) => (usage("unavailable", Vec::new()), true, None),
-            Ok(TokenRead::Missing) | Err(_) => (usage("not_logged_in", Vec::new()), false, None),
+            // 만료 변형은 Claude 키체인 전용 — agy 로그인 읽기는 내지 않는다.
+            Ok(TokenRead::Missing | TokenRead::Expired | TokenRead::Expiring(..)) | Err(_) => {
+                (usage("not_logged_in", Vec::new()), false, None)
+            }
         }
     }
 

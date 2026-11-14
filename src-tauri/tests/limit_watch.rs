@@ -122,6 +122,13 @@ fn no_suggest_without_room() {
 }
 
 #[test]
+fn no_suggest_to_expired_account() {
+    let def = cand("me", plan("ok", &[("five_hour", 100.0)]));
+    let others = [cand("old", plan("expired", &[("five_hour", 1.0)]))];
+    assert_eq!(suggest("claude", &def, &others), None);
+}
+
+#[test]
 fn suggest_not_repeated_for_same_key() {
     let def = cand("me", plan("ok", &[("five_hour", 100.0)]));
     let s = suggest(

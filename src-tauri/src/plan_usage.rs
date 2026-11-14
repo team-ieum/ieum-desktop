@@ -24,6 +24,10 @@ const WINDOWS: [&str; 3] = ["five_hour", "seven_day", "seven_day_opus"];
 /// 키체인 읽기 결과.
 pub enum TokenRead {
     Found(String),
+    /// 토큰과 만료 시각(밀리초 epoch) — Claude 키체인의 `expiresAt`.
+    Expiring(String, i64),
+    /// `expiresAt`이 지났다 — 그 계정으로 claude를 실행해야 갱신된다(앱은 갱신하지 않는다).
+    Expired,
     /// 항목 없음·읽기 실패 — 60초 뒤 다시 본다.
     Missing,
     /// 허용 창에서 거부·취소 — 앱이 도는 동안 다시 묻지 않는다.
@@ -47,7 +51,7 @@ pub struct PlanWindow {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlanUsage {
-    /// `ok` | `unavailable` | `not_logged_in`
+    /// `ok` | `unavailable` | `not_logged_in` | `expired`
     pub state: &'static str,
     pub windows: Vec<PlanWindow>,
     pub checked_at: String,
@@ -132,8 +136,8 @@ pub struct PlanUsageClient {
     token: TokenSource,
     cache: Cache,
     /// 마지막으로 `Found`로 읽은 토큰(메모리에만) — 백그라운드는 키체인 대신 이것을 쓴다.
-    /// `Missing`·`Denied`면 비운다.
-    remembered: std::sync::Mutex<Option<String>>,
+    /// `Missing`·`Denied`·`Expired`면 비운다. 만료 시각(밀리초)이 있으면 같이 기억한다.
+    remembered: std::sync::Mutex<Option<(String, Option<i64>)>>,
 }
 
 impl PlanUsageClient {
@@ -155,12 +159,16 @@ impl PlanUsageClient {
 
     /// 백그라운드용 — 키체인(허용 창)을 부르지 않는다. 기억한 토큰이 없으면 None,
     /// 있으면 그 토큰으로 캐시를 거쳐 묻는다(실패하면 캐시 규칙대로 직전 성공값).
+    /// 기억한 만료 시각이 지났으면 묻지 않고 `expired`.
     pub async fn get_quiet(&self) -> Option<PlanUsage> {
-        let token = self.remembered().clone()?;
+        let (token, until) = self.remembered().clone()?;
+        if until.is_some_and(|u| u <= chrono::Utc::now().timestamp_millis()) {
+            return Some(usage("expired", Vec::new()));
+        }
         Some(self.cache.get(false, self.request(token)).await)
     }
 
-    fn remembered(&self) -> std::sync::MutexGuard<'_, Option<String>> {
+    fn remembered(&self) -> std::sync::MutexGuard<'_, Option<(String, Option<i64>)>> {
         self.remembered.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -178,11 +186,14 @@ impl PlanUsageClient {
         let token = self.token.clone();
         let read = tokio::task::spawn_blocking(move || token()).await;
         *self.remembered() = match &read {
-            Ok(TokenRead::Found(t)) => Some(t.clone()),
+            Ok(TokenRead::Found(t)) => Some((t.clone(), None)),
+            Ok(TokenRead::Expiring(t, until)) => Some((t.clone(), Some(*until))),
             _ => None,
         };
         match read {
-            Ok(TokenRead::Found(t)) => self.request(t).await,
+            Ok(TokenRead::Found(t) | TokenRead::Expiring(t, _)) => self.request(t).await,
+            // 만료 = 네트워크 없이 알린다. sticky 아님 — CLI로 갱신하면 다음 get이 다시 읽는다.
+            Ok(TokenRead::Expired) => (usage("expired", Vec::new()), false, None),
             // 허용 창 거부 = 확인 불가(다시 묻지 않음, 설계 8절).
             Ok(TokenRead::Denied) => (usage("unavailable", Vec::new()), true, None),
             Ok(TokenRead::Missing) | Err(_) => (usage("not_logged_in", Vec::new()), false, None),
@@ -207,7 +218,7 @@ impl PlanUsageClient {
                 // 401 = 토큰 만료 — 백그라운드가 이 토큰을 다시 쓰지 않게 버린다(get은 키체인을 다시 읽는다).
                 if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
                     let mut r = self.remembered();
-                    if r.as_deref() == Some(token.as_str()) {
+                    if r.as_ref().is_some_and(|(t, _)| *t == token) {
                         *r = None;
                     }
                 }
@@ -352,26 +363,34 @@ pub fn keychain_token(config_dir: Option<&Path>) -> TokenRead {
         .stderr(std::process::Stdio::null())
         .output()
     {
-        Ok(out) => token_from_security(out.status.code(), &out.stdout),
+        Ok(out) => token_from_security(
+            out.status.code(),
+            &out.stdout,
+            chrono::Utc::now().timestamp_millis(),
+        ),
         Err(_) => TokenRead::Missing,
     }
 }
 
 /// `security` 종료 코드는 OSStatus 아래 8비트: 44 = errSecItemNotFound(-25300, 실행 확인),
 /// 128 = errSecUserCanceled(-128), 51 = errSecAuthFailed(-25293) — 허용 창 취소·거부.
-pub fn token_from_security(code: Option<i32>, stdout: &[u8]) -> TokenRead {
+/// `now_ms`보다 이른 `claudeAiOauth.expiresAt`(밀리초)은 `Expired`. 없거나 숫자가 아니면 `Found`.
+pub fn token_from_security(code: Option<i32>, stdout: &[u8], now_ms: i64) -> TokenRead {
     match code {
         Some(0) => {}
         Some(128 | 51) => return TokenRead::Denied,
         _ => return TokenRead::Missing,
     }
-    serde_json::from_slice::<Value>(stdout)
-        .ok()
-        .and_then(|v| {
-            v["claudeAiOauth"]["accessToken"]
-                .as_str()
-                .map(str::to_string)
-        })
-        .filter(|t| !t.is_empty())
-        .map_or(TokenRead::Missing, TokenRead::Found)
+    let Ok(v) = serde_json::from_slice::<Value>(stdout) else {
+        return TokenRead::Missing;
+    };
+    let oauth = &v["claudeAiOauth"];
+    let Some(t) = oauth["accessToken"].as_str().filter(|t| !t.is_empty()) else {
+        return TokenRead::Missing;
+    };
+    match oauth["expiresAt"].as_i64() {
+        Some(e) if e < now_ms => TokenRead::Expired,
+        Some(e) => TokenRead::Expiring(t.to_string(), e),
+        None => TokenRead::Found(t.to_string()),
+    }
 }

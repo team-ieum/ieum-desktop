@@ -425,6 +425,16 @@ test("google_box_contains_antigravity_and_gemini_keys", async () => {
   expect(box("Google").getByText("브라우저를 열지 못했어요: exit 1")).toBeTruthy();
 });
 
+test("subscription_card_shows_login_expired", async () => {
+  vi.spyOn(api, "subscriptionUsage").mockImplementation((k) =>
+    k === "claude" ? Promise.resolve({ state: "expired", windows: [], checkedAt: "", accountEmail: null }) : Promise.reject("no command"),
+  );
+  await renderShell("ai");
+  const claude = sub("Claude");
+  expect(claude.getByText("로그인 만료")).toBeTruthy();
+  expect(claude.getByText("이 계정으로 claude를 한 번 실행하면 갱신돼요")).toBeTruthy();
+});
+
 test("subscription_card_shows_login_hint_when_not_logged_in", async () => {
   const writeText = vi.fn().mockResolvedValue(undefined);
   Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });

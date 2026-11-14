@@ -355,7 +355,7 @@ export interface PlanWindow {
   label?: string;
 }
 export interface PlanUsage {
-  state: "ok" | "unavailable" | "not_logged_in";
+  state: "ok" | "unavailable" | "not_logged_in" | "expired";
   windows: PlanWindow[];
   checkedAt: string;
   /** 이 컴퓨터에 로그인된 구독 계정. 모르면 null. */

@@ -436,24 +436,86 @@ fn keychain_service_follows_config_dir() {
 #[test]
 fn security_exit_codes_map_to_token_read() {
     let ok = br#"{"claudeAiOauth":{"accessToken":"abc"}}"#;
-    assert!(matches!(token_from_security(Some(0), ok), TokenRead::Found(t) if t == "abc"));
+    assert!(matches!(token_from_security(Some(0), ok, 0), TokenRead::Found(t) if t == "abc"));
     assert!(matches!(
-        token_from_security(Some(0), b"{}"),
+        token_from_security(Some(0), b"{}", 0),
         TokenRead::Missing
     ));
     assert!(matches!(
-        token_from_security(Some(44), b""),
+        token_from_security(Some(44), b"", 0),
         TokenRead::Missing
     ));
     assert!(matches!(
-        token_from_security(Some(128), b""),
+        token_from_security(Some(128), b"", 0),
         TokenRead::Denied
     ));
     assert!(matches!(
-        token_from_security(Some(51), b""),
+        token_from_security(Some(51), b"", 0),
         TokenRead::Denied
     ));
-    assert!(matches!(token_from_security(None, b""), TokenRead::Missing));
+    assert!(matches!(
+        token_from_security(None, b"", 0),
+        TokenRead::Missing
+    ));
+}
+
+#[test]
+fn security_expired_token_is_expired() {
+    let raw = br#"{"claudeAiOauth":{"accessToken":"abc","expiresAt":1000}}"#;
+    assert!(matches!(
+        token_from_security(Some(0), raw, 1001),
+        TokenRead::Expired
+    ));
+    assert!(
+        matches!(token_from_security(Some(0), raw, 999), TokenRead::Expiring(t, 1000) if t == "abc")
+    );
+    // 숫자가 아니면 예전처럼 Found.
+    let odd = br#"{"claudeAiOauth":{"accessToken":"abc","expiresAt":"soon"}}"#;
+    assert!(
+        matches!(token_from_security(Some(0), odd, i64::MAX), TokenRead::Found(t) if t == "abc")
+    );
+}
+
+#[tokio::test]
+async fn expired_token_skips_network() {
+    let (url, log) = serve(|_| (200, sample().to_string())).await;
+    let c = PlanUsageClient::with_url(&url, Arc::new(|| TokenRead::Expired), CACHE_TTL).unwrap();
+    let u = c.get().await;
+    assert_eq!(u.state, "expired");
+    assert!(u.windows.is_empty());
+    assert!(log.lock().unwrap().is_empty());
+    assert!(c.get_quiet().await.is_none());
+}
+
+#[tokio::test]
+async fn expired_not_hidden_by_last_ok_and_not_sticky() {
+    let (url, _) = serve(|_| (200, sample().to_string())).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    // 성공 → 만료 → (CLI로 갱신) 다시 성공.
+    let src: TokenSource = Arc::new(move || match seen.fetch_add(1, Ordering::SeqCst) {
+        1 => TokenRead::Expired,
+        _ => TokenRead::Found(TOKEN.into()),
+    });
+    let c = PlanUsageClient::with_url(&url, src, Duration::ZERO).unwrap();
+    assert_eq!(c.get().await.state, "ok");
+    assert_eq!(c.get().await.state, "expired");
+    assert_eq!(c.get().await.state, "ok");
+}
+
+#[tokio::test]
+async fn quiet_get_expired_after_remembered_expiry() {
+    let (url, log) = serve(|_| (200, sample().to_string())).await;
+    let until = chrono::Utc::now().timestamp_millis() + 300;
+    let src: TokenSource = Arc::new(move || TokenRead::Expiring(TOKEN.into(), until));
+    let c = PlanUsageClient::with_url(&url, src, Duration::ZERO).unwrap();
+    assert_eq!(c.get().await.state, "ok");
+    assert_eq!(c.get_quiet().await.map(|u| u.state), Some("ok"));
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let u = c.get_quiet().await.unwrap();
+    assert_eq!(u.state, "expired");
+    assert!(u.windows.is_empty());
+    assert_eq!(log.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]

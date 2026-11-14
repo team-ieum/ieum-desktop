@@ -73,7 +73,11 @@ function Flyout({ s, plan, view, plans, manage, onSettings, onPick, onEnter }: {
               >
                 {a.isDefault ? <Check className="size-3.5 shrink-0 text-main-blue" aria-label={t("settings.defaultBadge")} /> : <span className="size-3.5 shrink-0" />}
                 <span className="min-w-0 flex-1 truncate text-neutral-700">{a.name}</span>
-                {pct !== null && <span className={`tabular-nums ${hot(pct) || "text-neutral-500"}`}>{pct}%</span>}
+                {a.plan?.state === "expired" ? (
+                  <span className="text-amber-800">{t("settings.loginExpired")}</span>
+                ) : (
+                  pct !== null && <span className={`tabular-nums ${hot(pct) || "text-neutral-500"}`}>{pct}%</span>
+                )}
               </button>
             </li>
           );

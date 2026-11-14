@@ -58,6 +58,21 @@ test("popover_account_click_opens_confirm", async () => {
   expect(confirm()).toBeNull();
 });
 
+test("expired_account_shows_login_expired", async () => {
+  await mount();
+  vi.mocked(api.subscriptionUsage).mockImplementation(async (k, id) =>
+    k === "claude" && id === "abcd" ? { ...OUT, state: "expired" } : plan(id === "system" ? 100 : 30),
+  );
+  cleanup();
+  await act(async () => {
+    render(<UsagePopover onUsage={() => {}} onSettings={() => {}} />);
+  });
+  await hoverRow(/^Claude/);
+  const work = within(screen.getByRole("region", { name: "Claude" })).getByRole("button", { name: /회사/ });
+  expect(within(work).getByText("로그인 만료")).toBeTruthy();
+  expect(within(work).queryByText(/%/)).toBeNull();
+});
+
 test("default_account_not_clickable", async () => {
   await mount();
   await hoverRow(/^Claude/);

@@ -88,14 +88,15 @@ export function usePlans(view: CredentialsView | null | undefined, onlyDefault =
   return { plans, refresh };
 }
 
-type SubState = "loading" | "ok" | "login" | "unknown";
+type SubState = "loading" | "ok" | "login" | "expired" | "unknown";
 const subState = (p: PlanUsage | null | undefined): SubState =>
-  p === undefined ? "loading" : p?.state === "ok" ? "ok" : p?.state === "not_logged_in" ? "login" : "unknown";
-const STATE_TEXT: Record<SubState, Key> = { loading: "common.loading", ok: "settings.connected", login: "settings.loginNeeded", unknown: "settings.unknown" };
+  p === undefined ? "loading" : p?.state === "ok" ? "ok" : p?.state === "not_logged_in" ? "login" : p?.state === "expired" ? "expired" : "unknown";
+const STATE_TEXT: Record<SubState, Key> = { loading: "common.loading", ok: "settings.connected", login: "settings.loginNeeded", expired: "settings.loginExpired", unknown: "settings.unknown" };
 const STATE_CLASS: Record<SubState, string> = {
   loading: "bg-neutral-100 text-neutral-500",
   ok: "bg-node-green/10 text-node-green",
   login: "bg-amber-100 text-amber-800",
+  expired: "bg-amber-100 text-amber-800",
   unknown: "bg-neutral-100 text-neutral-600",
 };
 export const subStateText = (p: PlanUsage | null | undefined) => t(STATE_TEXT[subState(p)]);
@@ -317,6 +318,7 @@ function PlanInfo({ plan, email, cmd }: { plan: PlanUsage | null | undefined; em
           <CopyButton text={cmd} label={t("settings.copyCmd")} />
         </div>
       )}
+      {state === "expired" && <p className="typo-caption1_regular text-neutral-600">{t("settings.expiredHint")}</p>}
     </>
   );
 }
