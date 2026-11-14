@@ -129,7 +129,7 @@ test("ai_node_credential_dropdown_saves_id_or_omits_for_default", () => {
   expect(within(screen.getByRole("listbox")).getAllByRole("presentation").map((h) => h.textContent)).toEqual(["구독", "API 키"]);
   fireEvent.click(screen.getByRole("button", { name: /^AI 공급원/ }));
   // 공급원 옆에 로고
-  expect(screen.getByTestId("field-provider").querySelector('[data-logo="anthropic"]')).not.toBeNull();
+  expect(screen.getByTestId("field-provider").querySelector('[data-logo="claude"]')).not.toBeNull();
   choose(/^키·계정/, "회사");
   expect(onChange.mock.lastCall![0].config.credential).toBe("0123abcd");
   r.unmount();

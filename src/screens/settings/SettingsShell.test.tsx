@@ -650,8 +650,10 @@ test("provider_logos_render", async () => {
   await renderShell("ai");
   const ai = document.getElementById("settings-ai")!;
   const logos = [...ai.querySelectorAll("article [data-logo]")].map((e) => e.getAttribute("data-logo"));
-  expect(logos).toEqual(["claude", "openai", "gemini"]);
-  expect(ai.querySelectorAll("article [data-logo] svg path").length).toBe(3);
+  // Google 박스는 Antigravity 로고(그라데이션이라 img).
+  expect(logos).toEqual(["claude", "openai", "antigravity"]);
+  expect(ai.querySelectorAll("article [data-logo] svg path").length).toBe(2);
+  expect(ai.querySelectorAll('article [data-logo="antigravity"] img').length).toBe(1);
 });
 
 test("settings_search_matches_section_desc_and_button", async () => {

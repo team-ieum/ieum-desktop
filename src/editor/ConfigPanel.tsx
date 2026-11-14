@@ -33,7 +33,7 @@ interface FieldProps {
   ai?: { model: string; effort: string };
 }
 
-const PROVIDER_LOGO: Record<string, LogoId> = { "cli:claude": "claude", "cli:codex": "openai", "cli:agy": "antigravity", "api:anthropic": "anthropic", "api:openai": "openai", "api:gemini": "gemini" };
+const PROVIDER_LOGO: Record<string, LogoId> = { "cli:claude": "claude", "cli:codex": "openai", "cli:agy": "antigravity", "api:anthropic": "claude", "api:openai": "openai", "api:gemini": "antigravity" };
 
 const SELECT_TRIGGER = `${INPUT} flex items-center justify-between gap-2 text-left hover:bg-neutral-50 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400`;
 

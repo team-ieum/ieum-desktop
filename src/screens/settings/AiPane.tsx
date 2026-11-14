@@ -20,9 +20,9 @@ import { GHOST, matches, QueryContext } from "./Row";
 // 키 받기 주소는 Rust 고정값(open_provider_console) — 화면은 주소를 들고 있지 않는다.
 export const PROVIDERS: { id: ApiProvider; name: string; logo: LogoId }[] = [
   // 화면 이름은 Claude(구독과 같은 회사 이름) — id·로고는 그대로 anthropic.
-  { id: "anthropic", name: "Claude", logo: "anthropic" },
+  { id: "anthropic", name: "Claude", logo: "claude" },
   { id: "openai", name: "OpenAI", logo: "openai" },
-  { id: "gemini", name: "Gemini", logo: "gemini" },
+  { id: "gemini", name: "Gemini", logo: "antigravity" },
 ];
 
 export type SubId = "claude" | "codex" | "antigravity";
@@ -37,7 +37,7 @@ export type BoxId = "claude" | "openai" | "google";
 export const BOXES: { id: BoxId; name: string; logo: LogoId; sub: (typeof SUBS)[number]; api: (typeof PROVIDERS)[number] }[] = [
   { id: "claude", name: "Claude", logo: "claude", sub: SUBS[0], api: PROVIDERS[0] },
   { id: "openai", name: "OpenAI", logo: "openai", sub: SUBS[1], api: PROVIDERS[1] },
-  { id: "google", name: "Google", logo: "gemini", sub: SUBS[2], api: PROVIDERS[2] },
+  { id: "google", name: "Google", logo: "antigravity", sub: SUBS[2], api: PROVIDERS[2] },
 ];
 
 export const cliName = (id: string) => (id === "claude" ? t("choice.provider.cli:claude") : id);
