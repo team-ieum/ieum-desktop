@@ -276,14 +276,14 @@ async fn deleting_workflow_revokes_its_sessions() {
         t.path().to_path_buf(),
     );
     let s = ch.session(&env.active, &id).await.unwrap();
-    // 세션 없이 남은 작업 폴더(앱이 도중에 꺼짐)도 워크플로우와 함께 지운다.
+    // 세션 없이 남은 작업 폴더 내용(앱이 도중에 꺼짐)도 비운다. 폴더는 남긴다.
     let work = env.dir("work");
     fs::create_dir_all(work.join(&id)).unwrap();
-    fs::write(work.join(&id).join("note.txt"), "남은 파일").unwrap();
+    fs::write(work.join("note.txt"), "남은 파일").unwrap();
     delete_workflow_and_sessions(&env.active, &ch, &Terms::default(), &work, &id)
         .await
         .unwrap();
-    assert!(!work.join(&id).exists() && work.is_dir());
+    assert!(work.is_dir() && fs::read_dir(&work).unwrap().next().is_none());
     assert!(sup.store().get_workflow(&id).is_err());
     assert_eq!(
         ask(&s.socket, &req(&s.token, json!({"op": "status"})))
@@ -384,17 +384,16 @@ async fn gate_from_channel_gives_env_and_revokes_when_session_ends() {
             .await
             .is_err()
     );
-    assert!(!work.join(unsaved).exists()); // 거절된 세션의 작업 폴더가 남지 않는다
 
-    // 삭제: 터미널이 남지 않는다.
+    // 삭제: 터미널이 남지 않고 작업 폴더는 비워진다.
     launch(&env, &terms, &gate, &id).await;
     assert!(terms.running(&id).is_some());
-    assert!(work.join(&id).is_dir());
+    fs::write(work.join("note.txt"), "CLI가 남긴 파일").unwrap();
     delete_workflow_and_sessions(&env.active, &ch, &terms, &work, &id)
         .await
         .unwrap();
     assert!(terms.running(&id).is_none());
-    assert!(!work.join(&id).exists());
+    assert!(work.is_dir() && fs::read_dir(&work).unwrap().next().is_none());
 
     // 로그아웃: 터미널도 토큰도 소켓도 남지 않는다.
     let id2 = save();

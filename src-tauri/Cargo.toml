@@ -21,7 +21,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 async-trait = "0.1.92"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# preserve_order — 모델 드롭다운이 가격표의 순서를 따른다.
+serde_json = { version = "1", features = ["preserve_order"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 ieum-engine = { version = "0.1.0", path = "../crates/ieum-engine" }
 ieum-local = { version = "0.1.0", path = "../crates/ieum-local" }

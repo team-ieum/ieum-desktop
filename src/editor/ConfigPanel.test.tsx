@@ -1,12 +1,20 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
-import type { CredentialsView, Workflow, WfNode } from "../api";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { api, type CredentialsView, type Workflow, type WfNode } from "../api";
 import { setLang } from "../i18n";
 import { useCredentials } from "../stores/credentials";
 import { ConfigPanel } from "./ConfigPanel";
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.spyOn(api, "listModels").mockImplementation(async (p) =>
+    p === "api:anthropic" ? [{ id: "claude-haiku-5-5", label: "claude-haiku-5-5" }, { id: "claude-opus-5-5", label: "claude-opus-5-5" }] : [],
+  );
+});
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 test("config_panel_renders_choices_and_ref_fields", async () => {
   setLang("ko");
@@ -144,6 +152,65 @@ test("agy_provider_cannot_send_file_content", () => {
   expect(screen.getByText("Antigravity (구독)는 파일 내용을 보낼 수 없어요. 이름·확장자·크기만 가요.")).toBeTruthy();
   expect((screen.getByLabelText(/키·계정/) as HTMLSelectElement).options.length).toBe(1);
   useCredentials.setState({ view: null });
+});
+
+test("ai_node_model_is_a_dropdown_of_the_provider_models", async () => {
+  setLang("ko");
+  useCredentials.setState({ view: VIEW });
+  const onChange = vi.fn();
+  const node = aiNode({});
+  const r = render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
+  const model = await screen.findByRole("button", { name: "모델: 기본 모델" });
+  expect(screen.queryByRole("textbox", { name: /모델/ })).toBeNull(); // 직접 입력 칸 없음
+  fireEvent.click(model);
+  const names = within(screen.getByRole("listbox", { name: "모델" }))
+    .getAllByRole("option")
+    .map((o) => o.textContent);
+  expect(names).toEqual(["기본 모델", "claude-haiku-5-5", "claude-opus-5-5"]);
+  fireEvent.click(screen.getByRole("option", { name: "claude-opus-5-5" }));
+  expect(onChange.mock.lastCall![0].config.model).toBe("claude-opus-5-5");
+  r.unmount();
+
+  // 목록에 없는 저장값은 그대로 보이고 바뀌지 않는다. "기본 모델"이면 칸을 뺀다.
+  const old = aiNode({ model: "claude-old-1" });
+  onChange.mockClear();
+  render(<ConfigPanel node={old} workflow={{ nodes: [old], edges: [] }} onChange={onChange} />);
+  const kept = await screen.findByRole("button", { name: /^모델: claude-old-1 \(목록에 없음\)$/ }); // act 밖에서 찾는다
+  await act(async () => fireEvent.click(kept));
+  expect(onChange).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("option", { name: "기본 모델" }));
+  expect("model" in onChange.mock.lastCall![0].config).toBe(false);
+  useCredentials.setState({ view: null });
+});
+
+test("openai_node_without_model_asks_to_pick_one_instead_of_showing_the_first", async () => {
+  setLang("ko");
+  vi.mocked(api.listModels).mockResolvedValue([
+    { id: "gpt-6-astra", label: "GPT-6 Astra" },
+    { id: "gpt-6-luna", label: "GPT-6 Luna" },
+  ]);
+  const onChange = vi.fn();
+  const node = aiNode({ provider: "api:openai" });
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
+  // 저장본에 모델이 없다 — 첫 모델을 고른 것처럼 보이면 안 된다.
+  const model = await screen.findByRole("button", { name: "모델: 모델을 고르세요" });
+  fireEvent.click(model);
+  const names = within(screen.getByRole("listbox", { name: "모델" }))
+    .getAllByRole("option")
+    .map((o) => o.textContent);
+  expect(names).toEqual(["모델을 고르세요", "GPT-6 Astra", "GPT-6 Luna"]); // "기본 모델"은 없다
+  expect(onChange).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("option", { name: "GPT-6 Luna" }));
+  expect(onChange.mock.lastCall![0].config.model).toBe("gpt-6-luna"); // 저장은 원래 id
+});
+
+test("ai_node_model_list_failure_is_shown_not_swallowed", async () => {
+  setLang("ko");
+  vi.mocked(api.listModels).mockRejectedValue("codex 없음");
+  const node = aiNode({ provider: "cli:codex" });
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={() => {}} />);
+  expect((await screen.findByRole("alert")).textContent).toContain("모델 목록을 읽지 못했어요");
+  expect(screen.getByRole("button", { name: "모델: 기본 모델" })).toBeTruthy();
 });
 
 test("ai_node_shows_missing_credential_warning", () => {

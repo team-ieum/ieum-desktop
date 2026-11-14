@@ -1,15 +1,102 @@
+import { Info, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, type TermTool } from "../../api";
+import { api, type TermCliState, type TermTool, type TermTools } from "../../api";
+import { type LogoId, ProviderLogo } from "../../assets/providers";
 import { t } from "../../i18n";
 
 /** localStorage — 마지막으로 고른 CLI. */
 export const TOOL_KEY = "ieum.assistant.tool";
 // 고유명사라 번역하지 않는다.
 const TOOL_NAME: Record<TermTool, string> = { claude: "Claude Code", codex: "Codex", agy: "Antigravity" };
+const TOOL_LOGO: Record<TermTool, LogoId> = { claude: "claude", codex: "openai", agy: "antigravity" };
+/** 고를 수 있는 상태. */
+const USABLE: TermCliState[] = ["ready", "unknown"];
+const STATE_CLASS: Record<TermCliState, string> = {
+  ready: "bg-[#e5f3ec] text-[#287357]",
+  unknown: "bg-main-light-blue text-main-deep-blue",
+  notInstalled: "bg-[#eef1f3] text-[#5a6975]",
+  loggedOut: "bg-[#fff4e0] text-[#8a5a12]",
+};
+/** 스킬 설치 알림이 떠 있는 시간. */
+export const NOTE_MS = 6000;
+/** xterm 색 — 패널의 남색에 맞춘 어두운 바탕. */
+const XTERM_THEME = {
+  background: "#0f1b26",
+  foreground: "#e3ebf2",
+  cursor: "#5cc8ee",
+  cursorAccent: "#0f1b26",
+  selectionBackground: "#29537c99",
+};
 
 /** 지금 화면에 붙어 있는 xterm 한 벌. */
 interface Live {
   dispose(): void;
+}
+
+function lastTool(): string | null {
+  try {
+    return localStorage.getItem(TOOL_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** 시작 전 — CLI 카드. 쓸 수 있는 것만 누를 수 있고, 누르면 바로 시작한다. */
+function Picker({ clis, last, onPick }: { clis: TermTools["clis"]; last: string | null; onPick: (tool: TermTool) => void }) {
+  const usable = clis.filter((c) => USABLE.includes(c.state));
+  // 지난번 것을 강조한다. 지난번 것을 못 쓰면 쓸 수 있는 첫 번째.
+  const hot = usable.find((c) => c.tool === last)?.tool ?? usable[0]?.tool;
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-0.5">
+        <p className="typo-body2_semibold text-main-deep-blue">{t("assistant.terminal.pick")}</p>
+        <p className="typo-caption1_medium text-neutral-500">{t("assistant.terminal.pickHint")}</p>
+      </div>
+      <ul className="flex flex-col gap-2">
+        {clis.map(({ tool, state }) => {
+          const ok = USABLE.includes(state);
+          return (
+            <li key={tool}>
+              <button
+                type="button"
+                disabled={!ok}
+                onClick={() => onPick(tool)}
+                aria-label={t("assistant.terminal.startWith").replace("{name}", TOOL_NAME[tool])}
+                aria-describedby={`cli-${tool}-state`}
+                className={`flex w-full items-start gap-3 rounded-xl border bg-white p-3 text-left transition-colors ${
+                  !ok
+                    ? "cursor-not-allowed border-neutral-200 opacity-60"
+                    : tool === hot
+                      ? "cursor-pointer border-main-blue shadow-[0_0_0_3px_rgba(0,123,167,.12)] hover:bg-main-light-blue/30"
+                      : "cursor-pointer border-[#d4e4ec] hover:border-main-blue hover:bg-main-light-blue/30"
+                }`}
+              >
+                <ProviderLogo id={TOOL_LOGO[tool]} size={34} />
+                <span className="flex min-w-0 flex-1 flex-col gap-1">
+                  <span className="flex items-center gap-1.5">
+                    <span className="typo-body3_semibold text-neutral-900">{TOOL_NAME[tool]}</span>
+                    {ok && tool === last && (
+                      <span className="rounded-full bg-main-blue px-1.5 py-px text-[10px] font-semibold text-white">{t("assistant.terminal.last")}</span>
+                    )}
+                    <span id={`cli-${tool}-state`} className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATE_CLASS[state]}`}>
+                      {t(`assistant.terminal.state.${state}`)}
+                    </span>
+                  </span>
+                  {tool === "agy" && ok && (
+                    <span className="flex items-start gap-1 typo-caption2_medium text-neutral-500">
+                      <Info size={12} className="mt-px shrink-0" aria-hidden="true" />
+                      {t("assistant.terminal.agyNote")}
+                    </span>
+                  )}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {usable.length === 0 && <p className="typo-caption1_medium text-neutral-600">{t("assistant.terminal.none")}</p>}
+    </div>
+  );
 }
 
 /**
@@ -17,7 +104,7 @@ interface Live {
  * 끝나는 때는 [세션 종료]·CLI가 스스로 끝남·워크플로우 삭제·로그아웃·앱 종료뿐이다.
  */
 export function TerminalSlot({ workflowId, visible }: { workflowId: string; visible: boolean }) {
-  const [tools, setTools] = useState<TermTool[] | null>(null);
+  const [clis, setClis] = useState<TermTools["clis"] | null>(null);
   const [tool, setTool] = useState<TermTool | null>(null);
   const [live, setLive] = useState(false);
   const [ended, setEnded] = useState(false);
@@ -37,6 +124,7 @@ export function TerminalSlot({ workflowId, visible }: { workflowId: string; visi
 
   /** 세션을 띄우거나(없으면) 살아 있는 세션에 붙는다 — 어느 쪽인지는 Rust가 정한다. */
   const open = async (which: TermTool) => {
+    setTool(which);
     setLive(true);
     setEnded(false);
     setError(null);
@@ -55,7 +143,13 @@ export function TerminalSlot({ workflowId, visible }: { workflowId: string; visi
         import("@xterm/xterm/css/xterm.css"),
       ]);
       if (gone.current || !el.current) return;
-      const x = new Terminal({ fontFamily: "ui-monospace, Menlo, monospace", fontSize: 13 });
+      const x = new Terminal({
+        fontFamily: '"SF Mono", ui-monospace, Menlo, monospace',
+        fontSize: 13,
+        lineHeight: 1.25,
+        theme: XTERM_THEME,
+        cursorBlink: true,
+      });
       term.current = {
         dispose: () => {
           observer?.disconnect();
@@ -86,7 +180,14 @@ export function TerminalSlot({ workflowId, visible }: { workflowId: string; visi
     }
   };
 
-  // 처음 보일 때 한 번: 쓸 수 있는 CLI를 묻고, 살아 있는 세션이 있으면 묻지 않고 붙는다.
+  // 스킬 설치 알림은 잠깐만 보인다.
+  useEffect(() => {
+    if (!skillNote) return;
+    const timer = setTimeout(() => setSkillNote(false), NOTE_MS);
+    return () => clearTimeout(timer);
+  }, [skillNote]);
+
+  // 처음 보일 때 한 번: CLI 상태를 묻고, 살아 있는 세션이 있으면 묻지 않고 붙는다.
   useEffect(() => {
     if (!visible || asked.current) return;
     asked.current = true;
@@ -94,19 +195,12 @@ export function TerminalSlot({ workflowId, visible }: { workflowId: string; visi
       .termTools(workflowId)
       .then((r) => {
         if (gone.current) return;
-        setTools(r.tools);
-        let last: string | null = null;
-        try {
-          last = localStorage.getItem(TOOL_KEY);
-        } catch {
-          // 기억을 못 읽으면 첫 번째를 고른다.
-        }
-        setTool(r.running ?? r.tools.find((x) => x === last) ?? r.tools[0] ?? null);
+        setClis(r.clis);
         if (r.running) void open(r.running);
       })
       .catch((e) => {
         if (gone.current) return;
-        setTools([]);
+        setClis([]);
         setError(String(e));
       });
   }, [visible, workflowId]);
@@ -123,67 +217,60 @@ export function TerminalSlot({ workflowId, visible }: { workflowId: string; visi
     };
   }, []);
 
-  const start = () => {
-    if (!tool) return;
+  const start = (which: TermTool) => {
     try {
-      localStorage.setItem(TOOL_KEY, tool);
+      localStorage.setItem(TOOL_KEY, which);
     } catch {
       // 저장하지 못해도 이번 선택은 그대로 쓴다.
     }
-    void open(tool);
+    void open(which);
   };
 
   return (
-    <div data-slot="terminal" hidden={!visible} className="flex min-h-0 flex-1 flex-col">
+    <div data-slot="terminal" hidden={!visible} className="flex min-h-0 flex-1 flex-col bg-[#f7fafd]">
       {live && tool && (
-        <div className="flex items-center gap-2 border-b border-neutral-200 px-4 py-2">
-          <span className="min-w-0 flex-1 truncate typo-caption1_semibold text-neutral-700">{TOOL_NAME[tool]}</span>
+        <div className="flex shrink-0 items-center gap-2 border-b border-[#e3eef4] bg-white px-3 py-1.5">
+          <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full border border-[#d4e4ec] bg-white py-0.5 pr-2.5 pl-1 typo-caption1_semibold text-neutral-800">
+            <ProviderLogo id={TOOL_LOGO[tool]} size={18} />
+            <span className="truncate">{TOOL_NAME[tool]}</span>
+            <span className="size-1.5 shrink-0 rounded-full bg-[#2f9e6e]" aria-hidden="true" />
+          </span>
           <button
             type="button"
             onClick={() => void api.termKill(workflowId).catch(() => {})}
-            className="cursor-pointer rounded-lg border border-neutral-200 px-2.5 py-1 typo-caption1_semibold text-neutral-700 hover:bg-neutral-100"
+            className="ml-auto cursor-pointer rounded-md px-2 py-1 typo-caption2_semibold text-neutral-500 transition-colors hover:bg-danger-100 hover:text-danger-700"
           >
             {t("assistant.terminal.stop")}
           </button>
         </div>
       )}
-      {skillNote && (
-        <p className="px-4 py-2 typo-caption1_medium text-neutral-500">{t("assistant.terminal.skillInstalled")}</p>
-      )}
-      {!live && tools && (
-        <div className="flex flex-col gap-3 p-5">
-          {ended && <p className="typo-body3_medium text-neutral-500">{t("assistant.terminal.ended")}</p>}
+      {!live && clis && (
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+          {ended && <p className="rounded-xl bg-white px-3 py-2 typo-caption1_medium text-neutral-600 ring-1 ring-[#e3eef4]">{t("assistant.terminal.ended")}</p>}
           {error && (
-            <p role="alert" className="typo-body3_medium text-danger-700">
+            <p role="alert" className="rounded-xl border border-danger-300 bg-danger-100 px-3 py-2 typo-caption1_medium text-danger-700">
               {t("assistant.terminal.failed")} {error}
             </p>
           )}
-          {tools.length > 0 && tool && (
-            <div className="flex items-center gap-2">
-              <select
-                aria-label={t("assistant.terminal.tool")}
-                value={tool}
-                onChange={(e) => setTool(e.target.value as TermTool)}
-                className="min-w-0 flex-1 rounded-[10px] border border-neutral-200 bg-white px-3 py-2 typo-body3_medium text-neutral-900"
-              >
-                {tools.map((x) => (
-                  <option key={x} value={x}>
-                    {TOOL_NAME[x]}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={start}
-                className="cursor-pointer rounded-[10px] bg-main-blue px-4 py-2 typo-body3_semibold text-white hover:opacity-90"
-              >
-                {t("assistant.terminal.start")}
-              </button>
-            </div>
-          )}
+          <Picker clis={clis} last={lastTool()} onPick={start} />
         </div>
       )}
-      <div ref={el} hidden={!live} className="min-h-0 flex-1 overflow-hidden bg-black p-2" />
+      <div hidden={!live} className="relative m-3 mt-2.5 min-h-0 flex-1 overflow-hidden rounded-xl p-2.5 ring-1 ring-black/10" style={{ background: XTERM_THEME.background }}>
+        {skillNote && (
+          <div role="status" className="absolute top-2 right-2 left-2 z-10 flex items-center gap-2 rounded-lg bg-white/95 px-3 py-2 typo-caption1_medium text-neutral-700 shadow-lg">
+            <span className="min-w-0 flex-1">{t("assistant.terminal.skillInstalled")}</span>
+            <button
+              type="button"
+              onClick={() => setSkillNote(false)}
+              aria-label={t("assistant.terminal.dismiss")}
+              className="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-neutral-500 hover:bg-neutral-100"
+            >
+              <X size={12} aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        <div ref={el} className="h-full w-full" />
+      </div>
     </div>
   );
 }

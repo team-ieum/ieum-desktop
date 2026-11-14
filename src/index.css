@@ -30,3 +30,24 @@ body {
 		animation: none;
 	}
 }
+
+/* 채팅 응답 대기 점(웹 TypingIndicator의 framer-motion 대신): 차례로 떠올랐다 내려온다. */
+@keyframes ieum-dot {
+	0%,
+	100% {
+		opacity: 0.3;
+		transform: translateY(0);
+	}
+	50% {
+		opacity: 1;
+		transform: translateY(-4px);
+	}
+}
+.ieum-dot {
+	animation: ieum-dot 1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.ieum-dot {
+		animation: none;
+	}
+}

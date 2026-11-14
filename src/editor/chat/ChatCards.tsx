@@ -1,10 +1,15 @@
+import { FlaskConical, Folder, FolderOpen } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type StoredRun } from "../../api";
 import { type Key, t } from "../../i18n";
 
-export const CARD = "rounded-xl border border-neutral-200 bg-white px-3 py-2.5 text-xs max-w-[280px]";
+export const CARD =
+  "rounded-xl border border-[#cde9f4] bg-white px-3 py-2.5 text-xs max-w-[280px] shadow-[0_4px_14px_-10px_rgba(41,83,124,.35)]";
 const CARD_BUTTON =
-  "cursor-pointer rounded-xl border border-main-blue px-3 py-2 text-xs font-semibold text-main-blue hover:bg-main-blue/5 disabled:opacity-40";
+  "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-main-blue px-3 py-2 text-xs font-semibold text-main-blue transition-colors hover:bg-main-blue/5 disabled:opacity-40";
+/** 상태 점 색 — 상태 글이 같이 있어 색만으로 전하지 않는다. */
+const DOT: Record<string, string> = { succeeded: "bg-[#2f9e6e]", success: "bg-[#2f9e6e]", failed: "bg-[#d0573b]" };
+const Dot = ({ status }: { status: string }) => <span aria-hidden="true" className={`size-2 shrink-0 rounded-full ${DOT[status] ?? "bg-neutral-400"}`} />;
 
 /** 실행 기록·카드의 상태 글자 → 화면 글. 모르는 값은 그대로 보인다. */
 const STATUS: Record<string, Key> = {
@@ -26,12 +31,16 @@ export function TestCard({ runId, status, nodeNames }: { runId: string; status: 
   const skipped = run?.undo?.skipped ?? [];
   return (
     <div role="group" aria-label={t("chat.card.test")} className={`${CARD} flex flex-col gap-1.5 text-neutral-700`}>
-      <p className="font-semibold text-neutral-900">
+      <p className="flex items-center gap-1.5 font-semibold text-main-deep-blue">
+        <FlaskConical size={13} aria-hidden="true" />
         {t("chat.card.test")} · {statusText(status)}
       </p>
       {nodes.map(([id, n]) => (
-        <div key={id} className="flex flex-col gap-0.5 border-t border-neutral-100 pt-1.5">
-          <p className="font-semibold">{nodeNames?.[id] ? `${nodeNames[id]} · ${statusText(n.status)}` : statusText(n.status)}</p>
+        <div key={id} className="flex flex-col gap-0.5 border-t border-[#e8f1f5] pt-1.5">
+          <p className="flex items-center gap-1.5 font-semibold">
+            <Dot status={n.status} />
+            <span>{nodeNames?.[id] ? `${nodeNames[id]} · ${statusText(n.status)}` : statusText(n.status)}</span>
+          </p>
           {Object.entries(n.output ?? {}).map(([k, v]) => (
             <p key={k} className="break-all">
               {k}: {shown(v)}
@@ -41,7 +50,7 @@ export function TestCard({ runId, status, nodeNames }: { runId: string; status: 
         </div>
       ))}
       {skipped.length > 0 && (
-        <div className="flex flex-col gap-0.5 border-t border-neutral-100 pt-1.5">
+        <div className="flex flex-col gap-0.5 border-t border-[#e8f1f5] pt-1.5">
           <p className="font-semibold text-danger-700">{t("chat.card.undoFailed")}</p>
           {skipped.map(([op], i) => (
             <p key={i} className="break-all">
@@ -88,11 +97,15 @@ export function PickFolderCard({
   };
   return (
     <div className={`${CARD} flex flex-col gap-2 text-neutral-700`}>
-      <p>{t("chat.card.pickFolder")}</p>
+      <p className="font-semibold text-main-deep-blue">{t("chat.card.pickFolder")}</p>
       {path !== null ? (
-        <p className="break-all font-semibold text-neutral-900">{path}</p>
+        <p className="flex items-start gap-1.5 break-all rounded-lg bg-main-light-blue/50 px-2 py-1.5 font-semibold text-neutral-900">
+          <Folder size={13} className="mt-px shrink-0 text-main-blue" aria-hidden="true" />
+          {path}
+        </p>
       ) : (
         <button type="button" onClick={pick} disabled={disabled || picking} className={CARD_BUTTON}>
+          <FolderOpen size={13} aria-hidden="true" />
           {t("chat.card.pickButton")}
         </button>
       )}

@@ -70,6 +70,7 @@
     "allow-term-tools",
     "allow-chat-send",
     "allow-chat-pick-folder",
+    "allow-list-models",
     "dialog:allow-open"
   ]
 }

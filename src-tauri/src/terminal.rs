@@ -76,6 +76,9 @@ pub fn launch_line(tool: Tool, l: &Launch) -> String {
         line += &format!("export {var}={}; ", sh_quote(&dir.to_string_lossy()));
     }
     let prompt = sh_quote(FIRST_PROMPT);
+    // 반향을 끈다 — agy는 원시 모드로 바꾸기 전에 단말 질의(`ESC[c`)를 보내, 화면의 답(`ESC[?1;2c`)이
+    // 반향 모드에 닿으면 `^[[?1;2c`로 찍힌다. CLI는 어차피 원시 모드로 바꾼다.
+    line += "stty -echo; ";
     // `exec` — SIGHUP이 셸이 아니라 CLI에 바로 간다.
     line += &match tool {
         // 첫 지시가 `--allowedTools`보다 앞: 그 옵션은 여러 값을 받아 뒤에 오는 글을 삼킨다.
@@ -111,6 +114,8 @@ pub const SCROLLBACK: usize = 256 * 1024;
 
 struct Session {
     tool: Tool,
+    /// 작업 폴더 — 같은 폴더를 쓰는 세션이 남아 있으면 비우지 않는다.
+    cwd: PathBuf,
     /// 같은 워크플로우에 새로 띄운 세션을 옛 읽기 스레드가 지우지 않게.
     generation: u64,
     master: Box<dyn MasterPty + Send>,
@@ -177,8 +182,13 @@ impl Terms {
         let pair = native_pty_system()
             .openpty(size(s.cols, s.rows))
             .map_err(|e| format!("터미널을 열지 못했어요: {e}"))?;
-        // 부모 환경은 그대로 물려받는다(`CLAUDE_CONFIG_DIR` 등을 지우지 않는다).
+        // 부모 환경은 물려받되(`CLAUDE_CONFIG_DIR` 등은 그대로) 앱을 띄운 CLI 세션의 표식은 뺀다.
         let mut cmd = CommandBuilder::new(&s.program);
+        for (k, _) in std::env::vars_os() {
+            if k.to_str().is_some_and(session_marker) {
+                cmd.env_remove(&k);
+            }
+        }
         cmd.args(&s.args);
         cmd.cwd(&s.cwd);
         cmd.env("TERM", "xterm-256color");
@@ -205,6 +215,7 @@ impl Terms {
             workflow_id.to_string(),
             Session {
                 tool,
+                cwd: s.cwd.clone(),
                 generation,
                 master: pair.master,
                 writer: Arc::new(Mutex::new(writer)),
@@ -287,6 +298,35 @@ impl Terms {
         let all: Vec<Session> = lock(&self.map).drain().map(|(_, s)| s).collect();
         all.into_iter().for_each(end);
     }
+
+    /// 작업 폴더 `dir`을 쓰는 세션이 없을 때만 그 안의 내용을 비운다(폴더는 남긴다).
+    pub fn clear_work_if_idle(&self, dir: &Path) {
+        clear_if_idle(&self.map, dir);
+    }
+}
+
+/// 맵을 쥔 채 비운다 — 그사이 같은 폴더에 새 세션이 들어오지 못한다.
+fn clear_if_idle(map: &Map, dir: &Path) {
+    let map = lock(map);
+    if !map.values().any(|s| s.cwd == dir) {
+        clear_work(dir);
+    }
+}
+
+/// 앱을 띄운 CLI가 자식에게 남기는 세션 표식 — 터미널의 CLI가 자기를 하위 세션으로 착각한다.
+/// Claude Code: `CLAUDECODE`, `CLAUDE_CODE_*`. Codex·agy: 자식 셸에 넣는 것(바이너리 문자열로 확인).
+pub fn session_marker(key: &str) -> bool {
+    key == "CLAUDECODE"
+        || key.starts_with("CLAUDE_CODE_")
+        || matches!(
+            key,
+            "CODEX_SANDBOX"
+                | "CODEX_SANDBOX_NETWORK_DISABLED"
+                | "CODEX_THREAD_ID"
+                | "CODEX_TOOL_CALL_ID"
+                | "ANTIGRAVITY_AGENT"
+                | "ANTIGRAVITY_CONVERSATION_ID"
+        )
 }
 
 const NO_SESSION: &str = "열려 있는 터미널이 없어요.";
@@ -336,19 +376,31 @@ pub struct Prepared {
     pub token: Option<String>,
 }
 
-/// 터미널 작업 폴더들의 자리: `<앱 캐시 폴더>/chat-work/<계정 키>`. 앱 데이터 폴더 밖이라
+/// 계정의 터미널 작업 폴더: `<앱 캐시 폴더>/chat-work/<계정 키>`. 앱 데이터 폴더 밖이라
 /// 터미널의 CLI가 상대 경로로 실행 기록·워크플로우 파일에 닿지 못한다.
+/// 폴더는 늘 같은 자리에 남는다 — CLI의 "이 폴더를 신뢰하나요?"를 한 번만 묻게.
 pub fn work_root(cache_dir: &Path, account_key: &str) -> PathBuf {
     cache_dir.join("chat-work").join(account_key)
 }
 
-/// 세션 전용 작업 폴더를 그 안의 파일째 지운다(없으면 그대로).
-pub fn remove_work(dir: &Path) {
-    match std::fs::remove_dir_all(dir) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-            eprintln!("[ieum] 터미널 작업 폴더를 지우지 못했어요: {e}");
+/// 작업 폴더 안의 내용만 지운다. 폴더 자체가 심볼릭 링크면 건드리지 않고,
+/// 안의 링크는 링크만 지운다(가리키는 곳은 그대로 — `remove_dir_all`도 링크를 따라가지 않는다).
+fn clear_work(dir: &Path) {
+    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return;
+    }
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        let r = match e.file_type() {
+            Ok(t) if t.is_dir() => std::fs::remove_dir_all(&p),
+            _ => std::fs::remove_file(&p),
+        };
+        if let Err(e) = r {
+            eprintln!(
+                "[ieum] 터미널 작업 폴더를 비우지 못했어요: {}: {e}",
+                p.display()
+            );
         }
-        _ => {}
     }
 }
 
@@ -362,8 +414,8 @@ pub fn clean_old_work(account_root: &Path) {
     let _ = std::fs::remove_dir(&old);
 }
 
-/// 작업 폴더(`work_root/<workflow_id>`, 본인 전용)를 만들고 실행 줄·환경을 조립한다. `work_root` = `work_root()`.
-/// 그 폴더는 이 세션의 것 — `start`가 세션이 끝날 때 지운다.
+/// 계정의 작업 폴더(`work_root`, 본인 전용)를 만들고 실행 줄·환경을 조립한다. `work_root` = `work_root()`.
+/// 폴더를 비우는 것은 `start`가 한다(그 계정에 살아 있는 세션이 없을 때만).
 /// 토큰은 프로세스 환경으로만 넘긴다 — 실행 줄에 실으면 `ps`에 보인다.
 pub async fn prepare(
     work_root: &Path,
@@ -389,15 +441,13 @@ pub async fn prepare(
         token = Some(g.token);
         bin_dir = Some(g.bin_dir);
     }
-    // 거절된 세션이 폴더를 남기지 않게 관문 뒤에 만든다. 이미 있던 폴더도 본인 전용으로 맞춘다.
-    let cwd = work_root.join(workflow_id);
-    let private = || std::fs::Permissions::from_mode(0o700);
+    // 거절된 세션이 폴더를 만들지 않게 관문 뒤에 만든다. 이미 있던 폴더도 본인 전용으로 맞춘다.
+    let cwd = work_root.to_path_buf();
     let made = std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(&cwd)
-        .and_then(|()| std::fs::set_permissions(work_root, private()))
-        .and_then(|()| std::fs::set_permissions(&cwd, private()));
+        .and_then(|()| std::fs::set_permissions(&cwd, std::fs::Permissions::from_mode(0o700)));
     if let Err(e) = made {
         if let Some(t) = &token {
             (gate.close)(t);
@@ -426,8 +476,8 @@ pub async fn prepare(
     })
 }
 
-/// 세션을 띄운다. 세션이 끝나면(스스로 끝남·kill) 토큰을 닫고 작업 폴더(`p.spawn.cwd`)를 지운 뒤 `on_exit`를 부른다.
-/// 띄우지 못해도 토큰은 닫고 작업 폴더는 지운다(그 워크플로우의 다른 세션이 쓰는 중이면 그대로 둔다).
+/// 세션을 띄운다. 작업 폴더(`p.spawn.cwd`)는 시작 전과 끝난 뒤(스스로 끝남·kill·띄우지 못함) 비운다 —
+/// 같은 폴더를 쓰는 다른 세션이 살아 있으면 그대로 둔다. 끝나면 토큰을 닫고 `on_exit`를 부른다.
 pub fn start(
     terms: &Terms,
     workflow_id: &str,
@@ -438,7 +488,9 @@ pub fn start(
     on_exit: Box<dyn FnOnce() + Send>,
 ) -> Result<(), String> {
     let (close, token) = (gate.close.clone(), p.token.clone());
-    let (work, work_at_end) = (p.spawn.cwd.clone(), p.spawn.cwd.clone());
+    let (work, map) = (p.spawn.cwd.clone(), terms.map.clone());
+    terms.clear_work_if_idle(&work);
+    let at_end = work.clone();
     let started = terms.spawn(
         workflow_id,
         tool,
@@ -448,7 +500,7 @@ pub fn start(
             if let Some(t) = &token {
                 close(t);
             }
-            remove_work(&work_at_end);
+            clear_if_idle(&map, &at_end);
             on_exit();
         }),
     );
@@ -456,16 +508,24 @@ pub fn start(
         if let Some(t) = &p.token {
             (gate.close)(t);
         }
-        if terms.running(workflow_id).is_none() {
-            remove_work(&work);
-        }
+        terms.clear_work_if_idle(&work);
     }
     started
 }
 
-/// 드롭다운에 보일 CLI인가 — 설치됐고 로그아웃 상태가 아니다. 확인 불가(`unavailable`)는 숨기지 않는다.
+/// 고를 수 있는 CLI인가 — 설치됐고 로그아웃 상태가 아니다. 확인 불가(`unavailable`)는 숨기지 않는다.
 pub fn usable(installed: bool, plan_state: &str) -> bool {
     installed && plan_state != "not_logged_in"
+}
+
+/// CLI 카드의 상태: `ready`(로그인됨) · `unknown`(확인 불가, 고를 수는 있음) · `notInstalled` · `loggedOut`.
+pub fn cli_state(installed: bool, plan_state: &str) -> &'static str {
+    match (installed, plan_state) {
+        (false, _) => "notInstalled",
+        (_, "not_logged_in") => "loggedOut",
+        (_, "ok") => "ready",
+        _ => "unknown",
+    }
 }
 
 // ── Tauri 명령 ──
@@ -482,8 +542,17 @@ pub struct TermStart {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TermTools {
+    /// 고를 수 있는 것(`usable`).
     pub tools: Vec<Tool>,
+    /// 세 CLI 모두, 카드 순서대로 상태(`cli_state`).
+    pub clis: Vec<TermCli>,
     pub running: Option<Tool>,
+}
+
+#[derive(Serialize)]
+pub struct TermCli {
+    pub tool: Tool,
+    pub state: &'static str,
 }
 
 /// 앱 기본 계정의 CLI 설정 폴더. 이 Mac의 로그인이거나 못 구하면 None(agy는 계정 폴더가 없다). 파일을 읽는다.
@@ -656,21 +725,33 @@ pub async fn term_tools(
     };
     let (claude, codex, agy) = tokio::join!(
         async {
-            usable(
+            (
                 installed(Tool::Claude).await,
                 sub("claude", claude_dir).await,
             )
         },
-        async { usable(installed(Tool::Codex).await, sub("codex", codex_dir).await) },
-        async { usable(installed(Tool::Agy).await, agy.get().await.state) },
+        async { (installed(Tool::Codex).await, sub("codex", codex_dir).await) },
+        async { (installed(Tool::Agy).await, agy.get().await.state) },
     );
-    let tools = [
+    let all = [
         (Tool::Claude, claude),
         (Tool::Codex, codex),
         (Tool::Agy, agy),
-    ]
-    .into_iter()
-    .filter_map(|(t, ok)| ok.then_some(t))
-    .collect();
-    Ok(TermTools { tools, running })
+    ];
+    let tools = all
+        .iter()
+        .filter_map(|&(t, (i, s))| usable(i, s).then_some(t))
+        .collect();
+    let clis = all
+        .iter()
+        .map(|&(tool, (i, s))| TermCli {
+            tool,
+            state: cli_state(i, s),
+        })
+        .collect();
+    Ok(TermTools {
+        tools,
+        clis,
+        running,
+    })
 }

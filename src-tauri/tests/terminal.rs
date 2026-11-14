@@ -19,10 +19,17 @@ fn launch_lines_are_exact() {
     let none = Launch::default();
     assert_eq!(
         launch_line(Tool::Claude, &none),
-        format!("exec claude {Q} --allowedTools 'Bash(ieum workflow *)'")
+        format!("stty -echo; exec claude {Q} --allowedTools 'Bash(ieum workflow *)'")
     );
-    assert_eq!(launch_line(Tool::Codex, &none), format!("exec codex {Q}"));
-    assert_eq!(launch_line(Tool::Agy, &none), format!("exec agy -i {Q}"));
+    assert_eq!(
+        launch_line(Tool::Codex, &none),
+        format!("stty -echo; exec codex {Q}")
+    );
+    // 반향 끄기 — agy가 원시 모드 전에 보낸 단말 질의의 답이 `^[[?1;2c`로 찍히지 않게.
+    assert_eq!(
+        launch_line(Tool::Agy, &none),
+        format!("stty -echo; exec agy -i {Q}")
+    );
 }
 
 #[test]
@@ -34,10 +41,13 @@ fn launch_line_exports_bin_and_account_dir() {
     assert_eq!(
         launch_line(Tool::Claude, &l),
         format!(
-            "export PATH='/App'\\''s/bin':\"$PATH\"; export CLAUDE_CONFIG_DIR='/a b/c1'; exec claude {Q} --allowedTools 'Bash(ieum workflow *)'"
+            "export PATH='/App'\\''s/bin':\"$PATH\"; export CLAUDE_CONFIG_DIR='/a b/c1'; stty -echo; exec claude {Q} --allowedTools 'Bash(ieum workflow *)'"
         )
     );
-    assert!(launch_line(Tool::Codex, &l).contains("; export CODEX_HOME='/a b/c1'; exec codex "));
+    assert!(
+        launch_line(Tool::Codex, &l)
+            .contains("; export CODEX_HOME='/a b/c1'; stty -echo; exec codex ")
+    );
     assert!(!launch_line(Tool::Agy, &l).contains("/a b/c1")); // agy는 계정 폴더 옵션이 없다
 }
 
@@ -391,12 +401,10 @@ async fn prepare_builds_workdir_env_and_line() {
     )
     .await
     .unwrap();
-    let work = t.path().join(W);
-    assert!(work.is_dir() && std::fs::read_dir(&work).unwrap().next().is_none()); // 전용 빈 폴더
-    assert_eq!(p.spawn.cwd, work);
+    assert_eq!(p.spawn.cwd, t.path()); // 계정의 고정 작업 폴더
     assert_eq!(p.spawn.args[0], "-lc");
     assert!(p.spawn.args[1].starts_with(
-        "export PATH='/App/bin':\"$PATH\"; export CLAUDE_CONFIG_DIR='/accts/claude/a1b2c3d4'; exec claude "
+        "export PATH='/App/bin':\"$PATH\"; export CLAUDE_CONFIG_DIR='/accts/claude/a1b2c3d4'; stty -echo; exec claude "
     ));
     assert_eq!(
         p.spawn.env,
@@ -420,7 +428,7 @@ async fn prepare_without_gate_still_opens_terminal() {
         .await
         .unwrap();
     assert!(p.spawn.env.is_empty() && p.token.is_none());
-    assert!(p.spawn.args[1].starts_with("exec agy -i "));
+    assert!(p.spawn.args[1].starts_with("stty -echo; exec agy -i "));
 }
 
 #[tokio::test]
@@ -443,6 +451,11 @@ fn only_installed_and_logged_in_tools_are_usable() {
     assert!(usable(true, "unavailable")); // 확인 불가(오프라인·키체인 거부)는 숨기지 않는다
     assert!(!usable(true, "not_logged_in"));
     assert!(!usable(false, "ok"));
+    use ieum_desktop_lib::terminal::cli_state;
+    assert_eq!(cli_state(true, "ok"), "ready");
+    assert_eq!(cli_state(true, "unavailable"), "unknown");
+    assert_eq!(cli_state(true, "not_logged_in"), "loggedOut");
+    assert_eq!(cli_state(false, "not_logged_in"), "notInstalled");
 }
 
 #[tokio::test]
@@ -487,48 +500,136 @@ async fn token_is_closed_when_the_terminal_cannot_start() {
 
 // ── 작업 폴더(앱 데이터 폴더 밖) ──
 
-/// 작업 폴더는 넘긴 폴더 바로 아래 `<workflowId>`, 본인 전용(0700)이다.
+/// 작업 폴더는 넘긴 계정 폴더 그 자체(워크플로우마다 같다), 본인 전용(0700)이다.
 #[tokio::test]
-async fn work_folder_is_private_and_directly_under_the_work_root() {
+async fn work_folder_is_private_and_fixed_per_account() {
     use std::os::unix::fs::PermissionsExt;
     let t = tempfile::tempdir().unwrap();
     let root = t.path().join("chat-work/acct");
     let p = prepare(&root, W, Tool::Agy, None, &no_gate(), 80, 24)
         .await
         .unwrap();
-    assert_eq!(p.spawn.cwd, root.join(W));
-    for d in [&root, &p.spawn.cwd] {
-        let mode = std::fs::metadata(d).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "{}", d.display());
-    }
-}
-
-/// 세션이 끝나면(띄우지 못해도) 작업 폴더를 그 안의 파일째 지운다. 옆 폴더는 그대로.
-#[tokio::test]
-async fn work_folder_removed_when_the_session_ends_or_cannot_start() {
-    let (t, terms) = (tempfile::tempdir().unwrap(), Terms::default());
-    let other = t.path().join("22222222-2222-4222-8222-222222222222");
-    std::fs::create_dir_all(&other).unwrap();
-    let g = no_gate();
-    let mut p = prepare(t.path(), W, Tool::Claude, None, &g, 80, 24)
+    let q = prepare(&root, W2, Tool::Claude, None, &no_gate(), 80, 24)
         .await
         .unwrap();
-    let work = p.spawn.cwd.clone();
-    std::fs::write(work.join("note.txt"), "CLI가 남긴 파일").unwrap();
+    assert_eq!((&p.spawn.cwd, &q.spawn.cwd), (&root, &root));
+    let mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700);
+}
+
+const W2: &str = "22222222-2222-4222-8222-222222222222";
+
+fn cat(mut p: ieum_desktop_lib::terminal::Prepared) -> ieum_desktop_lib::terminal::Prepared {
     p.spawn.program = "/bin/sh".into();
     p.spawn.args = vec!["-c".into(), "cat".into()];
-    start(&terms, W, Tool::Claude, p, &g, collect().0, Box::new(|| {})).unwrap();
-    assert!(work.is_dir());
-    terms.kill(W);
-    assert!(!work.exists());
-    assert!(other.is_dir());
+    p
+}
 
-    let mut p = prepare(t.path(), W, Tool::Claude, None, &g, 80, 24)
+fn is_empty(d: &Path) -> bool {
+    std::fs::read_dir(d).unwrap().next().is_none()
+}
+
+/// 시작·끝에 안의 내용만 비우고 폴더는 남긴다(한 번 신뢰하면 다시 묻지 않게).
+/// 같은 계정의 다른 세션이 살아 있으면 비우지 않는다. 띄우지 못해도 비운다.
+#[tokio::test]
+async fn work_folder_cleared_only_when_no_session_of_the_account_lives() {
+    let (t, terms, g) = (tempfile::tempdir().unwrap(), Terms::default(), no_gate());
+    let work = t.path().join("acct");
+    std::fs::create_dir_all(work.join("old/sub")).unwrap();
+    std::fs::write(work.join("old/sub/f.txt"), "지난 세션").unwrap();
+    let p = prepare(&work, W, Tool::Claude, None, &g, 80, 24)
+        .await
+        .unwrap();
+    start(
+        &terms,
+        W,
+        Tool::Claude,
+        cat(p),
+        &g,
+        collect().0,
+        Box::new(|| {}),
+    )
+    .unwrap();
+    assert!(work.is_dir() && is_empty(&work)); // 시작 때 비움
+
+    std::fs::write(work.join("a.txt"), "첫 세션 파일").unwrap();
+    let p = prepare(&work, W2, Tool::Codex, None, &g, 80, 24)
+        .await
+        .unwrap();
+    start(
+        &terms,
+        W2,
+        Tool::Codex,
+        cat(p),
+        &g,
+        collect().0,
+        Box::new(|| {}),
+    )
+    .unwrap();
+    assert!(work.join("a.txt").is_file()); // 첫 세션이 살아 있어 그대로
+    terms.kill(W);
+    assert!(work.join("a.txt").is_file()); // 둘째가 아직 살아 있다
+    terms.kill(W2);
+    assert!(work.is_dir() && is_empty(&work)); // 마지막 세션이 끝나면 비움, 폴더는 남김
+
+    std::fs::write(work.join("b.txt"), "x").unwrap();
+    let mut p = prepare(&work, W, Tool::Claude, None, &g, 80, 24)
         .await
         .unwrap();
     p.spawn.program = "/no/such/program".into();
     assert!(start(&terms, W, Tool::Claude, p, &g, collect().0, Box::new(|| {})).is_err());
-    assert!(!work.exists());
+    assert!(work.is_dir() && is_empty(&work));
+}
+
+/// 비울 때 링크는 링크만 지운다 — 폴더 밖 대상은 그대로. 작업 폴더 자체가 링크면 손대지 않는다.
+#[tokio::test]
+async fn clearing_never_follows_symlinks() {
+    use std::os::unix::fs::symlink;
+    let (t, terms) = (tempfile::tempdir().unwrap(), Terms::default());
+    let outside = t.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep.txt"), "사용자 파일").unwrap();
+    let work = t.path().join("acct");
+    std::fs::create_dir_all(&work).unwrap();
+    symlink(&outside, work.join("dir-link")).unwrap();
+    symlink(outside.join("keep.txt"), work.join("file-link")).unwrap();
+    terms.clear_work_if_idle(&work);
+    assert!(is_empty(&work));
+    assert!(outside.join("keep.txt").is_file());
+
+    let linked = t.path().join("linked-acct");
+    symlink(&outside, &linked).unwrap();
+    terms.clear_work_if_idle(&linked);
+    assert!(outside.join("keep.txt").is_file());
+}
+
+/// 앱을 띄운 CLI의 세션 표식은 터미널로 넘기지 않는다. 계정 폴더 변수는 그대로.
+#[test]
+fn session_markers_are_not_inherited() {
+    use ieum_desktop_lib::terminal::session_marker;
+    for k in [
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CODEX_SANDBOX",
+        "CODEX_SANDBOX_NETWORK_DISABLED",
+        "CODEX_THREAD_ID",
+        "CODEX_TOOL_CALL_ID",
+        "ANTIGRAVITY_AGENT",
+        "ANTIGRAVITY_CONVERSATION_ID",
+    ] {
+        assert!(session_marker(k), "{k}");
+    }
+    for k in [
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "PATH",
+        "HOME",
+        "CLAUDECODEX",
+    ] {
+        assert!(!session_marker(k), "{k}");
+    }
+    // 실제 PTY 자식에 안 보이는지는 `terminal_env.rs`(환경을 바꾸므로 따로 된 테스트 바이너리).
 }
 
 /// 예전 위치(`<계정 폴더>/chat-work`)는 비어 있는 것만 지운다.

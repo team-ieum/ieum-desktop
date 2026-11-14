@@ -66,6 +66,7 @@ const COMMANDS: &[&str] = &[
     // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
     "chat_send",
     "chat_pick_folder",
+    "list_models",
 ];
 
 fn main() {

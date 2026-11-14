@@ -38,6 +38,14 @@ beforeEach(() => {
   vi.spyOn(api, "onChatStage").mockImplementation(async (cb) => ((stage = cb), () => {}));
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [], apiKeys: [] });
   send = vi.spyOn(api, "chatSend").mockResolvedValue({ say: "만들게요", cards: [], error: null });
+  vi.spyOn(api, "listModels").mockImplementation(async (p) =>
+    p === "api:openai"
+      ? [
+          { id: "gpt-6-astra", label: "gpt-6-astra" },
+          { id: "gpt-6-luna", label: "gpt-6-luna" },
+        ]
+      : [{ id: "claude-haiku-5-5", label: "claude-haiku-5-5" }],
+  );
 });
 afterEach(() => {
   cleanup();
@@ -46,7 +54,14 @@ afterEach(() => {
 });
 
 const open = () => act(async () => render(<ChatSlot workflowId="w1" visible />));
-const input = () => screen.getByLabelText("메시지 입력") as HTMLInputElement;
+const input = () => screen.getByLabelText("메시지 입력") as HTMLTextAreaElement;
+/** 입력 카드의 고르기 칩(앱 드롭다운)을 열고 항목을 고른다. */
+const chip = (label: string) => screen.getByRole("button", { name: new RegExp(`^${label}: `) });
+const options = () => screen.getAllByRole("option").map((o) => o.textContent);
+const choose = async (label: string, option: string) => {
+  await act(async () => fireEvent.click(chip(label)));
+  await act(async () => fireEvent.click(screen.getByRole("option", { name: option })));
+};
 const type = (v: string) => act(async () => fireEvent.change(input(), { target: { value: v } }));
 const enter = (init: object = {}) => act(async () => fireEvent.keyDown(input(), { key: "Enter", ...init }));
 
@@ -68,9 +83,10 @@ test("ai_choices_add_codex_and_agy_only_when_the_cli_is_enabled", async () => {
   useCredentials.setState({ view });
   vi.mocked(api.detectProviders).mockResolvedValue({ clis: [{ id: "cli:agy", path: "", version: "" }], apiKeys: [] });
   await open();
-  const select = screen.getByLabelText("채팅에 쓸 키·계정") as HTMLSelectElement;
-  expect([...select.options].map((o) => o.value)).toEqual(["cli:claude|system", "cli:agy|", "api:anthropic|k2", "api:anthropic|k1", "api:openai|o1"]);
-  await act(async () => fireEvent.change(select, { target: { value: "cli:agy|" } }));
+  expect(screen.queryByRole("combobox")).toBeNull(); // 브라우저 기본 select 없음
+  await act(async () => fireEvent.click(chip("채팅에 쓸 키·계정")));
+  expect(options()).toEqual(["Claude (구독) · 이 Mac", "Antigravity (구독)", "Anthropic · k2", "Anthropic · k1", "OpenAI · o1"]);
+  await act(async () => fireEvent.click(screen.getByRole("option", { name: "Antigravity (구독)" })));
   await type("안녕");
   await enter();
   expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "cli:agy", credential: null, model: null });
@@ -110,20 +126,74 @@ test("chat_shows_stage_while_waiting_and_blocks_second_send", async () => {
   expect(input().disabled).toBe(false);
 });
 
-test("chat_key_and_model_choice_is_remembered_and_openai_needs_model", async () => {
+test("chat_model_is_picked_from_the_provider_list_and_remembered", async () => {
   await open();
-  await act(async () => fireEvent.change(screen.getByLabelText("채팅에 쓸 키·계정"), { target: { value: "api:openai|o1" } }));
+  // 기본 모델 + 그 공급원의 목록.
+  await act(async () => fireEvent.click(chip("모델")));
+  expect(options()).toEqual(["기본 모델", "claude-haiku-5-5"]);
+  await act(async () => fireEvent.click(screen.getByRole("option", { name: "claude-haiku-5-5" })));
+  // OpenAI는 기본 모델이 없다 — 목록 첫 모델을 골라 두고, "기본 모델" 항목이 없다.
+  await choose("채팅에 쓸 키·계정", "OpenAI · o1");
+  expect(chip("모델").getAttribute("aria-label")).toBe("모델: gpt-6-astra");
+  await act(async () => fireEvent.click(chip("모델")));
+  expect(options()).toEqual(["gpt-6-astra", "gpt-6-luna"]);
+  await act(async () => fireEvent.click(screen.getByRole("option", { name: "gpt-6-luna" })));
+  await type("안녕");
+  await enter();
+  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "api:openai", credential: "o1", model: "gpt-6-luna" });
+  expect(JSON.parse(localStorage.getItem(AI_KEY)!)).toEqual({ value: "api:openai|o1", model: "gpt-6-luna" });
+  cleanup();
+  await open();
+  expect(chip("채팅에 쓸 키·계정").getAttribute("aria-label")).toBe("채팅에 쓸 키·계정: OpenAI · o1");
+  expect(chip("모델").getAttribute("aria-label")).toBe("모델: gpt-6-luna");
+});
+
+test("chat_keeps_a_remembered_model_that_is_not_in_the_list", async () => {
+  localStorage.setItem(AI_KEY, JSON.stringify({ value: "cli:claude|system", model: "claude-old-1" }));
+  await open();
+  expect(chip("모델").getAttribute("aria-label")).toBe("모델: claude-old-1 (목록에 없음)");
+  await type("안녕");
+  await enter();
+  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "cli:claude", credential: "system", model: "claude-old-1" });
+});
+
+test("openai_without_a_model_list_cannot_send_and_says_why", async () => {
+  vi.mocked(api.listModels).mockRejectedValue("네트워크");
+  localStorage.setItem(AI_KEY, JSON.stringify({ value: "api:openai|o1", model: "" }));
+  await open();
   await type("안녕");
   await enter();
   expect(send).not.toHaveBeenCalled();
-  expect(screen.getByText("OpenAI는 모델 이름을 적어야 해요.")).toBeTruthy();
-  await act(async () => fireEvent.change(screen.getByLabelText("모델"), { target: { value: " gpt-x " } }));
-  await enter();
-  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "api:openai", credential: "o1", model: "gpt-x" });
-  expect(JSON.parse(localStorage.getItem(AI_KEY)!)).toEqual({ value: "api:openai|o1", model: " gpt-x " });
-  cleanup();
+  expect(screen.getByText("OpenAI는 모델을 골라야 해요.")).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toContain("모델 목록을 읽지 못했어요");
+});
+
+test("empty_chat_greets_with_example_chips_that_send_right_away", async () => {
+  vi.mocked(api.getChat).mockResolvedValue(EMPTY_CHAT);
   await open();
-  expect((screen.getByLabelText("채팅에 쓸 키·계정") as HTMLSelectElement).value).toBe("api:openai|o1");
+  expect(screen.getByText("어떤 자동화를 만들어 볼까요?")).toBeTruthy();
+  const examples = within(screen.getByRole("list", { name: "예시" })).getAllByRole("button");
+  expect(examples).toHaveLength(3);
+  await act(async () => fireEvent.click(examples[0]));
+  expect(send).toHaveBeenCalledWith("w1", "다운로드 폴더에 들어온 PDF를 '문서' 폴더로 옮겨 줘", expect.anything());
+  expect(screen.queryByText("어떤 자동화를 만들어 볼까요?")).toBeNull();
+});
+
+test("korean_ime_enter_reported_as_keycode_229_does_not_send", async () => {
+  await open();
+  await type("정리해 줘");
+  // WKWebView는 조합 확정 Enter를 isComposing 없이 keyCode 229로 보낸다.
+  await enter({ keyCode: 229 });
+  expect(send).not.toHaveBeenCalled();
+  await enter();
+  expect(send).toHaveBeenCalledTimes(1);
+});
+
+test("shift_enter_makes_a_new_line_instead_of_sending", async () => {
+  await open();
+  await type("첫 줄");
+  await enter({ shiftKey: true });
+  expect(send).not.toHaveBeenCalled();
 });
 
 test("chat_without_any_key_explains_and_disables", async () => {
