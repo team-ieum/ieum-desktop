@@ -138,6 +138,40 @@ async fn finish_waits_for_the_person_and_never_enables() {
     assert!(b.pending(W).is_none());
 }
 
+/// 최종 리뷰 Minor 6: 확인 카드에 AI 노드마다 이름·공급원·파일 내용 전송 여부가 실린다.
+#[tokio::test]
+async fn pending_lists_ai_nodes_with_provider_and_send_content() {
+    let Env { h, b, .. } = &setup();
+    h.put_doc(W, |d| {
+        let a = &mut d.workflow.nodes[1];
+        a.label = Some("요약하기".into());
+        a.config.insert("sendContent".into(), true.into());
+    });
+    assert!(run(b, finish()).await.ok);
+    let p = b.pending(W).unwrap();
+    assert_eq!(
+        p.ai,
+        [FinishAi {
+            node_id: "a".into(),
+            label: "요약하기".into(),
+            provider: "cli:claude".into(),
+            send_content: true,
+        }]
+    );
+    // 칸이 없으면 꺼진 것이다.
+    let Env { b, .. } = &setup();
+    assert!(run(b, finish()).await.ok);
+    let ai = b.pending(W).unwrap().ai;
+    assert_eq!(
+        (ai.len(), ai[0].send_content, ai[0].label.as_str()),
+        (1, false, "")
+    );
+    // 이 칸이 없는 옛 `pendingFinish`도 읽힌다.
+    let old: PendingFinish =
+        serde_json::from_value(json!({"hash": "h", "folder": "/in", "actions": []})).unwrap();
+    assert!(old.ai.is_empty());
+}
+
 #[tokio::test]
 async fn confirm_rejects_after_change() {
     let Env { h, b, .. } = &setup();

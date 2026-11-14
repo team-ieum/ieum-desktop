@@ -61,6 +61,25 @@ export function FinishCard({ workflowId, version }: { workflowId: string; versio
             </dd>
           </div>
         )}
+        {(found.ai?.length ?? 0) > 0 && (
+          <div>
+            <dt className="text-neutral-500">{t("finish.ai")}</dt>
+            <dd>
+              <ul className="flex flex-col gap-1">
+                {found.ai?.map((a) => (
+                  <li key={a.nodeId} data-testid="finish-ai" className="flex flex-col">
+                    <span className="typo-caption1_semibold text-neutral-800">{a.label || t("node.local.ai.title")}</span>
+                    <span>{tDyn(`choice.provider.${a.provider}`) ?? a.provider}</span>
+                    {/* 파일 내용이 밖으로 나가는 노드는 눈에 띄게. */}
+                    <span className={a.sendContent ? "typo-caption1_semibold text-danger-700" : "text-neutral-500"}>
+                      {t(a.sendContent ? "finish.ai.sendsContent" : "finish.ai.metaOnly")}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </dd>
+          </div>
+        )}
       </dl>
       {error && (
         <p role="alert" className="typo-caption1_semibold text-danger-700">

@@ -276,9 +276,14 @@ async fn deleting_workflow_revokes_its_sessions() {
         t.path().to_path_buf(),
     );
     let s = ch.session(&env.active, &id).await.unwrap();
-    delete_workflow_and_sessions(&env.active, &ch, &Terms::default(), &id)
+    // 세션 없이 남은 작업 폴더(앱이 도중에 꺼짐)도 워크플로우와 함께 지운다.
+    let work = env.dir("work");
+    fs::create_dir_all(work.join(&id)).unwrap();
+    fs::write(work.join(&id).join("note.txt"), "남은 파일").unwrap();
+    delete_workflow_and_sessions(&env.active, &ch, &Terms::default(), &work, &id)
         .await
         .unwrap();
+    assert!(!work.join(&id).exists() && work.is_dir());
     assert!(sup.store().get_workflow(&id).is_err());
     assert_eq!(
         ask(&s.socket, &req(&s.token, json!({"op": "status"})))
@@ -317,8 +322,7 @@ fn gate_of(ch: &Channel, active: &Arc<Active>) -> Gate {
 
 /// 실제 경로(`prepare` → `start`)로 세션을 띄운다. 프로그램만 `cat`으로 바꾼다. (소켓, 토큰)
 async fn launch(env: &Env, terms: &Terms, gate: &Gate, id: &str) -> (PathBuf, String) {
-    let root = env.active.sup().await.unwrap().store().root().to_path_buf();
-    let mut p = terminal::prepare(&root, id, Tool::Claude, None, gate, 80, 24)
+    let mut p = terminal::prepare(&env.dir("work"), id, Tool::Claude, None, gate, 80, 24)
         .await
         .unwrap();
     let get = |k: &str| {
@@ -374,20 +378,23 @@ async fn gate_from_channel_gives_env_and_revokes_when_session_ends() {
     assert_eq!(label_of_ai(&sup, &id), None);
     // 저장된 적 없는 워크플로우에는 터미널을 띄우지 못한다.
     let unsaved = "33333333-3333-4333-8333-333333333333";
-    let root = sup.store().root().to_path_buf();
+    let work = env.dir("work");
     assert!(
-        terminal::prepare(&root, unsaved, Tool::Claude, None, &gate, 80, 24)
+        terminal::prepare(&work, unsaved, Tool::Claude, None, &gate, 80, 24)
             .await
             .is_err()
     );
+    assert!(!work.join(unsaved).exists()); // 거절된 세션의 작업 폴더가 남지 않는다
 
     // 삭제: 터미널이 남지 않는다.
     launch(&env, &terms, &gate, &id).await;
     assert!(terms.running(&id).is_some());
-    delete_workflow_and_sessions(&env.active, &ch, &terms, &id)
+    assert!(work.join(&id).is_dir());
+    delete_workflow_and_sessions(&env.active, &ch, &terms, &work, &id)
         .await
         .unwrap();
     assert!(terms.running(&id).is_none());
+    assert!(!work.join(&id).exists());
 
     // 로그아웃: 터미널도 토큰도 소켓도 남지 않는다.
     let id2 = save();

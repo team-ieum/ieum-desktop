@@ -169,6 +169,17 @@ pub fn bin_dir() -> Result<PathBuf, String> {
     Ok(dir.to_path_buf())
 }
 
+/// `dir`에 `ieum` 파일이 있는가. 없이 세션을 띄우면 터미널의 첫 명령이 `command not found`로 끝난다.
+pub fn require_ieum(dir: &Path) -> Result<(), String> {
+    if dir.join("ieum").is_file() {
+        return Ok(());
+    }
+    Err(format!(
+        "ieum 실행 파일이 없어 터미널을 열 수 없어요: {} (개발 빌드라면 `cargo build -p ieum-cli --bin ieum`)",
+        dir.join("ieum").display()
+    ))
+}
+
 impl Channel {
     /// 활성 계정의 소켓을 열고(이미 열렸으면 그대로) 이 워크플로우에 묶인 새 토큰을 준다.
     /// 로그인 전이면 `NOT_SIGNED_IN`, 저장된 적 없는 id면 Err.
@@ -240,6 +251,8 @@ pub fn app_gate(app: &AppHandle) -> Gate {
         open: Arc::new(move |workflow_id| {
             let app = opener.clone();
             Box::pin(async move {
+                // 토큰을 만들기 전에 본다.
+                require_ieum(&bin_dir()?)?;
                 open_gate(
                     &app.state::<Channel>(),
                     &app.state::<Active>(),

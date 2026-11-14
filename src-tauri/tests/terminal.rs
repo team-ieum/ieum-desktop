@@ -391,7 +391,7 @@ async fn prepare_builds_workdir_env_and_line() {
     )
     .await
     .unwrap();
-    let work = t.path().join("chat-work").join(W);
+    let work = t.path().join(W);
     assert!(work.is_dir() && std::fs::read_dir(&work).unwrap().next().is_none()); // 전용 빈 폴더
     assert_eq!(p.spawn.cwd, work);
     assert_eq!(p.spawn.args[0], "-lc");
@@ -434,7 +434,7 @@ async fn prepare_rejects_ids_that_leave_the_account_folder() {
             "{bad}"
         );
     }
-    assert!(!t.path().join("chat-work").exists());
+    assert!(std::fs::read_dir(t.path()).unwrap().next().is_none());
 }
 
 #[test]
@@ -483,4 +483,72 @@ async fn token_is_closed_when_the_terminal_cannot_start() {
         *log.lock().unwrap(),
         vec![format!("open:{W}"), "close:T1".to_string()]
     );
+}
+
+// ── 작업 폴더(앱 데이터 폴더 밖) ──
+
+/// 작업 폴더는 넘긴 폴더 바로 아래 `<workflowId>`, 본인 전용(0700)이다.
+#[tokio::test]
+async fn work_folder_is_private_and_directly_under_the_work_root() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().join("chat-work/acct");
+    let p = prepare(&root, W, Tool::Agy, None, &no_gate(), 80, 24)
+        .await
+        .unwrap();
+    assert_eq!(p.spawn.cwd, root.join(W));
+    for d in [&root, &p.spawn.cwd] {
+        let mode = std::fs::metadata(d).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700, "{}", d.display());
+    }
+}
+
+/// 세션이 끝나면(띄우지 못해도) 작업 폴더를 그 안의 파일째 지운다. 옆 폴더는 그대로.
+#[tokio::test]
+async fn work_folder_removed_when_the_session_ends_or_cannot_start() {
+    let (t, terms) = (tempfile::tempdir().unwrap(), Terms::default());
+    let other = t.path().join("22222222-2222-4222-8222-222222222222");
+    std::fs::create_dir_all(&other).unwrap();
+    let g = no_gate();
+    let mut p = prepare(t.path(), W, Tool::Claude, None, &g, 80, 24)
+        .await
+        .unwrap();
+    let work = p.spawn.cwd.clone();
+    std::fs::write(work.join("note.txt"), "CLI가 남긴 파일").unwrap();
+    p.spawn.program = "/bin/sh".into();
+    p.spawn.args = vec!["-c".into(), "cat".into()];
+    start(&terms, W, Tool::Claude, p, &g, collect().0, Box::new(|| {})).unwrap();
+    assert!(work.is_dir());
+    terms.kill(W);
+    assert!(!work.exists());
+    assert!(other.is_dir());
+
+    let mut p = prepare(t.path(), W, Tool::Claude, None, &g, 80, 24)
+        .await
+        .unwrap();
+    p.spawn.program = "/no/such/program".into();
+    assert!(start(&terms, W, Tool::Claude, p, &g, collect().0, Box::new(|| {})).is_err());
+    assert!(!work.exists());
+}
+
+/// 예전 위치(`<계정 폴더>/chat-work`)는 비어 있는 것만 지운다.
+#[test]
+fn old_work_folders_removed_only_when_empty() {
+    use ieum_desktop_lib::terminal::clean_old_work;
+    let t = tempfile::tempdir().unwrap();
+    clean_old_work(t.path()); // 없어도 된다
+    let old = t.path().join("chat-work");
+    let (empty, used) = (
+        old.join(W),
+        old.join("22222222-2222-4222-8222-222222222222"),
+    );
+    std::fs::create_dir_all(&empty).unwrap();
+    std::fs::create_dir_all(&used).unwrap();
+    std::fs::write(used.join("keep.txt"), "사용자 파일").unwrap();
+    clean_old_work(t.path());
+    assert!(!empty.exists());
+    assert!(used.join("keep.txt").is_file());
+    std::fs::remove_file(used.join("keep.txt")).unwrap();
+    clean_old_work(t.path());
+    assert!(!old.exists());
 }

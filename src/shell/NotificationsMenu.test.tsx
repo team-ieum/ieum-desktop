@@ -56,6 +56,29 @@ test("badge_counts_only_after_seen_at", async () => {
   expect(set).toHaveBeenCalledTimes(1);
 });
 
+test("failed_test_runs_stay_out_of_list_and_badge", async () => {
+  vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
+  vi.spyOn(api, "listRuns").mockResolvedValue([
+    { ...failed("t1", "2026-11-12T12:00:00Z"), trigger: "test" },
+    { ...failed("m1", "2026-11-12T11:00:00Z"), trigger: "manual" },
+  ]);
+  vi.spyOn(api, "dashboardErrors").mockResolvedValue({ content: [], hasNext: false, nextCursor: null });
+  vi.spyOn(api, "getSettings").mockResolvedValue(SETTINGS);
+  vi.spyOn(api, "setSettings").mockResolvedValue();
+  useSettings.setState({ settings: SETTINGS });
+  const opened: string[] = [];
+
+  await act(async () => {
+    render(<NotificationsMenu onOpenRun={(id) => opened.push(id)} />);
+  });
+  expect(screen.getByTestId("bell-badge").textContent).toBe("1");
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "알림" })));
+  const items = screen.getAllByRole("menuitem");
+  expect(items).toHaveLength(1);
+  fireEvent.click(items[0]);
+  expect(opened).toEqual(["m1"]);
+});
+
 const mockApis = () => {
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);

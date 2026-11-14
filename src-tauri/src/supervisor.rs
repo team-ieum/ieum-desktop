@@ -201,9 +201,6 @@ impl Supervisor {
         let catalog = Catalog::embedded().map_err(|e| format!("노드 정의를 읽지 못했어요: {e}"))?;
         let rt = Handle::try_current().map_err(|e| e.to_string())?;
         let every = deps.recheck;
-        if close_unfinished && let Err(e) = deps.store.close_unfinished_runs() {
-            eprintln!("[ieum] 끝나지 않은 실행 기록을 닫지 못했어요: {e}");
-        }
         let sup = Supervisor(Arc::new(Inner {
             deps,
             catalog,
@@ -216,6 +213,10 @@ impl Supervisor {
             editing: Mutex::default(),
             stopped: CancellationToken::new(),
         }));
+        // 감시(`sync`)보다 먼저 — 되돌려진 파일이 새 파일로 잡히지 않는다.
+        if close_unfinished {
+            sup.close_unfinished();
+        }
         sup.sync();
         let (weak, stopped) = (Arc::downgrade(&sup.0), sup.0.stopped.clone());
         sup.0.rt.spawn(async move {
@@ -231,6 +232,42 @@ impl Supervisor {
             }
         });
         Ok(sup)
+    }
+
+    /// 끝 시각 없는 기록(실행 도중 앱이 꺼짐)을 닫는다. 그중 노드 테스트는 먼저 되돌려 결과를 기록에 남긴다 —
+    /// 테스트가 파일을 옮긴 채로 남기지 않는다. 못 되돌린 것이 있으면 기록을 닫은 뒤 `TestUndoFailed`.
+    fn close_unfinished(&self) {
+        let mut failed = Vec::new();
+        match self.store().all_runs() {
+            Ok(runs) => {
+                let _one_at_a_time = lock(&self.0.undo_lock);
+                let tests = runs.into_iter().filter(|r| {
+                    r.finished_at.is_empty()
+                        && r.trigger == Some(RunTrigger::Test)
+                        && r.undo.is_none()
+                });
+                for mut run in tests {
+                    let report = self.undo_ops(&run);
+                    if !report.skipped.is_empty() {
+                        failed.push((run.workflow_id.clone(), run.run.run_id.clone()));
+                    }
+                    run.undo = Some(report);
+                    if let Err(e) = self.store().save_run(&run) {
+                        eprintln!("[ieum] 테스트 되돌리기 결과를 쓰지 못했어요: {e}");
+                    }
+                }
+            }
+            Err(e) => eprintln!("[ieum] 실행 기록을 읽지 못했어요: {e}"),
+        }
+        if let Err(e) = self.store().close_unfinished_runs() {
+            eprintln!("[ieum] 끝나지 않은 실행 기록을 닫지 못했어요: {e}");
+        }
+        for (workflow_id, run_id) in failed {
+            (self.0.deps.emit)(AppEvent::TestUndoFailed {
+                workflow_id,
+                run_id,
+            });
+        }
     }
 
     /// 감시를 모두 풀고 대기 실행을 버린다. 진행 중인 실행은 끝까지 돌아 기록을 남긴다.

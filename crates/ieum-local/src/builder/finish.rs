@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 
 use super::edit::{AI_EVENT, FOLDER_FIELDS};
 use super::{
-    Builder, ChatState, Code, Doc, FinishAction, NodeState, PendingFinish, Reply, SaveError,
-    node_state, workflow_hash,
+    Builder, ChatState, Code, Doc, FinishAction, FinishAi, NodeState, PendingFinish, Reply,
+    SaveError, node_state, workflow_hash,
 };
 
 /// 완료까지 남은 것 한 줄.
@@ -60,6 +60,20 @@ fn actions(wf: &Workflow) -> Vec<FinishAction> {
                 label: n.label.clone().unwrap_or_default(),
                 target,
             })
+        })
+        .collect()
+}
+
+/// 확인 카드에 보일 AI 노드 — 배열 순서로.
+fn ai_nodes(wf: &Workflow) -> Vec<FinishAi> {
+    wf.nodes
+        .iter()
+        .filter(|n| n.event == AI_EVENT)
+        .map(|n| FinishAi {
+            node_id: n.id.clone(),
+            label: n.label.clone().unwrap_or_default(),
+            provider: text(n, "provider").unwrap_or_default().to_string(),
+            send_content: n.config.get("sendContent").and_then(Value::as_bool) == Some(true),
         })
         .collect()
 }
@@ -137,6 +151,7 @@ impl Builder {
             hash: workflow_hash(wf),
             folder: folder.unwrap_or_default().to_string(),
             actions: actions(wf),
+            ai: ai_nodes(wf),
         };
         self.update_chat(id, |s| s.pending_finish = Some(pending.clone()))?;
         self.host.finish_pending(id, &doc.name);

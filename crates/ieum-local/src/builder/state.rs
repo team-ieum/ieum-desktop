@@ -92,6 +92,19 @@ pub struct PendingFinish {
     pub hash: String,
     pub folder: String,
     pub actions: Vec<FinishAction>,
+    /// AI 노드마다 한 줄. 이 칸이 생기기 전 파일에는 없다(빈 목록).
+    pub ai: Vec<FinishAi>,
+}
+
+/// 확인 카드의 AI 노드 한 줄 — 사람이 켜기 전에 어느 공급원으로 파일 내용이 가는지 본다.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FinishAi {
+    pub node_id: String,
+    pub label: String,
+    /// 노드의 `provider` 값 그대로(화면이 이름으로 바꾼다).
+    pub provider: String,
+    pub send_content: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

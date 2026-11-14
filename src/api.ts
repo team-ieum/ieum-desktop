@@ -371,6 +371,8 @@ export interface PendingFinish {
   hash: string;
   folder: string;
   actions: { nodeId: string; event: string; label: string; target: string | null }[];
+  /** AI 노드마다 한 줄. 이 칸이 생기기 전에 저장된 확인 대기에는 없다. */
+  ai?: { nodeId: string; label: string; provider: string; sendContent: boolean }[];
 }
 
 /** 앱 안 터미널에 띄울 수 있는 CLI. */

@@ -17,7 +17,10 @@ IEUM 앱 안 터미널에서만 동작한다. 먼저 아래 명령을 실행해 
     ieum workflow guide
 ";
 
-/// Codex가 `ieum workflow …`만 묻지 않고 실행하게 하는 규칙(`<codex 폴더>/rules/ieum.rules`).
+/// 예전 버전이 `<codex 폴더>/rules/ieum.rules`에 쓰던 규칙. 이제는 쓰지 않는다 — 그 파일은 영구·전역이라
+/// IEUM 밖의 Codex 세션에도 적용되고, codex 0.167.0의 대화형 실행에는 이 세션에만 규칙을 주는 옵션이 없다
+/// (`--rules`는 `codex execpolicy check`에만 있다). Codex는 Antigravity처럼 사용자가 그때그때 허용한다.
+/// 글자 그대로 같은 옛 파일을 지울 때만 쓴다.
 pub const CODEX_RULE: &str = "prefix_rule(pattern=[\"ieum\", \"workflow\"], decision=\"allow\")\n";
 
 #[derive(Debug, PartialEq, Default)]
@@ -67,11 +70,13 @@ pub fn install_skill(
         link(dir, &src)?;
     }
     link(&home.join(".gemini/config"), &src)?; // Antigravity
+    // Codex 규칙은 쓰지 않는다(위 `CODEX_RULE`). 예전 버전이 쓴 것은 손대지 않은 것만 치운다.
     for dir in codex_dirs {
         let rule = dir.join("rules/ieum.rules");
-        if dir.is_dir() && vacant(&rule) {
-            std::fs::create_dir_all(dir.join("rules")).map_err(io)?;
-            std::fs::write(&rule, CODEX_RULE).map_err(io)?;
+        if std::fs::read_to_string(&rule).ok().as_deref() == Some(CODEX_RULE)
+            && let Err(e) = std::fs::remove_file(&rule)
+        {
+            eprintln!("[ieum] 옛 Codex 규칙을 지우지 못했어요: {e}");
         }
     }
     Ok(report)

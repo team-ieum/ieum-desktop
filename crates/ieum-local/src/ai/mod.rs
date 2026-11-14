@@ -393,8 +393,21 @@ pub fn wrap_data(data: &str, cli: bool) -> String {
 
 /// 프롬프트 = 지시 + (파일·추가 데이터가 있으면) 요청마다 새 구분선으로 감싼
 /// 파일 이름·확장자·크기(+내용)와 추가 데이터. `send_content`가 아니면 파일을 열지 않는다.
-/// 내용을 못 읽으면 `notice`로 한 줄 알린다. `cli`면 데이터 속 `@` 멘션을 무력화한다(지시는 그대로).
+/// 내용을 못 읽으면 `notice`로 한 줄 알린다. `cli`면 결과 전체(지시 포함 — 빌더 AI도 지시를 쓴다)의
+/// `@` 멘션을 여기 한 곳에서 무력화한다.
 async fn build_prompt(
+    prompt: &str,
+    file: Option<&Path>,
+    send_content: bool,
+    extra: Option<&str>,
+    cli: bool,
+    notice: &ChunkFn<'_>,
+) -> String {
+    let p = build_prompt_raw(prompt, file, send_content, extra, cli, notice).await;
+    if cli { defuse_mentions(&p) } else { p }
+}
+
+async fn build_prompt_raw(
     prompt: &str,
     file: Option<&Path>,
     send_content: bool,

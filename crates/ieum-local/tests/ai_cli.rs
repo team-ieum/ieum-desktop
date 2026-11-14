@@ -1926,7 +1926,8 @@ async fn hard_link_content_not_sent() {
 }
 
 /// H-1·N-1: claude CLI는 줄 처음·공백·`。、？！` 뒤 `@경로`를 파일 첨부로 푼다(2.1.322 실측) — `--tools ""` 우회.
-/// CLI 공급원은 구분선 안 `@`를 경계와 상관없이 전부 전각으로 바꾸고, 지시 칸·API 공급원은 그대로 둔다.
+/// CLI 공급원은 프롬프트 전체(지시 칸 포함 — 빌더 AI도 `set`으로 쓴다)의 `@`를 경계와 상관없이 전부 전각으로 바꾸고,
+/// API 공급원은 그대로 둔다.
 #[tokio::test]
 async fn cli_data_mentions_defused() {
     let t = tempfile::tempdir().unwrap();
@@ -1949,7 +1950,7 @@ async fn cli_data_mentions_defused() {
     let prompt = fake.last.lock().unwrap().take().unwrap().prompt;
     let id = delimiter_id(&prompt);
     let (head, data) = prompt.split_once(&format!("<<<IEUM-DATA-{id}>>>")).unwrap();
-    assert_eq!(head, "정리해 @지시.txt\n\n");
+    assert_eq!(head, "정리해 ＠지시.txt\n\n");
     assert!(!data.contains('@'), "{data}");
     assert_eq!(
         data,
@@ -1962,6 +1963,41 @@ async fn cli_data_mentions_defused() {
     let prompt = fake.last.lock().unwrap().take().unwrap().prompt;
     assert!(!prompt.contains('＠'), "{prompt}");
     assert!(prompt.contains("[파일 이름] @id_rsa.txt"), "{prompt}");
+}
+
+/// 최종 리뷰 I-1: 지시 칸은 빌더 AI도 쓴다 — `cli:` 공급원 전부에서, 파일·추가 데이터가 없는 경로까지
+/// 공급원이 받는 프롬프트에 `@`가 없다.
+#[tokio::test]
+async fn cli_instruction_mentions_defused_for_every_cli() {
+    let t = tempfile::tempdir().unwrap();
+    let p = t.path().join("a.txt");
+    fs::write(&p, "x").unwrap();
+    let fake = Fake::new(vec!["ok"]);
+    let runner = fake_runner(&fake)
+        .with_provider("cli:codex", fake.clone())
+        .with_provider("cli:agy", fake.clone())
+        .with_provider("api:anthropic", fake.clone());
+    let ask = |cfg: Value| async {
+        run(&runner, cfg).await.unwrap();
+        fake.last.lock().unwrap().take().unwrap().prompt
+    };
+    for cli in ["cli:claude", "cli:codex", "cli:agy"] {
+        // 지시만(조기 반환 경로)
+        let prompt =
+            ask(json!({"provider": cli, "prompt": "@/etc/hosts 요약\n@~/.ssh/id_rsa"})).await;
+        assert_eq!(prompt, "＠/etc/hosts 요약\n＠~/.ssh/id_rsa", "{cli}");
+        // 지시 + 파일 + 추가 데이터
+        let prompt = ask(json!({"provider": cli, "prompt": "@/etc/hosts 요약",
+            "file": p.to_str().unwrap(), "data": "@d"}))
+        .await;
+        assert!(!prompt.contains('@'), "{cli}: {prompt}");
+        assert!(
+            prompt.starts_with("＠/etc/hosts 요약\n\n"),
+            "{cli}: {prompt}"
+        );
+    }
+    let prompt = ask(json!({"provider": "api:anthropic", "prompt": "@/etc/hosts 요약"})).await;
+    assert_eq!(prompt, "@/etc/hosts 요약");
 }
 
 /// 프롬프트 칸은 지시 자리라 앞 단계 값(파일 이름 등 신뢰할 수 없는 데이터)을 못 넣는다. 추가 데이터 칸은 된다.

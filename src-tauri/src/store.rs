@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use ieum_engine::{RunResult, RunStatus, Workflow};
 use ieum_local::ai::AiUsage;
-use ieum_local::builder::ChatFile;
+use ieum_local::builder::{ChatFile, UsageEntry};
 use ieum_local::{FileOp, UndoReport};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -262,13 +262,22 @@ impl Store {
         Ok(chat)
     }
 
-    /// 모든 채팅 파일의 사용량(`chats/<워크플로우 id>.json`). 폴더가 없으면 빈 목록, 깨진 파일은 건너뛴다.
+    /// 지운 워크플로우의 채팅 사용량(`chat-usage/<워크플로우 id>.json`) — 대화 없이 사용량 목록만.
+    fn kept_usage_path(&self, id: &str) -> Result<PathBuf, String> {
+        check_id(id)?;
+        Ok(self.root.join("chat-usage").join(format!("{id}.json")))
+    }
+
+    /// 모든 채팅 사용량: 채팅 파일(`chats/`)과 지운 워크플로우가 남긴 것(`chat-usage/`).
+    /// 폴더가 없으면 빈 목록, 깨진 파일은 건너뛴다.
     pub fn all_chat_usage(&self) -> Result<Vec<ChatUsage>, String> {
         let chats: Vec<(String, ChatFile)> = read_named(&self.root.join("chats"))?;
+        let kept: Vec<(String, Vec<UsageEntry>)> = read_named(&self.root.join("chat-usage"))?;
+        let chats = chats.into_iter().map(|(id, chat)| (id, chat.usage));
         Ok(chats
-            .into_iter()
-            .flat_map(|(workflow_id, chat)| {
-                chat.usage.into_iter().map(move |e| ChatUsage {
+            .chain(kept)
+            .flat_map(|(workflow_id, usage)| {
+                usage.into_iter().map(move |e| ChatUsage {
                     workflow_id: workflow_id.clone(),
                     at: e.at,
                     usage: e.usage,
@@ -298,6 +307,7 @@ impl Store {
     }
 
     /// 워크플로우 정의 파일과 그 채팅 상태 파일만 지운다(사용자 파일 아님).
+    /// 채팅의 사용량은 `chat-usage/`로 옮겨 남긴다 — 실행 기록처럼 지운 뒤에도 통계에 합산된다.
     pub fn delete_workflow(&self, id: &str) -> Result<(), String> {
         let path = self.workflow_path(id)?;
         if !path.starts_with(self.root.join("workflows")) {
@@ -306,6 +316,12 @@ impl Store {
         fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let chat = self.chat_path(id)?;
         let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 못 옮기면 채팅 파일을 그대로 둔다(거기서 계속 합산된다). 깨진 채팅 파일은 건질 것이 없다.
+        if let Ok(ChatFile { usage, .. }) = read_json(&chat)
+            && !usage.is_empty()
+        {
+            write_atomic(&self.kept_usage_path(id)?, &usage)?;
+        }
         match fs::remove_file(&chat) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                 Err(format!("{}: {e}", chat.display()))

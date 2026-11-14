@@ -5,4 +5,4 @@ cd "$(dirname "$0")/.."
 triple="${1:-$(rustc -vV | sed -n 's/^host: //p')}"
 cargo build --release -p ieum-cli --bin ieum --target "$triple"
 mkdir -p src-tauri/binaries
-cp "target/$triple/release/ieum" "src-tauri/binaries/ieum-$triple"
+cp "${CARGO_TARGET_DIR:-target}/$triple/release/ieum" "src-tauri/binaries/ieum-$triple"

@@ -11,7 +11,7 @@ fn home() -> tempfile::TempDir {
 }
 
 #[test]
-fn installs_skill_links_and_codex_rule() {
+fn installs_skill_links_without_codex_rule() {
     let h = home();
     let acct = h.path().join("accts/claude/a1b2c3d4");
     std::fs::create_dir_all(&acct).unwrap();
@@ -49,10 +49,8 @@ fn installs_skill_links_and_codex_rule() {
             link.display()
         );
     }
-    assert_eq!(
-        std::fs::read_to_string(h.path().join(".codex/rules/ieum.rules")).unwrap(),
-        CODEX_RULE
-    );
+    // Codex 허용 규칙은 쓰지 않는다 — 전역·영구라 IEUM 밖 세션에도 적용된다.
+    assert!(!h.path().join(".codex/rules").exists());
     // 두 번째는 아무것도 바꾸지 않는다
     assert_eq!(
         install_skill(
@@ -95,6 +93,27 @@ fn user_edited_copies_are_kept() {
     assert_eq!(
         std::fs::read_to_string(h.path().join(".codex/rules/ieum.rules")).unwrap(),
         "# mine\n"
+    );
+}
+
+/// 예전 버전이 써 둔 `ieum.rules`는 글자 그대로 같을 때만 지운다. 다른 규칙 파일은 건드리지 않는다.
+#[test]
+fn old_codex_rule_removed_only_when_untouched() {
+    let h = home();
+    let (ours, acct) = (h.path().join(".codex"), h.path().join("accts/codex/c0de"));
+    for d in [&ours, &acct] {
+        std::fs::create_dir_all(d.join("rules")).unwrap();
+    }
+    std::fs::write(ours.join("rules/ieum.rules"), CODEX_RULE).unwrap();
+    std::fs::write(ours.join("rules/other.rules"), CODEX_RULE).unwrap();
+    let edited = format!("{CODEX_RULE}# 내가 더한 줄\n");
+    std::fs::write(acct.join("rules/ieum.rules"), &edited).unwrap();
+    install_skill(h.path(), &[], &[ours.clone(), acct.clone()]).unwrap();
+    assert!(!ours.join("rules/ieum.rules").exists());
+    assert!(ours.join("rules/other.rules").exists());
+    assert_eq!(
+        std::fs::read_to_string(acct.join("rules/ieum.rules")).unwrap(),
+        edited
     );
 }
 

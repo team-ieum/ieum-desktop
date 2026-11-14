@@ -1,6 +1,6 @@
 //! 화면이 부르는 Tauri 명령 — 로직은 `store`·`supervisor`에 두고 여기는 얇게 감싼다.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ieum_engine::{ValidationError, Workflow};
@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::account::AccountId;
-use crate::active::Active;
+use crate::active::{Active, NOT_SIGNED_IN};
 use crate::builder_host::{PickFolder, builder_of};
 use crate::channel::Channel;
 use crate::credentials::{AccountCredentials, ApiKeyMeta, CliAccountBegin, CredentialsView};
@@ -73,25 +73,32 @@ pub fn save_from_canvas(sup: &Supervisor, wf: StoredWorkflow) -> Result<StoredWo
 
 #[tauri::command]
 pub async fn delete_workflow(
+    app: AppHandle,
     active: State<'_, Active>,
     channel: State<'_, Channel>,
     terms: State<'_, Terms>,
     id: String,
 ) -> Result<(), String> {
-    delete_workflow_and_sessions(&active, &channel, &terms, &id).await
+    let key = active.account_key().await.ok_or(NOT_SIGNED_IN)?;
+    let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    let work = crate::terminal::work_root(&cache, &key);
+    delete_workflow_and_sessions(&active, &channel, &terms, &work, &id).await
 }
 
 /// 워크플로우를 지우며 그 세션도 끝낸다: 토큰을 먼저 버려 지우는 사이에 온 명령이 닿지 못하게 하고,
-/// 지운 뒤 터미널을 끝낸다.
+/// 지운 뒤 터미널을 끝내고 그 작업 폴더(`work_root/<id>` — 세션 없이 남은 것 포함)를 지운다.
 pub async fn delete_workflow_and_sessions(
     active: &Active,
     channel: &Channel,
     terms: &Terms,
+    work_root: &Path,
     id: &str,
 ) -> Result<(), String> {
     channel.revoke_workflow(id);
+    // 저장소가 id(UUID 정규형)를 검사한다 — 통과한 id만 폴더 이름이 된다.
     active.sup().await?.delete_workflow(id)?;
     terms.kill(id);
+    crate::terminal::remove_work(&work_root.join(id));
     Ok(())
 }
 

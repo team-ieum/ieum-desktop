@@ -37,6 +37,30 @@ test("card_shows_folder_and_actions_and_only_a_click_turns_on", async () => {
   expect(usePendingFinish.getState().pending.w1).toBeUndefined();
 });
 
+test("card_lists_ai_nodes_and_marks_file_content_sending", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({
+    ...P,
+    ai: [
+      { nodeId: "a", label: "요약하기", provider: "cli:claude", sendContent: true },
+      { nodeId: "b", label: "", provider: "api:openai", sendContent: false },
+    ],
+  });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  const rows = within(card).getAllByTestId("finish-ai");
+  expect(rows.map((r) => r.textContent)).toEqual(["요약하기Claude (구독)파일 내용을 AI에 보냄", "AIOpenAI API 키파일 이름·크기만 보냄"]);
+  // 파일 내용을 보내는 노드만 눈에 띄게.
+  expect(within(rows[0]).getByText("파일 내용을 AI에 보냄").className).toContain("text-danger-700");
+  expect(within(rows[1]).getByText("파일 이름·크기만 보냄").className).not.toContain("text-danger-700");
+});
+
+test("card_reads_old_pending_without_ai_list", async () => {
+  // 이 칸이 생기기 전에 저장된 확인 대기.
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({ hash: "h", folder: "/h/in", actions: [] } as unknown as PendingFinish);
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  expect(within(screen.getByRole("dialog")).queryByTestId("finish-ai")).toBeNull();
+});
+
 test("card_disappears_when_workflow_changes_and_decline_clears", async () => {
   const pend = vi.spyOn(api, "pendingFinish").mockResolvedValue(P);
   const confirm = vi.spyOn(api, "confirmFinish").mockResolvedValue({ ok: true });

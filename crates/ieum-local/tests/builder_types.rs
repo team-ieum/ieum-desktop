@@ -130,7 +130,8 @@ fn chat_file_shape() {
             "outline": ["새 파일", "옮기기"],
             "baseline": {"t": "h0"},
             "tests": {"t": {"hash": "h0", "status": "success"}},
-            "pendingFinish": {"hash": "w", "folder": "/h/in", "actions": [{"nodeId": "m", "event": "local.file_move", "label": "옮기기", "target": "/h/out"}]}
+            "pendingFinish": {"hash": "w", "folder": "/h/in", "actions": [{"nodeId": "m", "event": "local.file_move", "label": "옮기기", "target": "/h/out"}],
+                "ai": [{"nodeId": "a", "label": "요약", "provider": "cli:claude", "sendContent": true}]}
         },
         "usage": []
     });

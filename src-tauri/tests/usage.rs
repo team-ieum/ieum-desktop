@@ -616,3 +616,91 @@ fn chat_usage_in_range_summary_and_tracking_since() {
     );
     assert_eq!(r.totals.runs, 0);
 }
+
+/// 최종 리뷰 I-3: 워크플로우를 지워도 그 채팅의 토큰·예상 금액은 합계·보고서에 남는다(실행 기록의 비용과 같게).
+#[test]
+fn chat_usage_survives_workflow_delete() {
+    use ieum_desktop_lib::store::{Store, StoredWorkflow};
+    use ieum_local::builder::{ChatMessage, Role, UsageEntry};
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let id = store
+        .save_workflow(StoredWorkflow {
+            id: String::new(),
+            name: "초안".into(),
+            enabled: false,
+            workflow: serde_json::from_value(json!({"nodes": [], "edges": []})).unwrap(),
+            updated_at: String::new(),
+        })
+        .unwrap()
+        .id;
+    store
+        .update_chat(&id, |c| {
+            c.messages.push(ChatMessage {
+                role: Role::User,
+                text: "비밀 대화".into(),
+                at: "2026-11-12T01:00:00.000Z".into(),
+            });
+            for (at, u) in [
+                (
+                    "2026-11-12T01:00:00.000Z",
+                    usage("anthropic", "claude-x", 1_000_000, 0),
+                ),
+                (
+                    "2026-11-12T02:00:00.000Z",
+                    usage("openai", "gpt-x", 500_000, 100_000),
+                ),
+            ] {
+                c.usage.push(UsageEntry {
+                    at: at.into(),
+                    usage: u,
+                });
+            }
+        })
+        .unwrap();
+    let totals = |store: &Store| {
+        let chats = store.all_chat_usage().unwrap();
+        let s = summarize(
+            &[],
+            &chats,
+            at("2026-11-10T00:00:00+09:00"),
+            at("2026-11-13T09:00:00+09:00"),
+            &table(),
+        );
+        let r = report(
+            &[],
+            &chats,
+            &HashMap::new(),
+            at("2026-11-13T09:00:00+09:00"),
+            &table(),
+        );
+        let r = serde_json::to_value(&r).unwrap();
+        (
+            serde_json::to_value(&s).unwrap(),
+            r["totals"].clone(),
+            r["overview"].clone(),
+        )
+    };
+    let before = totals(&store);
+    assert_eq!(before.1["aiCalls"], 2);
+    store.delete_workflow(&id).unwrap();
+    assert_eq!(totals(&store), before);
+    // 대화는 남지 않는다.
+    assert!(!t.path().join("chats").join(format!("{id}.json")).exists());
+    let kept = fs_text(t.path());
+    assert!(!kept.contains("비밀 대화"), "{kept}");
+}
+
+/// 폴더 아래 모든 파일의 글.
+fn fs_text(dir: &std::path::Path) -> String {
+    let mut out = String::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.push_str(&fs_text(&p));
+        } else {
+            out.push_str(&std::fs::read_to_string(&p).unwrap_or_default());
+        }
+    }
+    out
+}

@@ -144,6 +144,7 @@ fn chat_file_default_update_and_deleted_with_workflow() {
     assert!(store.get_chat("../x").is_err()); // id는 UUID만
     store.delete_workflow(&id).unwrap();
     assert!(!t.path().join("chats").join(format!("{id}.json")).exists()); // 같이 지운다
+    assert!(!t.path().join("chat-usage").exists()); // 쓴 사용량이 없으면 남길 것도 없다
     // 채팅 파일이 없는 워크플로우도 지워진다.
     let id2 = store.save_workflow(stored("")).unwrap().id;
     store.delete_workflow(&id2).unwrap();
@@ -206,6 +207,17 @@ fn all_chat_usage_reads_every_chat_file() {
         ),
         (id.as_str(), "2026-11-13T00:00:00.000Z", &u)
     );
+    // 워크플로우를 지우면 대화는 지워지고 사용량은 남는다(통계에 계속 합산).
     store.delete_workflow(&id).unwrap();
-    assert!(store.all_chat_usage().unwrap().is_empty()); // 워크플로우와 함께 사라진다
+    assert!(!t.path().join("chats").join(format!("{id}.json")).exists());
+    let all = store.all_chat_usage().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(
+        (
+            all[0].workflow_id.as_str(),
+            all[0].at.as_str(),
+            &all[0].usage
+        ),
+        (id.as_str(), "2026-11-13T00:00:00.000Z", &u)
+    );
 }

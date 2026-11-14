@@ -53,7 +53,7 @@ export function NotificationsMenu({ onOpenRun }: { onOpenRun: (runId: string) =>
 
   const items: Item[] = [
     ...runs
-      .filter((r) => r.status === "failed")
+      .filter((r) => r.status === "failed" && r.trigger !== "test")
       .map((r) => ({
         kind: "local" as const,
         id: r.runId,

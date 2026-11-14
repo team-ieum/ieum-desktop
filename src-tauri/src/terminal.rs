@@ -336,10 +336,37 @@ pub struct Prepared {
     pub token: Option<String>,
 }
 
-/// 작업 폴더를 만들고 실행 줄·환경을 조립한다. `root` = 계정 폴더(`Store::root`).
+/// 터미널 작업 폴더들의 자리: `<앱 캐시 폴더>/chat-work/<계정 키>`. 앱 데이터 폴더 밖이라
+/// 터미널의 CLI가 상대 경로로 실행 기록·워크플로우 파일에 닿지 못한다.
+pub fn work_root(cache_dir: &Path, account_key: &str) -> PathBuf {
+    cache_dir.join("chat-work").join(account_key)
+}
+
+/// 세션 전용 작업 폴더를 그 안의 파일째 지운다(없으면 그대로).
+pub fn remove_work(dir: &Path) {
+    match std::fs::remove_dir_all(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            eprintln!("[ieum] 터미널 작업 폴더를 지우지 못했어요: {e}");
+        }
+        _ => {}
+    }
+}
+
+/// 예전 위치(`<계정 폴더>/chat-work/<id>`)에 남은 작업 폴더를 비어 있는 것만 지운다.
+pub fn clean_old_work(account_root: &Path) {
+    let old = account_root.join("chat-work");
+    // `remove_dir`는 빈 폴더만 지운다.
+    for e in std::fs::read_dir(&old).into_iter().flatten().flatten() {
+        let _ = std::fs::remove_dir(e.path());
+    }
+    let _ = std::fs::remove_dir(&old);
+}
+
+/// 작업 폴더(`work_root/<workflow_id>`, 본인 전용)를 만들고 실행 줄·환경을 조립한다. `work_root` = `work_root()`.
+/// 그 폴더는 이 세션의 것 — `start`가 세션이 끝날 때 지운다.
 /// 토큰은 프로세스 환경으로만 넘긴다 — 실행 줄에 실으면 `ps`에 보인다.
 pub async fn prepare(
-    root: &Path,
+    work_root: &Path,
     workflow_id: &str,
     tool: Tool,
     account_dir: Option<PathBuf>,
@@ -347,12 +374,11 @@ pub async fn prepare(
     cols: u16,
     rows: u16,
 ) -> Result<Prepared, String> {
-    // 저장소와 같은 검사(UUID 정규형) — id가 계정 폴더 밖을 가리키지 못한다.
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    // 저장소와 같은 검사(UUID 정규형) — id가 작업 폴더 자리 밖을 가리키지 못한다.
     if !uuid::Uuid::try_parse(workflow_id).is_ok_and(|u| u.to_string() == workflow_id) {
         return Err(format!("잘못된 id예요: {workflow_id:?}"));
     }
-    let cwd = root.join("chat-work").join(workflow_id);
-    std::fs::create_dir_all(&cwd).map_err(|e| format!("{}: {e}", cwd.display()))?;
     let (mut env, mut token, mut bin_dir) = (Vec::new(), None, None);
     if let Some(g) = (gate.open)(workflow_id.to_string()).await? {
         env.push((
@@ -362,6 +388,21 @@ pub async fn prepare(
         env.push(("IEUM_TOKEN".to_string(), g.token.clone()));
         token = Some(g.token);
         bin_dir = Some(g.bin_dir);
+    }
+    // 거절된 세션이 폴더를 남기지 않게 관문 뒤에 만든다. 이미 있던 폴더도 본인 전용으로 맞춘다.
+    let cwd = work_root.join(workflow_id);
+    let private = || std::fs::Permissions::from_mode(0o700);
+    let made = std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&cwd)
+        .and_then(|()| std::fs::set_permissions(work_root, private()))
+        .and_then(|()| std::fs::set_permissions(&cwd, private()));
+    if let Err(e) = made {
+        if let Some(t) = &token {
+            (gate.close)(t);
+        }
+        return Err(format!("{}: {e}", cwd.display()));
     }
     Ok(Prepared {
         spawn: Spawn {
@@ -385,7 +426,8 @@ pub async fn prepare(
     })
 }
 
-/// 세션을 띄운다. 세션이 끝나면(스스로 끝남·kill) 토큰을 닫고 `on_exit`를 부른다. 띄우지 못해도 토큰은 닫는다.
+/// 세션을 띄운다. 세션이 끝나면(스스로 끝남·kill) 토큰을 닫고 작업 폴더(`p.spawn.cwd`)를 지운 뒤 `on_exit`를 부른다.
+/// 띄우지 못해도 토큰은 닫고 작업 폴더는 지운다(그 워크플로우의 다른 세션이 쓰는 중이면 그대로 둔다).
 pub fn start(
     terms: &Terms,
     workflow_id: &str,
@@ -396,6 +438,7 @@ pub fn start(
     on_exit: Box<dyn FnOnce() + Send>,
 ) -> Result<(), String> {
     let (close, token) = (gate.close.clone(), p.token.clone());
+    let (work, work_at_end) = (p.spawn.cwd.clone(), p.spawn.cwd.clone());
     let started = terms.spawn(
         workflow_id,
         tool,
@@ -405,11 +448,17 @@ pub fn start(
             if let Some(t) = &token {
                 close(t);
             }
+            remove_work(&work_at_end);
             on_exit();
         }),
     );
-    if let (Err(_), Some(t)) = (&started, &p.token) {
-        (gate.close)(t);
+    if started.is_err() {
+        if let Some(t) = &p.token {
+            (gate.close)(t);
+        }
+        if terms.running(workflow_id).is_none() {
+            remove_work(&work);
+        }
     }
     started
 }
@@ -474,11 +523,19 @@ pub async fn term_spawn(
     rows: u16,
     on_data: Channel<InvokeResponseBody>,
 ) -> Result<TermStart, String> {
-    let root = {
+    let old_root = {
         let sup = active.sup().await?;
         sup.store().get_workflow(&workflow_id)?; // 없는 워크플로우 거부
         sup.store().root().to_path_buf()
     };
+    let key = active
+        .account_key()
+        .await
+        .ok_or(crate::active::NOT_SIGNED_IN)?;
+    let work = work_root(
+        &app.path().app_cache_dir().map_err(|e| e.to_string())?,
+        &key,
+    );
     let sink: Sink = Arc::new(move |b| {
         let _ = on_data.send(InvokeResponseBody::Raw(b));
     });
@@ -492,6 +549,7 @@ pub async fn term_spawn(
     let creds = active.credentials().await?;
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
     let (account, skill_installed) = blocking(move || {
+        clean_old_work(&old_root);
         let account = account_dir(&creds, tool);
         let (mut claude, mut codex) = (vec![home.join(".claude")], vec![home.join(".codex")]);
         match (tool, &account) {
@@ -509,7 +567,7 @@ pub async fn term_spawn(
         (account, installed)
     })
     .await?;
-    let p = prepare(&root, &workflow_id, tool, account, &gate, cols, rows).await?;
+    let p = prepare(&work, &workflow_id, tool, account, &gate, cols, rows).await?;
     let id = workflow_id.clone();
     start(
         &terms,
