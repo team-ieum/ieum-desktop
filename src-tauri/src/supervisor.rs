@@ -58,7 +58,13 @@ pub enum AppEvent {
         workflow_name: String,
     },
     /// 화면 이벤트 `test-undo-failed` — 테스트가 옮긴 파일 일부를 되돌리지 못했다.
-    TestUndoFailed { workflow_id: String, run_id: String },
+    /// `at_start` = 앱 시작 때 되돌리다 실패했으면 그 워크플로우 이름(지워졌으면 빈 글). 그때는 화면이
+    /// 아직 듣지 않으므로 받는 쪽이 화면에 넘기지 않고 바로 시스템 알림을 보낸다.
+    TestUndoFailed {
+        workflow_id: String,
+        run_id: String,
+        at_start: Option<String>,
+    },
 }
 
 /// `save_workflow_expecting`이 기대한 `updated_at`과 저장본이 다를 때의 오류 문자열.
@@ -235,7 +241,7 @@ impl Supervisor {
     }
 
     /// 끝 시각 없는 기록(실행 도중 앱이 꺼짐)을 닫는다. 그중 노드 테스트는 먼저 되돌려 결과를 기록에 남긴다 —
-    /// 테스트가 파일을 옮긴 채로 남기지 않는다. 못 되돌린 것이 있으면 기록을 닫은 뒤 `TestUndoFailed`.
+    /// 테스트가 파일을 옮긴 채로 남기지 않는다. 못 되돌린 것이 있으면 기록을 닫은 뒤 `TestUndoFailed`(`at_start`).
     fn close_unfinished(&self) {
         let mut failed = Vec::new();
         match self.store().all_runs() {
@@ -263,7 +269,9 @@ impl Supervisor {
             eprintln!("[ieum] 끝나지 않은 실행 기록을 닫지 못했어요: {e}");
         }
         for (workflow_id, run_id) in failed {
+            let name = self.store().get_workflow(&workflow_id).map(|w| w.name);
             (self.0.deps.emit)(AppEvent::TestUndoFailed {
+                at_start: Some(name.unwrap_or_default()),
                 workflow_id,
                 run_id,
             });
@@ -743,6 +751,7 @@ impl Supervisor {
             emit(AppEvent::TestUndoFailed {
                 workflow_id: workflow_id.to_string(),
                 run_id: stored.run.run_id.clone(),
+                at_start: None,
             });
         }
         if let Some(event) = finished {

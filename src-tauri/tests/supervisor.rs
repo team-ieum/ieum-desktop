@@ -906,11 +906,13 @@ async fn unfinished_test_run_undone_on_next_start() {
             AppEvent::TestUndoFailed {
                 workflow_id,
                 run_id,
-            } => Some((workflow_id.clone(), run_id.clone())),
+                at_start,
+            } => Some((workflow_id.clone(), run_id.clone(), at_start.clone())),
             _ => None,
         })
         .collect();
-    assert_eq!(failed, [(id.clone(), lost)]);
+    // 재리뷰 I-1: 시작 때는 화면 리스너가 없다 — 이벤트가 워크플로우 이름을 실어 Rust가 바로 알림을 보낸다.
+    assert_eq!(failed, [(id.clone(), lost, Some("정리".to_string()))]);
 
     // 테스트가 아닌 실행은 닫기만 한다 — 사람이 실행 기록에서 되돌린다.
     assert!(env.store.get_run(&manual).unwrap().undo.is_none());

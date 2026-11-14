@@ -156,7 +156,12 @@ fn undo_failed_events(env: &Env) -> Vec<(String, String)> {
             AppEvent::TestUndoFailed {
                 workflow_id,
                 run_id,
-            } => Some((workflow_id.clone(), run_id.clone())),
+                at_start,
+            } => {
+                // 실행 중 실패는 화면이 받아 알린다(시작 때 것만 Rust가 바로 알린다).
+                assert!(at_start.is_none());
+                Some((workflow_id.clone(), run_id.clone()))
+            }
             _ => None,
         })
         .collect()

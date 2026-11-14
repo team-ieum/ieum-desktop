@@ -155,9 +155,20 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 "finish-pending",
                 json!({"id": workflow_id, "name": workflow_name}),
             ),
+            // 앱 시작 때 실패: 화면이 아직 듣지 않는다(웹뷰 로드 전·로그인 관문) — 여기서 바로 알린다.
+            // 그 편집 화면이 떠 있을 수 없으니 화면 표시 여부는 묻지 않는다. 문구에 경로는 없다.
+            AppEvent::TestUndoFailed {
+                workflow_id,
+                at_start: Some(name),
+                ..
+            } => {
+                notify::on_test_undo_failed(&handle, &workflow_id, &name, false);
+                Ok(())
+            }
             AppEvent::TestUndoFailed {
                 workflow_id,
                 run_id,
+                at_start: None,
             } => handle.emit(
                 "test-undo-failed",
                 json!({"id": workflow_id, "runId": run_id}),
