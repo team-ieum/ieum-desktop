@@ -97,6 +97,9 @@ test("ai_choices_add_codex_and_agy_only_when_the_cli_is_enabled", async () => {
   expect(screen.queryByRole("combobox")).toBeNull(); // 브라우저 기본 select 없음
   await act(async () => fireEvent.click(chip("채팅에 쓸 키·계정")));
   expect(options()).toEqual(["Claude (구독) · 이 Mac", "Antigravity (구독)", "Anthropic · k2", "Anthropic · k1", "OpenAI · o1"]);
+  // 구독과 API 키를 머리말로 나눈다 — 머리말은 고를 수 없는 항목.
+  const heads = within(screen.getByRole("listbox")).getAllByRole("presentation").map((h) => h.textContent);
+  expect(heads).toEqual(["구독", "API 키"]);
   await act(async () => fireEvent.click(screen.getByRole("option", { name: "Antigravity (구독)" })));
   await type("안녕");
   await enter();

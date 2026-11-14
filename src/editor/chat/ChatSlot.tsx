@@ -278,7 +278,7 @@ export function ChatSlot({
               <>
                 <Dropdown
                   label={t("chat.ai")}
-                  items={choices.map((c) => ({ id: c.value, name: c.label, icon: null }))}
+                  items={choices.map((c) => ({ id: c.value, name: c.label, icon: null, group: t(c.provider.startsWith("api:") ? "chat.group.api" : "chat.group.sub") }))}
                   sel={choice.value}
                   onSel={(value) => value !== choice.value && pickAi({ value, model: "", effort: "" })}
                   up

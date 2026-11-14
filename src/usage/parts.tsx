@@ -36,7 +36,8 @@ export function WindowMeter({ w, now, inline = false }: { w: PlanWindow; now: Da
   );
 }
 
-export type DropItem<T extends string> = { id: T; name: string; icon: ReactNode; note?: ReactNode };
+/** `group` — 앞 항목과 다르면 그 앞에 고를 수 없는 머리말을 그린다. */
+export type DropItem<T extends string> = { id: T; name: string; icon: ReactNode; note?: ReactNode; group?: string };
 
 const TRIGGER =
   "inline-flex h-8 items-center gap-2 rounded-lg border border-[#cde9f4] bg-white px-2.5 typo-caption1_semibold whitespace-nowrap text-neutral-700 hover:bg-main-light-blue/50";
@@ -126,7 +127,12 @@ export function Dropdown<T extends string>({
             up ? "bottom-full mb-1" : "mt-1"
           } ${left ? "left-0" : "right-0"}`}
         >
-          {items.map((i) => (
+          {items.map((i, n) => [
+            i.group && i.group !== items[n - 1]?.group && (
+              <li key={`g:${i.group}`} role="presentation" className="px-2 pt-1.5 pb-0.5 typo-caption2_semibold text-neutral-400">
+                {i.group}
+              </li>
+            ),
             <li
               key={i.id}
               role="option"
@@ -144,8 +150,8 @@ export function Dropdown<T extends string>({
               <span className="flex-1">{i.name}</span>
               {i.note}
               <Check className={`size-3.5 text-main-blue ${i.id === sel ? "" : "invisible"}`} aria-hidden="true" />
-            </li>
-          ))}
+            </li>,
+          ])}
         </ul>
       )}
     </div>
