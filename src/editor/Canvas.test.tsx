@@ -156,12 +156,15 @@ test("ai_node_shows_model_pill", () => {
   r.rerender(<Canvas workflow={ai({ provider: "api:openai" })} />);
   expect(screen.getByText("모델 정보 없음")).toBeTruthy();
   r.rerender(<Canvas workflow={ai({ provider: "cli:claude", model: "x" })} />);
-  expect(screen.getByText("Claude (구독)")).toBeTruthy();
+  expect(screen.getByText("Claude (구독) · x")).toBeTruthy();
 });
 
 test("model_label_names_subscription_providers", () => {
-  expect(modelLabel({ provider: "cli:codex", model: "gpt-5.6-luna" })).toBe("Codex (구독)");
+  // 구독 공급원도 고른 모델이 있으면 붙인다(없으면 기본 모델이라 공급원만).
+  expect(modelLabel({ provider: "cli:codex", model: "gpt-5.6-luna" })).toBe("Codex (구독) · gpt-5.6-luna");
   expect(modelLabel({ provider: "cli:claude" })).toBe("Claude (구독)");
+  // 예전 Antigravity 값(`…-high`)은 수준을 뗀 모델 이름.
+  expect(modelLabel({ provider: "cli:agy", model: "gemini-4-argon-high" })).toBe("Antigravity (구독) · gemini-4-argon");
 });
 
 test("canvas_pill_shows_credential_label", () => {

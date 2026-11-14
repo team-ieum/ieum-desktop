@@ -35,8 +35,10 @@ interface FieldProps {
 
 const PROVIDER_LOGO: Record<string, LogoId> = { "cli:claude": "claude", "cli:codex": "openai", "cli:agy": "antigravity", "api:anthropic": "anthropic", "api:openai": "openai", "api:gemini": "gemini" };
 
+const SELECT_TRIGGER = `${INPUT} flex items-center justify-between gap-2 text-left hover:bg-neutral-50 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400`;
+
 /** AI 노드 "키·계정" — 그 공급원의 목록 + 맨 위 "기본(이름표)". 비우면 칸을 저장하지 않는다(`undefined`). */
-function CredentialSelect({ id, provider, value, onChange }: { id: string; provider: unknown; value: string; onChange: (v: unknown) => void }) {
+function CredentialSelect({ label, provider, value, onChange }: { label: string; provider: unknown; value: string; onChange: (v: unknown) => void }) {
   const view = useCredentials((s) => s.view);
   useEffect(() => {
     useCredentials.getState().load().catch(() => {});
@@ -47,15 +49,19 @@ function CredentialSelect({ id, provider, value, onChange }: { id: string; provi
   const missing = !!view && !!value && !list.some((m) => m.id === value);
   return (
     <div className="flex flex-col gap-1.5">
-      <select id={id} className={`${INPUT} ${missing ? "border-danger-600" : ""}`} value={value} onChange={(e) => onChange(e.target.value || undefined)}>
-        <option value="">{def ? t("editor.credentialDefault").replace("{label}", credLabel(def)) : t("settings.defaultBadge")}</option>
-        {list.map((m) => (
-          <option key={m.id} value={m.id}>
-            {credLabel(m)}
-          </option>
-        ))}
-        {value && !list.some((m) => m.id === value) && <option value={value}>{view ? t("editor.credentialMissing") : value}</option>}
-      </select>
+      <Dropdown
+        label={label}
+        items={[
+          { id: "", name: def ? t("editor.credentialDefault").replace("{label}", credLabel(def)) : t("settings.defaultBadge"), icon: null },
+          ...list.map((m) => ({ id: m.id, name: credLabel(m), icon: null })),
+          ...(value && !list.some((m) => m.id === value) ? [{ id: value, name: view ? t("editor.credentialMissing") : value, icon: null }] : []),
+        ]}
+        sel={value}
+        onSel={(id) => id !== value && onChange(id || undefined)}
+        left
+        root="relative w-full"
+        trigger={`${SELECT_TRIGGER} ${missing ? "border-danger-600" : ""}`}
+      />
       {missing && (
         <p role="alert" className="flex items-center gap-1.5 typo-caption1_semibold text-danger-700">
           <TriangleAlert size={14} aria-hidden="true" />
@@ -66,7 +72,6 @@ function CredentialSelect({ id, provider, value, onChange }: { id: string; provi
   );
 }
 
-const SELECT_TRIGGER = `${INPUT} flex items-center justify-between gap-2 text-left hover:bg-neutral-50 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-400`;
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
 /** AI 노드 "모델" — 고른 공급원의 모델 목록. "기본 모델"이면 칸을 저장하지 않는다(`undefined`). 목록에 없는 저장값은 그대로 둔다.
@@ -189,16 +194,40 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
       </div>
     );
   } else if (event === "local.ai" && field.key === "credential") {
-    input = <CredentialSelect id={id} provider={provider} value={str} onChange={onChange} />;
+    input = <CredentialSelect label={label} provider={provider} value={str} onChange={onChange} />;
   } else if (event === "local.ai" && field.key === "model") {
     input = <ModelSelect label={label} provider={provider} ai={ai} onChange={onChange} />;
   } else if (event === "local.ai" && field.key === "effort") {
     input = <EffortSelect label={label} provider={provider} ai={ai} onChange={onChange} />;
-  } else if (field.choices) {
-    const logo = event === "local.ai" && field.key === "provider" ? PROVIDER_LOGO[str] : undefined;
+  } else if (event === "local.ai" && field.key === "provider" && field.choices) {
+    const logo = PROVIDER_LOGO[str];
     input = (
       <div className="flex items-center gap-2">
         {logo && <ProviderLogo id={logo} size={28} />}
+        <Dropdown
+          label={label}
+          items={[
+            // 비어 있으면(새 노드) 첫 공급원을 고른 것처럼 보이지 않게.
+            ...(str ? [] : [{ id: "", name: t("editor.pickProvider"), icon: null }]),
+            ...field.choices.map((c) => ({
+              id: c.id,
+              name: tDyn(`choice.provider.${c.id}`) ?? c.name,
+              icon: null, // 로고는 칸 왼쪽에 하나만
+              // 구독(정액)과 API 키(쓴 만큼 과금)를 나눠 보인다.
+              group: t(c.id.startsWith("api:") ? "chat.group.api" : "chat.group.sub"),
+            })),
+          ]}
+          sel={str}
+          onSel={(v) => v !== str && onChange(v)}
+          left
+          root="relative min-w-0 flex-1"
+          trigger={SELECT_TRIGGER}
+        />
+      </div>
+    );
+  } else if (field.choices) {
+    input = (
+      <div className="flex items-center gap-2">
         <select id={id} className={INPUT} value={str} onChange={(e) => onChange(e.target.value)}>
           {!str && <option value="" disabled />}
           {field.choices.map((c) => (

@@ -28,6 +28,7 @@ import { credLabel } from "../screens/settings/AiPane";
 import { choicesFor, useCredentials } from "../stores/credentials";
 import type { NodeRunStatus } from "../stores/runs";
 import { AnimatedEdge, type EdgeData } from "./AnimatedEdge";
+import { shownModel } from "./models";
 
 /** 로컬 노드 표시 — 웹 이음 상태 배지(DashboardStatusBadge)와 같은 알약. */
 export function LocalBadge() {
@@ -69,15 +70,16 @@ export const nodeTitle = (event: string) => tDyn(`node.${event}.title`) ?? event
 
 const isAi = (event: string, kind: string) => kind === "AI" || event === "local.ai" || event.startsWith("ai.");
 
-/** AI 노드 알약 — 구독이면 공급원 이름, API면 모델 이름. 고른 키·계정이 있으면 " · 이름표"(기본이면 생략). */
+/** AI 노드 알약 — 구독이면 공급원 이름(모델을 골랐으면 " · 모델"), API면 모델 이름. 고른 키·계정이 있으면 " · 이름표"(기본이면 생략). */
 export function modelLabel(config: WfNode["config"], view?: CredentialsView | null): string {
   const p = config.provider;
-  const base =
-    typeof p === "string" && p.startsWith("cli:")
-      ? (tDyn(`choice.provider.${p}`) ?? p)
-      : typeof config.model === "string" && config.model
-        ? config.model
-        : t("editor.noModel");
+  const model = typeof config.model === "string" ? config.model : "";
+  let base: string;
+  if (typeof p === "string" && p.startsWith("cli:")) {
+    const name = tDyn(`choice.provider.${p}`) ?? p;
+    // 예전 Antigravity 값(`…-high`)은 수준을 뗀 이름.
+    base = model ? `${name} · ${shownModel(p, model, "").model}` : name;
+  } else base = model || t("editor.noModel");
   if (!view || typeof config.credential !== "string" || !config.credential) return base;
   const m = choicesFor(view, config.provider).find((x) => x.id === config.credential);
   if (m?.isDefault) return base;

@@ -92,6 +92,17 @@ const VIEW: CredentialsView = {
   codexAccounts: [],
   keychainError: null,
 };
+/** 앱 드롭다운: 단추를 열고 항목을 고른다. */
+const choose = (label: RegExp, option: string) => {
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: option }));
+};
+const optionsOf = (label: RegExp) => {
+  fireEvent.click(screen.getByRole("button", { name: label }));
+  const names = within(screen.getByRole("listbox")).getAllByRole("option").map((o) => o.textContent);
+  fireEvent.click(screen.getByRole("button", { name: label })); // 닫기
+  return names;
+};
 const aiNode = (config: Record<string, unknown>): WfNode => ({ id: "a", event: "local.ai", type: "AI", config: { provider: "api:anthropic", prompt: "p", ...config } });
 
 test("ai_node_credential_dropdown_saves_id_or_omits_for_default", () => {
@@ -100,24 +111,24 @@ test("ai_node_credential_dropdown_saves_id_or_omits_for_default", () => {
   const onChange = vi.fn();
   const node = aiNode({});
   const r = render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
-  const sel = screen.getByLabelText("키·계정") as HTMLSelectElement;
-  expect([...sel.options].map((o) => [o.value, o.text])).toEqual([
-    ["", "기본 (개인)"],
-    ["default", "개인"],
-    ["0123abcd", "회사"],
-  ]);
+  expect(screen.queryByRole("combobox")).toBeNull(); // 브라우저 기본 select 없음
+  expect(optionsOf(/^키·계정/)).toEqual(["기본 (개인)", "개인", "회사"]);
+  // 공급원 목록은 구독과 API 키를 머리말로 나눈다.
+  fireEvent.click(screen.getByRole("button", { name: /^AI 공급원/ }));
+  expect(within(screen.getByRole("listbox")).getAllByRole("presentation").map((h) => h.textContent)).toEqual(["구독", "API 키"]);
+  fireEvent.click(screen.getByRole("button", { name: /^AI 공급원/ }));
   // 공급원 옆에 로고
   expect(screen.getByTestId("field-provider").querySelector('[data-logo="anthropic"]')).not.toBeNull();
-  fireEvent.change(sel, { target: { value: "0123abcd" } });
+  choose(/^키·계정/, "회사");
   expect(onChange.mock.lastCall![0].config.credential).toBe("0123abcd");
   r.unmount();
 
   const picked = aiNode({ credential: "0123abcd" });
   render(<ConfigPanel node={picked} workflow={{ nodes: [picked], edges: [] }} onChange={onChange} />);
-  fireEvent.change(screen.getByLabelText("키·계정"), { target: { value: "" } });
+  choose(/^키·계정/, "기본 (개인)");
   expect("credential" in onChange.mock.lastCall![0].config).toBe(false);
   // 공급원을 바꾸면 고른 키는 버린다(다른 공급원의 id).
-  fireEvent.change(screen.getByLabelText(/^AI 공급원/), { target: { value: "cli:claude" } });
+  choose(/^AI 공급원/, "Claude (구독)");
   expect(onChange.mock.lastCall![0].config).toEqual({ provider: "cli:claude", prompt: "p" });
   useCredentials.setState({ view: null });
 });
@@ -135,10 +146,9 @@ test("codex_provider_lists_codex_accounts", () => {
   });
   const node = aiNode({ provider: "cli:codex" });
   render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={() => {}} />);
-  expect(screen.getByRole("option", { name: "Codex (구독)" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "AI 공급원: Codex (구독)" })).toBeTruthy();
   expect(screen.getByTestId("field-provider").querySelector('[data-logo="openai"]')).not.toBeNull();
-  const cred = screen.getByLabelText(/키·계정/) as HTMLSelectElement;
-  expect([...cred.options].map((o) => o.value)).toEqual(["", "system", "c0dec0de"]);
+  expect(optionsOf(/^키·계정/)).toEqual(["기본 (이 Mac의 로그인)", "이 Mac의 로그인", "회사"]);
   useCredentials.setState({ view: null });
 });
 
@@ -148,19 +158,19 @@ test("agy_provider_cannot_send_file_content", () => {
   const onChange = vi.fn();
   const node = aiNode({ provider: "cli:claude", sendContent: true });
   const r = render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
-  fireEvent.change(screen.getByLabelText(/AI 공급원/), { target: { value: "cli:agy" } });
+  choose(/^AI 공급원/, "Antigravity (구독)");
   expect(onChange.mock.lastCall![0].config).toEqual({ provider: "cli:agy", prompt: "p" });
   r.unmount();
 
   // 이미 cli:agy면 체크 칸이 잠기고 안내가 보인다(저장본에 sendContent가 남아 있어도 켜진 것으로 보이지 않는다).
   const agy = aiNode({ provider: "cli:agy", sendContent: true });
   render(<ConfigPanel node={agy} workflow={{ nodes: [agy], edges: [] }} onChange={onChange} />);
-  expect(screen.getByRole("option", { name: "Antigravity (구독)" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "AI 공급원: Antigravity (구독)" })).toBeTruthy();
   expect(screen.getByTestId("field-provider").querySelector('[data-logo="antigravity"]')).not.toBeNull();
   const box = screen.getByLabelText(/파일 내용도 보내기/) as HTMLInputElement;
   expect([box.disabled, box.checked]).toEqual([true, false]);
   expect(screen.getByText("Antigravity (구독)는 파일 내용을 보낼 수 없어요. 이름·확장자·크기만 가요.")).toBeTruthy();
-  expect((screen.getByLabelText(/키·계정/) as HTMLSelectElement).options.length).toBe(1);
+  expect(optionsOf(/^키·계정/)).toHaveLength(1);
   useCredentials.setState({ view: null });
 });
 
@@ -236,7 +246,7 @@ test("ai_node_effort_follows_the_model_and_resets_when_it_changes", async () => 
   fireEvent.click(screen.getByRole("option", { name: "claude-haiku-5-5" }));
   expect(onChange.mock.lastCall![0].config).toEqual({ provider: "api:anthropic", prompt: "p", model: "claude-haiku-5-5" });
   // 공급원을 바꿔도.
-  fireEvent.change(screen.getByLabelText(/AI 공급원/), { target: { value: "cli:claude" } });
+  choose(/^AI 공급원/, "Claude (구독)");
   expect(onChange.mock.lastCall![0].config).toEqual({ provider: "cli:claude", prompt: "p" });
 });
 
@@ -284,6 +294,17 @@ test("ai_node_shows_missing_credential_warning", () => {
   const node = aiNode({ credential: "deadbeef" });
   render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={() => {}} />);
   expect(screen.getByRole("alert").textContent).toContain("찾을 수 없는 키");
-  expect((screen.getByLabelText("키·계정") as HTMLSelectElement).value).toBe("deadbeef");
+  // 저장된 id는 그대로 두고(다른 키로 대신하지 않는다) 단추에도 없다고 보인다.
+  expect(screen.getByRole("button", { name: /^키·계정: 찾을 수 없는 키/ })).toBeTruthy();
   useCredentials.setState({ view: null });
+});
+
+test("ai_node_without_provider_does_not_look_like_claude_is_picked", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "a", event: "local.ai", type: "AI", config: { prompt: "p" } };
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
+  expect(screen.getByRole("button", { name: "AI 공급원: 공급원을 고르세요" })).toBeTruthy();
+  choose(/^AI 공급원/, "Codex (구독)");
+  expect(onChange.mock.lastCall![0].config).toEqual({ prompt: "p", provider: "cli:codex" });
 });
