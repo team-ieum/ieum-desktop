@@ -21,6 +21,7 @@ use crate::pricing;
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::sub_usage::{AntigravityUsageClient, SubscriptionUsage};
 use crate::supervisor::{Supervisor, WorkflowEntry};
+use crate::terminal::Terms;
 use crate::usage::{self, UsageReport, UsageSummary};
 use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
 use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
@@ -70,8 +71,14 @@ pub fn save_from_canvas(sup: &Supervisor, wf: StoredWorkflow) -> Result<StoredWo
 }
 
 #[tauri::command]
-pub async fn delete_workflow(active: State<'_, Active>, id: String) -> Result<(), String> {
-    active.sup().await?.delete_workflow(&id)
+pub async fn delete_workflow(
+    active: State<'_, Active>,
+    terms: State<'_, Terms>,
+    id: String,
+) -> Result<(), String> {
+    active.sup().await?.delete_workflow(&id)?;
+    terms.kill(&id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -569,7 +576,9 @@ pub async fn web_logout(
     active: State<'_, Active>,
     keys: State<'_, Keys>,
     watches: State<'_, Watches>,
+    terms: State<'_, Terms>,
 ) -> Result<(), WebError> {
+    terms.kill_all();
     watches.clear();
     logout_and_deactivate(&active, be_client(&active, &keys)).await
 }

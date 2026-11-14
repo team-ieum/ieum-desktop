@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { api } from "../../api";
 import { setLang } from "../../i18n";
-import { AssistantPanel, MODE_KEY } from "./AssistantPanel";
+import { AssistantPanel, availableMode, MODE_KEY } from "./AssistantPanel";
 
 // 이 환경의 localStorage는 온전하지 않다 — 메모리 저장소를 꽂는다(Sidebar.test.tsx와 같은 방식).
 const memoryStorage = () => {
@@ -10,7 +11,10 @@ const memoryStorage = () => {
   return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };
 };
 beforeAll(() => setLang("ko"));
-beforeEach(() => vi.stubGlobal("localStorage", memoryStorage()));
+beforeEach(() => {
+  vi.stubGlobal("localStorage", memoryStorage());
+  vi.spyOn(api, "termTools").mockResolvedValue({ tools: ["claude"], running: null });
+});
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -49,4 +53,29 @@ test("assistant_has_no_slots_before_first_save", async () => {
   const r = render(<AssistantPanel workflowId="" />);
   await open();
   expect(r.container.querySelector("[data-slot]")).toBeNull();
+});
+
+test("available_mode_falls_back_to_what_works", () => {
+  expect(availableMode("terminal", { terminal: true, chat: true })).toBe("terminal");
+  expect(availableMode("terminal", { terminal: false, chat: true })).toBe("chat");
+  expect(availableMode(null, { terminal: true, chat: false })).toBe("terminal");
+  expect(availableMode("zzz", { terminal: true, chat: true })).toBe("chat");
+  expect(availableMode("chat", { terminal: false, chat: false })).toBeNull();
+});
+
+test("assistant_hides_terminal_tab_without_usable_cli", async () => {
+  vi.mocked(api.termTools).mockResolvedValue({ tools: [], running: null });
+  localStorage.setItem(MODE_KEY, "terminal");
+  render(<AssistantPanel workflowId="w1" />);
+  await open();
+  await waitFor(() => expect(screen.queryByRole("tab", { name: "터미널" })).toBeNull());
+  expect(screen.getByRole("tab", { name: "채팅" }).getAttribute("aria-selected")).toBe("true");
+  expect(localStorage.getItem(MODE_KEY)).toBe("terminal"); // 기억은 사용자가 고를 때만 바뀐다
+});
+
+test("assistant_keeps_terminal_tab_for_a_running_session", async () => {
+  vi.mocked(api.termTools).mockResolvedValue({ tools: [], running: "claude" });
+  render(<AssistantPanel workflowId="w1" />);
+  await open();
+  expect(screen.getByRole("tab", { name: "터미널" })).toBeTruthy();
 });

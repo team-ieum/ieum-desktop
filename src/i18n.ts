@@ -437,6 +437,12 @@ const ko = {
   "assistant.close": "IEUM Assistant 닫기",
   "assistant.tab.terminal": "터미널",
   "assistant.tab.chat": "채팅",
+  "assistant.terminal.tool": "CLI",
+  "assistant.terminal.start": "시작",
+  "assistant.terminal.stop": "세션 종료",
+  "assistant.terminal.ended": "세션이 끝났어요.",
+  "assistant.terminal.failed": "터미널을 열지 못했어요.",
+  "assistant.terminal.skillInstalled": "IEUM 스킬을 설치했어요 (~/.agents/skills/ieum).",
 
   // 캔버스 동기화(B)
   "sync.reloaded": "채팅이 워크플로우를 바꿔서 화면을 다시 불러왔어요.",
@@ -1059,6 +1065,12 @@ const en: Record<Key, string> = {
   "assistant.close": "Close IEUM Assistant",
   "assistant.tab.terminal": "Terminal",
   "assistant.tab.chat": "Chat",
+  "assistant.terminal.tool": "CLI",
+  "assistant.terminal.start": "Start",
+  "assistant.terminal.stop": "End session",
+  "assistant.terminal.ended": "Session ended.",
+  "assistant.terminal.failed": "Couldn't open the terminal.",
+  "assistant.terminal.skillInstalled": "Installed the IEUM skill (~/.agents/skills/ieum).",
 
   // 캔버스 동기화(B)
   "sync.reloaded": "The assistant changed this workflow, so the canvas was reloaded.",
