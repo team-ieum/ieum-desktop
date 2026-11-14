@@ -69,20 +69,39 @@ pub(crate) async fn find_update(
 }
 
 /// 앱이 떠 있는 동안 다시 확인하는 간격.
-const UPDATE_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// 다시 확인하는 최소 간격 — Orca처럼 타이머 대신 "볼 때" 확인하되, 너무 잦지 않게.
+const UPDATE_GAP: Duration = Duration::from_secs(60 * 60);
 
-/// 시작할 때 한 번, 그 뒤 6시간마다 확인. 실패는 로그만 — 팝업 없음.
-fn check_update(app: &App) {
+/// 마지막으로 확인을 시작한 때.
+#[derive(Default)]
+pub struct LastUpdateCheck(std::sync::Mutex<Option<std::time::Instant>>);
+
+/// 확인할 때가 됐나 — 처음이거나 `UPDATE_GAP`이 지났으면.
+pub fn update_due(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_none_or(|t| now.duration_since(t) >= UPDATE_GAP)
+}
+
+/// 앱을 켤 때·창이 앞으로 올 때·다시 열 때 부른다(출시 빌드만). 때가 아니면 아무것도 안 한다.
+/// 창이 숨어 있는 동안은 알림을 볼 수 없으니 확인하지 않는다 — 다음에 창을 볼 때 확인한다.
+fn check_update(handle: &tauri::AppHandle) {
     if cfg!(debug_assertions) {
         return;
     }
-    let handle = app.handle().clone();
+    let Some(last) = handle.try_state::<LastUpdateCheck>() else {
+        return;
+    };
+    {
+        let mut last = last.0.lock().unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        if !update_due(*last, now) {
+            return;
+        }
+        *last = Some(now); // 실패해도 다음 확인은 간격 뒤 — 오프라인에서 창 전환마다 요청하지 않게.
+    }
+    let handle = handle.clone();
     tauri::async_runtime::spawn(async move {
-        loop {
-            if let Err(e) = find_update(&handle, false).await {
-                eprintln!("[ieum] 업데이트 확인 실패: {e}");
-            }
-            tokio::time::sleep(UPDATE_EVERY).await;
+        if let Err(e) = find_update(&handle, false).await {
+            eprintln!("[ieum] 업데이트 확인 실패: {e}");
         }
     });
 }
@@ -248,7 +267,8 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(channel::app_channel(app.handle()));
     tray::create(app)?;
     app.manage(PendingUpdate::default());
-    check_update(app);
+    app.manage(LastUpdateCheck::default());
+    check_update(app.handle());
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
         tray::show_main(app.handle());
     }
@@ -274,11 +294,14 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .setup(setup)
         // 창 닫기 = 숨기기(감시는 계속).
-        .on_window_event(|w, e| {
-            if let WindowEvent::CloseRequested { api, .. } = e {
+        .on_window_event(|w, e| match e {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = w.hide();
             }
+            // 창이 앞으로 오면(잠자기에서 깬 뒤 포함) 새 버전 확인.
+            WindowEvent::Focused(true) => check_update(w.app_handle()),
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_workflows,
@@ -358,6 +381,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = e {
                 tray::show_main(app);
+                check_update(app);
             }
             // 앱이 끝나면 터미널 세션도 전부 끝낸다.
             if let tauri::RunEvent::Exit = e {
