@@ -86,7 +86,7 @@ pub async fn delete_workflow(
 }
 
 /// 워크플로우를 지우며 그 세션도 끝낸다: 토큰을 먼저 버려 지우는 사이에 온 명령이 닿지 못하게 하고,
-/// 지운 뒤 터미널을 끝내고 그 작업 폴더(`work_root/<id>` — 세션 없이 남은 것 포함)를 지운다.
+/// 지운 뒤 터미널을 끝내고, 그 계정에 살아 있는 세션이 없으면 작업 폴더를 비운다(세션 없이 남은 것 포함).
 pub async fn delete_workflow_and_sessions(
     active: &Active,
     channel: &Channel,
@@ -98,7 +98,7 @@ pub async fn delete_workflow_and_sessions(
     // 저장소가 id(UUID 정규형)를 검사한다 — 통과한 id만 폴더 이름이 된다.
     active.sup().await?.delete_workflow(id)?;
     terms.kill(id);
-    crate::terminal::remove_work(&work_root.join(id));
+    terms.clear_work_if_idle(work_root);
     Ok(())
 }
 

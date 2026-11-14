@@ -14,6 +14,9 @@ use serde_json::{Map, Value};
 
 /// 폴더 고르기(5분)와 AI 테스트를 기다릴 수 있어야 한다.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(600);
+/// 샌드박스가 앱 소켓 연결을 막았을 때 stderr에 찍는다 — 에이전트가 "이 세션에서 못 씀"으로 오해하지 않게.
+const SANDBOX_HINT: &str = "IEUM 앱 소켓 연결이 샌드박스에 막혔음(Operation not permitted). \
+ieum 명령은 앱과 로컬 소켓으로 통신하므로 샌드박스 밖에서 실행할 것(사용자 승인 필요).";
 
 #[derive(Parser)]
 #[command(name = "ieum", about = "IEUM 워크플로우를 고치는 명령")]
@@ -158,7 +161,13 @@ fn ask(op: Op) -> Result<String, Code> {
     else {
         return Err(Code::Unauthorized);
     };
-    let mut stream = UnixStream::connect(socket).map_err(|_| Code::Unauthorized)?;
+    let mut stream = UnixStream::connect(socket).map_err(|e| {
+        // 소켓은 있는데 연결이 거부됨 = 명령을 감싼 샌드박스가 막았다(예: Antigravity 터미널 샌드박스).
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            eprintln!("{SANDBOX_HINT}");
+        }
+        Code::Unauthorized
+    })?;
     stream
         .set_read_timeout(Some(REPLY_TIMEOUT))
         .map_err(|_| Code::Internal)?;

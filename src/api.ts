@@ -386,6 +386,19 @@ export interface PendingFinish {
 
 /** 앱 안 터미널에 띄울 수 있는 CLI. */
 export type TermTool = "claude" | "codex" | "agy";
+/** CLI 카드의 상태 — `ready`·`unknown`(확인 불가)은 고를 수 있다. */
+export type TermCliState = "ready" | "unknown" | "notInstalled" | "loggedOut";
+export interface TermTools {
+  tools: TermTool[];
+  /** 세 CLI 모두, 카드 순서대로. */
+  clis: { tool: TermTool; state: TermCliState }[];
+  running: TermTool | null;
+}
+/** 모델 드롭다운 한 줄. */
+export interface ModelChoice {
+  id: string;
+  label: string;
+}
 
 export interface ChatFile {
   messages: { role: "user" | "assistant"; text: string; at: string }[];
@@ -530,8 +543,9 @@ export const api = {
     listen<{ id: string; runId: string }>("test-undo-failed", (e) => cb(e.payload)),
   // ── 캔버스 채팅 C(터미널) — 화면은 도구 이름만 넘긴다. 실행 줄은 Rust가 만든다. ──
   /** 쓸 수 있는 CLI(설치 + 로그인)와 이 워크플로우에 살아 있는 세션. */
-  termTools: (workflowId: string) =>
-    invoke<{ tools: TermTool[]; running: TermTool | null }>("term_tools", { workflowId }),
+  termTools: (workflowId: string) => invoke<TermTools>("term_tools", { workflowId }),
+  /** 공급원의 모델 목록(가격표·codex 내장 목록·agy models). 못 읽으면 reject. */
+  listModels: (provider: string) => invoke<ModelChoice[]>("list_models", { provider }),
   /** 터미널을 띄우거나 살아 있는 세션에 붙는다. 출력은 `onData`로 온다. */
   termSpawn: (workflowId: string, tool: TermTool, cols: number, rows: number, onData: (bytes: Uint8Array) => void) => {
     const ch = new Channel<ArrayBuffer>();

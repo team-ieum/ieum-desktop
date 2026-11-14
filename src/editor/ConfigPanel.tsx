@@ -6,7 +6,9 @@ import { t, tDyn } from "../i18n";
 import { credLabel } from "../screens/settings/AiPane";
 import { choicesFor, useCredentials } from "../stores/credentials";
 import { DEFS, fieldKey, FOLDER_FIELDS, newItem, outputKeys, upstream, type Field } from "../nodes/defs";
+import { Dropdown } from "../usage/parts";
 import { nodeTitle } from "./Canvas";
+import { modelItems, useModels } from "./models";
 
 type Ref = { value: string; label: string };
 type Obj = Record<string, unknown>;
@@ -56,6 +58,30 @@ function CredentialSelect({ id, provider, value, onChange }: { id: string; provi
         <p role="alert" className="flex items-center gap-1.5 typo-caption1_semibold text-danger-700">
           <TriangleAlert size={14} aria-hidden="true" />
           {t("editor.credentialMissing")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** AI 노드 "모델" — 고른 공급원의 모델 목록. "기본 모델"이면 칸을 저장하지 않는다(`undefined`). 목록에 없는 저장값은 그대로 둔다. */
+function ModelSelect({ label, provider, value, onChange }: { label: string; provider: unknown; value: string; onChange: (v: unknown) => void }) {
+  const p = typeof provider === "string" ? provider : undefined;
+  const { models, failed } = useModels(p);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Dropdown
+        label={label}
+        items={modelItems(p, models, value)}
+        sel={value}
+        onSel={(id) => onChange(id || undefined)}
+        left
+        root="relative w-full"
+        trigger={`${INPUT} flex items-center justify-between gap-2 text-left hover:bg-neutral-50`}
+      />
+      {failed && (
+        <p role="alert" className="typo-caption1_regular text-danger-700">
+          {t("model.listFailed")}
         </p>
       )}
     </div>
@@ -136,6 +162,8 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
     );
   } else if (event === "local.ai" && field.key === "credential") {
     input = <CredentialSelect id={id} provider={provider} value={str} onChange={onChange} />;
+  } else if (event === "local.ai" && field.key === "model") {
+    input = <ModelSelect label={label} provider={provider} value={str} onChange={onChange} />;
   } else if (field.choices) {
     const logo = event === "local.ai" && field.key === "provider" ? PROVIDER_LOGO[str] : undefined;
     input = (
@@ -247,10 +275,11 @@ export function ConfigPanel({ node, workflow, onChange, pickFolder = () => api.p
           path={f.key}
           value={node.config[f.key]}
           onChange={(v) => {
-            // undefined = 칸을 뺀다. 공급원을 바꾸면 고른 키·계정(다른 공급원의 id)도 뺀다.
+            // undefined = 칸을 뺀다. 공급원을 바꾸면 고른 키·계정·모델(다른 공급원의 것)도 뺀다.
             const { [f.key]: _old, ...rest } = node.config;
             if (node.event === "local.ai" && f.key === "provider") {
               delete rest.credential;
+              delete rest.model;
               if (v === "cli:agy") delete rest.sendContent;
             }
             onChange({ ...node, config: v === undefined ? rest : { ...rest, [f.key]: v } });

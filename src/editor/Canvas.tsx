@@ -16,9 +16,10 @@ import {
   type NodeChange,
   type NodeProps,
   type NodeSelectionChange,
+  useReactFlow,
 } from "@xyflow/react";
 import { Check, CircleAlert, CircleDashed, CircleSlash, Laptop, LoaderCircle } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import type { CredentialsView, ValidationError, Workflow, WfNode } from "../api";
 import { t, tDyn } from "../i18n";
 import { branchHandles, DEFS, isLocal } from "../nodes/defs";
@@ -229,12 +230,41 @@ export interface CanvasProps {
   onNodeClick?: (id: string) => void;
   /** 노드 카드 안에 기술 정보(이벤트 id 등). */
   techInfo?: boolean;
+  /** 오른쪽에 떠 있는 패널이 가리는 폭(px). 0보다 크면 노드가 늘 때 새 노드가 가리지 않게 보기를 옮긴다. */
+  rightCover?: number;
+}
+
+/** 사용자가 캔버스를 움직인 뒤 이 시간 안에는 보기를 뺏지 않는다. */
+export const FOLLOW_QUIET_MS = 3000;
+
+/** 노드가 늘었고, 패널이 캔버스를 가리고 있고, 사용자가 방금 움직이지 않았다 → 보기를 옮긴다. */
+export function shouldFollow(prev: number, count: number, cover: number, lastUserAt: number, now: number): boolean {
+  return count > prev && cover > 0 && now - lastUserAt >= FOLLOW_QUIET_MS;
+}
+
+/** 오른쪽 패널에 가리지 않게 새 노드까지 보이도록 맞춘다. ReactFlow 안에서 그린다. */
+function Follow({ count, cover, lastUserAt }: { count: number; cover: number; lastUserAt: RefObject<number> }) {
+  const { fitView } = useReactFlow();
+  const prev = useRef(count);
+  useEffect(() => {
+    const was = prev.current;
+    prev.current = count;
+    if (!shouldFollow(was, count, cover, lastUserAt.current, Date.now())) return;
+    // 새 노드는 아직 재지 않았다 — fitView가 잰 뒤로 미룬다(React Flow 12.5+).
+    void fitView({ padding: { top: "48px", bottom: "48px", left: "48px", right: `${cover + 48}px` }, minZoom: 0.5, maxZoom: 1, duration: 300 });
+  }, [count, cover, fitView, lastUserAt]);
+  return null;
 }
 
 const edgeId = (e: Workflow["edges"][number]) => e.id ?? `${e.source}-${e.target}-${e.conditionType ?? ""}`;
 
-export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect, onNodeClick, techInfo = false }: CanvasProps) {
+export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect, onNodeClick, techInfo = false, rightCover = 0 }: CanvasProps) {
   const [nodes, setNodes] = useState<IeumNode[]>([]);
+  // 사용자가 마지막으로 캔버스를 움직인(이동·확대·노드 끌기) 때.
+  const lastUserAt = useRef(0);
+  const touched = () => {
+    lastUserAt.current = Date.now();
+  };
   const [edges, setEdges] = useState<Edge<EdgeData>[]>([]);
   // 한 틱에 여러 변경(엣지 삭제 → 노드 삭제)이 오면 앞 변경 결과 위에 쌓는다 — 렌더의 workflow는 낡았다.
   const latest = useRef(workflow);
@@ -330,6 +360,9 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      // 사람 손으로 움직일 때만 이벤트가 있다(fitView 등 코드가 옮기면 null).
+      onMoveStart={(e) => e && touched()}
+      onNodeDragStart={touched}
       onNodeClick={onNodeClick && ((_: unknown, n: IeumNode) => onNodeClick(n.id))}
       nodesDraggable={!readOnly}
       nodesConnectable={!readOnly}
@@ -344,6 +377,7 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
     >
       <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="rgba(74, 101, 124, 0.18)" />
       <Controls showInteractive={false} />
+      <Follow count={workflow.nodes.length} cover={rightCover} lastUserAt={lastUserAt} />
       {/* 오른쪽은 떠 있는 패널 자리 — 미니맵은 왼쪽 아래, 줌 버튼 옆. */}
       <MiniMap position="bottom-left" style={{ marginLeft: 56 }} pannable zoomable nodeStrokeWidth={3} nodeColor={(n) => minimapMeta(n).tint} nodeStrokeColor={(n) => minimapMeta(n).color} />
     </ReactFlow>

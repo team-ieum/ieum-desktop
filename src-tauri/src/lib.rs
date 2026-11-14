@@ -6,6 +6,7 @@ pub mod chat;
 pub mod commands;
 pub mod credentials;
 pub mod limit_watch;
+pub mod models;
 pub mod notify;
 pub mod permissions;
 pub mod pick;
@@ -327,6 +328,7 @@ pub fn run() {
             // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
             chat::chat_send,
             chat::chat_pick_folder,
+            models::list_models,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

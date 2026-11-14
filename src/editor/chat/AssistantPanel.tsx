@@ -10,6 +10,8 @@ export type AssistantMode = "terminal" | "chat";
 /** localStorage — 마지막으로 고른 입구. */
 export const MODE_KEY = "ieum.assistant.mode";
 const MODES: AssistantMode[] = ["terminal", "chat"];
+/** 패널 폭 — 채팅은 웹 이음과 같은 380, 터미널은 80열이 들어가게 560. */
+const WIDTH: Record<AssistantMode, number> = { terminal: 560, chat: 380 };
 
 function lastMode(): string | null {
   try {
@@ -30,10 +32,13 @@ export function availableMode(saved: string | null, ok: { terminal: boolean; cha
 export function AssistantPanel({
   workflowId,
   onOpenChange,
+  onCoverChange,
   nodeNames,
 }: {
   workflowId: string;
   onOpenChange?: (open: boolean) => void;
+  /** 패널이 캔버스 오른쪽을 가리는 폭(px, 닫히면 0) — 캔버스가 새 노드를 가리지 않게 보기를 옮기는 데 쓴다. */
+  onCoverChange?: (px: number) => void;
   /** 노드 id → 이름. 채팅의 테스트 결과 카드가 쓴다. */
   nodeNames?: Record<string, string>;
 }) {
@@ -56,6 +61,9 @@ export function AssistantPanel({
   const terminal = terminalOk !== false;
   // 채팅 탭은 늘 있다(AI 연결이 없으면 채팅 자리 안에서 알린다).
   const mode = availableMode(saved, { terminal, chat: true }) ?? "chat";
+  // 패널 폭 + 오른쪽 여백(right-4).
+  const cover = open ? WIDTH[mode] + 16 : 0;
+  useEffect(() => onCoverChange?.(cover), [cover, onCoverChange]);
   // 기억은 사용자가 탭을 누를 때만 바뀐다.
   const pick = (m: AssistantMode) => {
     setSaved(m);
@@ -86,15 +94,18 @@ export function AssistantPanel({
         <aside
           aria-label="IEUM Assistant"
           hidden={!open}
-          className={`absolute right-4 top-4 bottom-4 z-30 flex flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white ${
-            mode === "terminal" ? "w-[560px]" : "w-[380px]"
-          }`}
-          style={{ boxShadow: "0 24px 48px -8px rgba(16, 24, 40, 0.18), 0 8px 16px -4px rgba(16, 24, 40, 0.1)" }}
+          className="absolute right-4 top-4 bottom-4 z-30 flex flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white transition-[width] duration-200 motion-reduce:transition-none"
+          style={{ width: WIDTH[mode], boxShadow: "0 24px 48px -8px rgba(16, 24, 40, 0.18), 0 8px 16px -4px rgba(16, 24, 40, 0.1)" }}
         >
           <div className="flex shrink-0 items-center gap-3 bg-main-deep-blue px-4 py-3.5 text-white">
-            <img src={symbol} alt="" className="h-5 w-5 object-contain" />
-            <h2 className="min-w-0 flex-1 text-sm font-semibold">IEUM Assistant</h2>
-            <div role="tablist" className="flex gap-1 rounded-[10px] bg-neutral-100 p-1">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-white/12">
+              <img src={symbol} alt="" className="h-5 w-5 object-contain" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="truncate text-sm font-semibold">IEUM Assistant</h2>
+              <p className="truncate text-xs text-white/70">{t("assistant.subtitle")}</p>
+            </div>
+            <div role="tablist" className="flex shrink-0 gap-0.5 rounded-[10px] bg-white/10 p-0.5 ring-1 ring-white/15">
               {MODES.filter((m) => m !== "terminal" || terminal).map((m) => (
                 <button
                   key={m}
@@ -102,8 +113,8 @@ export function AssistantPanel({
                   role="tab"
                   aria-selected={mode === m}
                   onClick={() => pick(m)}
-                  className={`cursor-pointer rounded-lg px-3 py-1 typo-caption1_semibold ${
-                    mode === m ? "bg-white text-neutral-900 shadow-sm" : "text-neutral-500 hover:text-neutral-700"
+                  className={`cursor-pointer rounded-lg px-3 py-1 typo-caption1_semibold transition-colors ${
+                    mode === m ? "bg-white text-main-deep-blue shadow-sm" : "text-white/75 hover:bg-white/10 hover:text-white"
                   }`}
                 >
                   {t(`assistant.tab.${m}`)}
@@ -118,8 +129,7 @@ export function AssistantPanel({
               }}
               aria-label={t("assistant.close")}
               title={t("assistant.close")}
-              className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-lg transition-opacity hover:opacity-80"
-              style={{ background: "rgba(255,255,255,.12)" }}
+              className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-lg bg-white/12 transition-colors hover:bg-white/20"
             >
               <X size={14} aria-hidden="true" />
             </button>

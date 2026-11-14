@@ -181,6 +181,8 @@ export function Editor({
   }, [draft.id, onIdChange]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [techInfo, setTechInfo] = useState(false);
+  /** Assistant 패널이 가리는 캔버스 오른쪽 폭(px). */
+  const [cover, setCover] = useState(0);
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [status, setStatus] = useState<{ saving?: boolean; error?: string }>({});
   const live = useRuns((s) => s.live[draft.id]) ?? emptyLive(draft.id);
@@ -354,12 +356,14 @@ export function Editor({
             onSelect={setSelectedId}
             onNodeClick={setSelectedId}
             techInfo={techInfo}
+            rightCover={cover}
           />
         </div>
         <PaletteButton onAdd={add} />
         <AssistantPanel
           workflowId={draft.id}
           onOpenChange={(open) => void onAssistant(open)}
+          onCoverChange={setCover}
           nodeNames={Object.fromEntries(draft.workflow.nodes.map((n) => [n.id, n.label || nodeTitle(n.event)]))}
         />
         <FinishCard workflowId={draft.id} version={base.updatedAt} />

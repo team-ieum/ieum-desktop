@@ -13,7 +13,8 @@ const memoryStorage = () => {
 beforeAll(() => setLang("ko"));
 beforeEach(() => {
   vi.stubGlobal("localStorage", memoryStorage());
-  vi.spyOn(api, "termTools").mockResolvedValue({ tools: ["claude"], running: null });
+  vi.spyOn(api, "termTools").mockResolvedValue({ tools: ["claude"], clis: [{ tool: "claude", state: "ready" }], running: null });
+  vi.spyOn(api, "listModels").mockResolvedValue([]);
   // 채팅 자리가 실제 invoke를 타지 않게.
   vi.spyOn(api, "getChat").mockResolvedValue({ messages: [], state: { outline: [], baseline: null, tests: {}, pendingFinish: null }, usage: [] });
   vi.spyOn(api, "onChatStage").mockResolvedValue(() => {});
@@ -52,7 +53,7 @@ test("assistant_remembers_last_mode", async () => {
   expect(screen.getByRole("tab", { name: "채팅" }).getAttribute("aria-selected")).toBe("true"); // 기본
   await act(async () => fireEvent.click(screen.getByRole("tab", { name: "터미널" })));
   expect(localStorage.getItem(MODE_KEY)).toBe("terminal");
-  expect(panel()!.className).toContain("w-[560px]");
+  expect(panel()!.style.width).toBe("560px");
   cleanup();
   render(<AssistantPanel workflowId="w1" />);
   await open();
@@ -84,7 +85,7 @@ test("available_mode_falls_back_to_what_works", () => {
 });
 
 test("assistant_hides_terminal_tab_without_usable_cli", async () => {
-  vi.mocked(api.termTools).mockResolvedValue({ tools: [], running: null });
+  vi.mocked(api.termTools).mockResolvedValue({ tools: [], clis: [], running: null });
   localStorage.setItem(MODE_KEY, "terminal");
   render(<AssistantPanel workflowId="w1" />);
   await open();
@@ -94,8 +95,20 @@ test("assistant_hides_terminal_tab_without_usable_cli", async () => {
 });
 
 test("assistant_keeps_terminal_tab_for_a_running_session", async () => {
-  vi.mocked(api.termTools).mockResolvedValue({ tools: [], running: "claude" });
+  vi.mocked(api.termTools).mockResolvedValue({ tools: [], clis: [], running: "claude" });
   render(<AssistantPanel workflowId="w1" />);
   await open();
   expect(screen.getByRole("tab", { name: "터미널" })).toBeTruthy();
+});
+
+test("assistant_reports_how_much_canvas_it_covers", async () => {
+  const cover = vi.fn();
+  render(<AssistantPanel workflowId="w1" onCoverChange={cover} />);
+  expect(cover).toHaveBeenLastCalledWith(0);
+  await open();
+  expect(cover).toHaveBeenLastCalledWith(380 + 16); // 채팅 폭 + 오른쪽 여백
+  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "터미널" })));
+  expect(cover).toHaveBeenLastCalledWith(560 + 16);
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "IEUM Assistant 닫기" })));
+  expect(cover).toHaveBeenLastCalledWith(0);
 });

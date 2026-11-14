@@ -38,9 +38,33 @@ export function WindowMeter({ w, now, inline = false }: { w: PlanWindow; now: Da
 
 export type DropItem<T extends string> = { id: T; name: string; icon: ReactNode; note?: ReactNode };
 
+const TRIGGER =
+  "inline-flex h-8 items-center gap-2 rounded-lg border border-[#cde9f4] bg-white px-2.5 typo-caption1_semibold whitespace-nowrap text-neutral-700 hover:bg-main-light-blue/50";
+
 /** 오른쪽 위 드롭다운 — 고른 항목 [아이콘 이름 덧말 ⌄], 메뉴에 항목 목록(고른 것에 체크).
- *  바깥 클릭·Esc로 닫고, 열리면 고른 항목에 포커스, ↑↓로 옮기고 Enter·Space로 고른다. */
-export function Dropdown<T extends string>({ label, items, sel, onSel }: { label: string; items: DropItem<T>[]; sel: T; onSel: (id: T) => void }) {
+ *  바깥 클릭·Esc로 닫고, 열리면 고른 항목에 포커스, ↑↓로 옮기고 Enter·Space로 고른다.
+ *  `up` = 위로 연다(화면 아래쪽 입력 카드), `left` = 왼쪽 끝을 맞춘다, `trigger`·`root` = 단추·바깥 모양을 바꾼다. */
+export function Dropdown<T extends string>({
+  label,
+  items,
+  sel,
+  onSel,
+  up = false,
+  left = false,
+  trigger = TRIGGER,
+  root: rootClass = "relative shrink-0",
+  disabled = false,
+}: {
+  label: string;
+  items: DropItem<T>[];
+  sel: T;
+  onSel: (id: T) => void;
+  up?: boolean;
+  left?: boolean;
+  trigger?: string;
+  root?: string;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
@@ -71,20 +95,21 @@ export function Dropdown<T extends string>({ label, items, sel, onSel }: { label
     }
   };
   return (
-    <div ref={root} className="relative shrink-0">
+    <div ref={root} className={rootClass}>
       <button
         ref={button}
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`${label}: ${cur.name}`}
+        disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex h-8 items-center gap-2 rounded-lg border border-[#cde9f4] bg-white px-2.5 typo-caption1_semibold whitespace-nowrap text-neutral-700 hover:bg-main-light-blue/50"
+        className={trigger}
       >
         {cur.icon}
-        {cur.name}
+        <span className="min-w-0 truncate">{cur.name}</span>
         {cur.note}
-        <ChevronDown className="size-3.5 text-neutral-400" aria-hidden="true" />
+        <ChevronDown className={`size-3.5 shrink-0 text-neutral-400 ${up ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
       {open && (
         <ul
@@ -92,7 +117,9 @@ export function Dropdown<T extends string>({ label, items, sel, onSel }: { label
           role="listbox"
           aria-label={label}
           onKeyDown={onKey}
-          className="absolute right-0 z-20 mt-1 w-max min-w-44 rounded-lg border border-[#cde9f4] bg-white p-1 shadow-[0_12px_32px_-12px_rgba(41,83,124,.35)]"
+          className={`absolute z-20 max-h-72 w-max max-w-80 min-w-44 overflow-y-auto rounded-lg border border-[#cde9f4] bg-white p-1 shadow-[0_12px_32px_-12px_rgba(41,83,124,.35)] ${
+            up ? "bottom-full mb-1" : "mt-1"
+          } ${left ? "left-0" : "right-0"}`}
         >
           {items.map((i) => (
             <li

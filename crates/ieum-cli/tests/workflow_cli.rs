@@ -168,6 +168,24 @@ fn outside_app_terminal_exits_3() {
     );
     assert_eq!(out.status.code(), Some(3));
     assert!(stdout(&out).contains(r#""code":"UNAUTHORIZED""#));
+    assert!(!String::from_utf8_lossy(&out.stderr).contains("샌드박스"));
+}
+
+/// 소켓 연결을 샌드박스가 막으면(EPERM) stderr로 이유를 알린다 — Antigravity 터미널 샌드박스가 그렇다.
+#[test]
+fn sandbox_blocked_socket_says_why() {
+    let (_t, sock, _got) = serve(r#"{"ok":true,"data":{}}"#);
+    let out = Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1)(allow default)(deny network-outbound)"])
+        .arg(env!("CARGO_BIN_EXE_ieum"))
+        .args(["workflow", "status"])
+        .env("IEUM_SOCKET", &sock)
+        .env("IEUM_TOKEN", "tk")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(r#""code":"UNAUTHORIZED""#));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("샌드박스 밖에서 실행"));
 }
 
 #[test]

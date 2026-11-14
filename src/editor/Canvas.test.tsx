@@ -6,7 +6,7 @@ import type { Workflow } from "../api";
 import { setLang } from "../i18n";
 import { useCredentials } from "../stores/credentials";
 import { AnimatedEdge } from "./AnimatedEdge";
-import { Canvas, modelLabel } from "./Canvas";
+import { Canvas, FOLLOW_QUIET_MS, modelLabel, shouldFollow } from "./Canvas";
 
 // ReactFlow는 진짜로 그리되, Canvas가 넘긴 핸들러를 꺼내 직접 부를 수 있게 한다.
 const probe = vi.hoisted(() => ({ props: null as unknown as Record<string, any> }));
@@ -212,4 +212,14 @@ test("read_only_hides_edge_delete", () => {
   expect(screen.getByRole("button", { name: "연결 삭제" })).toBeTruthy();
   r.rerender(edge(true));
   expect(screen.queryByRole("button", { name: "연결 삭제" })).toBeNull();
+});
+
+test("패널이 열려 있고 노드가 늘었을 때만 따라간다 — 사용자가 방금 움직였으면 뺏지 않는다", () => {
+  const now = 100_000;
+  expect(shouldFollow(2, 3, 396, 0, now)).toBe(true);
+  expect(shouldFollow(3, 3, 396, 0, now)).toBe(false); // 늘지 않음
+  expect(shouldFollow(3, 2, 396, 0, now)).toBe(false); // 줄어듦
+  expect(shouldFollow(2, 3, 0, 0, now)).toBe(false); // 패널 닫힘
+  expect(shouldFollow(2, 3, 396, now - FOLLOW_QUIET_MS + 1, now)).toBe(false); // 방금 움직임
+  expect(shouldFollow(2, 3, 396, now - FOLLOW_QUIET_MS, now)).toBe(true);
 });
