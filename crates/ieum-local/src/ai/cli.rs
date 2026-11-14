@@ -11,7 +11,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use super::{AiError, AiProvider, AiRequest, ChunkFn, SYSTEM_INSTRUCTION};
+use super::{AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, SYSTEM_INSTRUCTION};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 /// 실패 메시지에 붙이는 stderr 끝부분(글자).
@@ -65,6 +65,14 @@ impl CliKind {
         match self {
             CliKind::Claude => "claude",
             CliKind::Codex => "codex",
+        }
+    }
+
+    /// 사용자에게 보이는 이름(오류 문구).
+    fn label(self) -> &'static str {
+        match self {
+            CliKind::Claude => "Claude (구독)",
+            CliKind::Codex => "Codex (구독)",
         }
     }
 
@@ -158,6 +166,10 @@ struct StreamState {
     error: Option<String>,
     /// codex `error`·`turn.failed` — 재연결 경고일 수 있어 답이 없거나 rc≠0일 때만 실패 이유로 쓴다.
     warnings: Vec<String>,
+    /// claude `result` 이벤트의 `usage`(Anthropic 모양).
+    usage: Option<Value>,
+    /// 요청한 모델(사용량 기록용). 비우면 CLI 기본 모델.
+    model: Option<String>,
 }
 
 impl StreamState {
@@ -167,6 +179,8 @@ impl StreamState {
             answer: None,
             error: None,
             warnings: Vec::new(),
+            usage: None,
+            model: None,
         }
     }
 
@@ -186,6 +200,9 @@ impl StreamState {
                 }
             }
             (CliKind::Claude, "result") => {
+                if v["usage"].is_object() {
+                    self.usage = Some(v["usage"].clone());
+                }
                 if v["is_error"] == true {
                     let msg = v["result"].as_str().or(v["subtype"].as_str());
                     self.error = Some(msg.unwrap_or("알 수 없는 오류").to_string());
@@ -213,13 +230,17 @@ impl StreamState {
         }
     }
 
-    fn finish(self, exited_ok: bool, stderr: &str) -> Result<String, AiError> {
-        let name = self.kind.program();
+    fn finish(self, exited_ok: bool, stderr: &str) -> Result<AiAnswer, AiError> {
+        let name = self.kind.label();
         if let Some(e) = self.error {
             return Err(AiError(format!("{name}: {e}")));
         }
+        let (kind, model) = (self.kind, self.model.as_deref());
+        let usage = self
+            .usage
+            .map(|u| AiUsage::from_anthropic(kind.id(), model, &u));
         match self.answer {
-            Some(a) if exited_ok => Ok(a),
+            Some(text) if exited_ok => Ok(AiAnswer { text, usage }),
             _ if !self.warnings.is_empty() => {
                 Err(AiError(format!("{name}: {}", self.warnings.join(" / "))))
             }
@@ -229,7 +250,7 @@ impl StreamState {
                     let skip = s.chars().count().saturating_sub(STDERR_TAIL);
                     s.chars().skip(skip).collect()
                 };
-                Err(AiError(format!("{name} CLI가 답을 주지 못했어요: {tail}")))
+                Err(AiError(format!("{name}이 답을 주지 못했어요: {tail}")))
             }
         }
     }
@@ -240,7 +261,7 @@ pub fn parse_stream<'a>(
     kind: CliKind,
     lines: impl IntoIterator<Item = &'a str>,
     chunk: &ChunkFn<'_>,
-) -> Result<String, AiError> {
+) -> Result<AiAnswer, AiError> {
     let mut st = StreamState::new(kind);
     for l in lines {
         st.feed(l, chunk);
@@ -346,8 +367,8 @@ impl CliProvider {
 
 #[async_trait]
 impl AiProvider for CliProvider {
-    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<String, AiError> {
-        let name = self.kind.program();
+    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
+        let name = self.kind.label();
         if let Some(m) = req.model.as_deref().filter(|m| !valid_model(m)) {
             return Err(AiError(format!(
                 "모델 이름이 올바르지 않아요(‘-’로 시작하거나 공백·제어문자가 있음): {m:?}"
@@ -359,7 +380,19 @@ impl AiProvider for CliProvider {
             (Some(s), CliKind::Codex) => Some(SchemaFile::write(s)?),
             _ => None,
         };
-        let mut line = sh_quote(&self.program);
+        // 고른 구독 계정의 설정 폴더는 명령 줄 앞에 — 로그인 셸이 읽는 프로필이 덮지 못하게.
+        // 없으면 앱이 물려받은 값만 지운다(사용자 프로필의 값은 셸이 다시 넣는다).
+        let mut cmd = Command::new(shell());
+        let mut line = match (&req.config_dir, self.kind) {
+            (Some(d), CliKind::Claude) => {
+                format!("CLAUDE_CONFIG_DIR={} ", sh_quote(&d.to_string_lossy()))
+            }
+            _ => {
+                cmd.env_remove("CLAUDE_CONFIG_DIR");
+                String::new()
+            }
+        };
+        line.push_str(&sh_quote(&self.program));
         for a in self
             .kind
             .args(&req, schema_file.as_ref().map(|f| f.0.as_path()))
@@ -367,7 +400,7 @@ impl AiProvider for CliProvider {
             line.push(' ');
             line.push_str(&sh_quote(&a));
         }
-        let mut child = Command::new(shell())
+        let mut child = cmd
             .arg("-lc")
             .arg(&line)
             .current_dir(&self.cwd)
@@ -377,7 +410,7 @@ impl AiProvider for CliProvider {
             .process_group(0)
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| AiError(format!("{name} CLI를 실행하지 못했어요: {e}")))?;
+            .map_err(|e| AiError(format!("{name}을 실행하지 못했어요: {e}")))?;
         let pgid = child.id().map(|pid| pid as i32);
         let _group = pgid.map(KillGroup);
         let (mut stdin, stdout, mut stderr) = (
@@ -386,7 +419,7 @@ impl AiProvider for CliProvider {
             child.stderr.take().expect("piped"),
         );
         let kind = self.kind;
-        let prompt = req.prompt;
+        let (prompt, model) = (req.prompt, req.model);
 
         let work = async {
             let write = async {
@@ -395,6 +428,7 @@ impl AiProvider for CliProvider {
             };
             let read = async {
                 let mut st = StreamState::new(kind);
+                st.model = model;
                 let mut out = BufReader::new(stdout.take(MAX_STDOUT));
                 let (mut buf, mut total) = (Vec::new(), 0u64);
                 // UTF-8이 아닌 줄도 끝까지 비운다(읽기를 멈추면 자식이 파이프에 막힌다).
@@ -432,7 +466,7 @@ impl AiProvider for CliProvider {
             .await
             .map_err(|_| {
                 AiError(format!(
-                    "{name} CLI가 {}초 안에 답하지 않아 멈췄어요(시간 초과).",
+                    "{name}이 {}초 안에 답하지 않아 멈췄어요(시간 초과).",
                     self.timeout.as_secs()
                 ))
             })?;
@@ -448,8 +482,8 @@ pub struct DetectedCli {
     pub version: String,
 }
 
-/// 셸 명령의 stdout. 시간 상한을 넘으면 그룹째 kill하고 None.
-fn shell_output(cmd: &str, limit: Duration) -> Option<String> {
+/// 셸 명령의 stdout(사용자 로그인 셸 PATH). 실패하거나 시간 상한을 넘으면(그룹째 kill) None.
+pub fn shell_output(cmd: &str, limit: Duration) -> Option<String> {
     use std::os::unix::process::CommandExt;
     let mut child = std::process::Command::new(shell())
         .arg("-lc")

@@ -1,8 +1,16 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import App from "./App";
 import { api } from "./api";
+import { useWeb } from "./stores/web";
+
+vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.2.0") }));
+
+const ACCOUNT = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" };
+const acct = (id: string) => ({ id, label: id, isDefault: false, createdAt: "", email: null });
+// 권하기 띠는 지금 자격 목록에 있는 계정(toId)만 띄운다.
+const CREDS = { apiKeys: { anthropic: [], openai: [], gemini: [] }, claudeAccounts: [acct("abcd")], codexAccounts: [acct("efgh")], keychainError: null };
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -14,35 +22,46 @@ beforeAll(() => {
   globalThis.DOMMatrixReadOnly = class {
     m22 = 1;
   };
-  vi.spyOn(api, "getSettings").mockResolvedValue({ language: "ko", autostart: false, firstRunDone: true, serverUrl: "" });
+  vi.spyOn(api, "getSettings").mockResolvedValue({ language: "ko", autostart: false, firstRunDone: true, serverUrl: "", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true });
   vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
+  vi.spyOn(api, "onOpenTarget").mockResolvedValue(() => {});
+  vi.spyOn(api, "onAccountSuggest").mockResolvedValue(() => {});
+  vi.spyOn(api, "takeAccountSuggestion").mockResolvedValue([]);
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);
-  vi.spyOn(api, "webAccount").mockResolvedValue(null);
+  vi.spyOn(api, "currentAccount").mockResolvedValue(ACCOUNT);
+  vi.spyOn(api, "webListWorkflows").mockResolvedValue([]);
+  vi.spyOn(api, "dashboardSummary").mockRejectedValue({ code: "NETWORK" });
+  vi.spyOn(api, "dashboardExecutions").mockRejectedValue({ code: "NETWORK" });
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [], apiKeys: [] });
-  vi.spyOn(api, "keychainStatus").mockResolvedValue({ anthropic: "missing", openai: "missing", gemini: "missing", "ieum-session": "missing" });
+  vi.spyOn(api, "listCredentials").mockResolvedValue(CREDS);
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useWeb.setState({ expired: false, relogin: false, offline: false });
+  vi.unstubAllGlobals();
+});
 
 test("leaving_editor_with_unsaved_changes_asks_in_app", async () => {
   await act(async () => {
     render(<App />);
   });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "내 PC" })));
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "새 워크플로우" }));
   });
-  const history = screen.getByRole("button", { name: "기록" });
+  const history = screen.getByRole("button", { name: "실행 기록" });
 
   // 고치기 전에는 묻지 않고 바로 간다 — 다시 편집기로.
   await act(async () => fireEvent.click(history));
   expect(screen.queryByRole("alert")).toBeNull();
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "워크플로우" })));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "내 PC" })));
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "새 워크플로우" })));
 
   await act(async () => fireEvent.change(screen.getByLabelText("워크플로우 이름"), { target: { value: "고침" } }));
 
-  // 탭 이동: 취소하면 편집기와 고친 내용이 남는다.
+  // 메뉴 이동: 취소하면 편집기와 고친 내용이 남는다.
   await act(async () => fireEvent.click(history));
   expect(screen.getByRole("alert").textContent).toContain("저장하지 않은 변경");
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "취소" })));
@@ -57,34 +76,291 @@ test("leaving_editor_with_unsaved_changes_asks_in_app", async () => {
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-const ACCOUNT = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" };
-
-test("web_tab_hidden_when_logged_out", async () => {
-  vi.spyOn(api, "webAccount").mockResolvedValueOnce(null);
+test("shell_shows_header_crumb_and_new_canvas_opens_editor", async () => {
   await act(async () => {
     render(<App />);
   });
-  expect(screen.queryByRole("button", { name: "웹 이음" })).toBeNull();
-  expect(screen.getByRole("button", { name: "설정" })).toBeTruthy();
-  cleanup();
+  // 위쪽 줄: 로고 글자·현재 위치·계정 첫 글자
+  expect(screen.getByText("IEUM")).toBeTruthy();
+  // 첫 화면 = 대시보드
+  expect(screen.getByTestId("crumb").textContent).toBe("대시보드");
+  expect(screen.getByLabelText(ACCOUNT.email).textContent).toBe("M");
+  expect(await screen.findByText(/v0\.2\.0/)).toBeTruthy();
 
-  vi.spyOn(api, "webAccount").mockResolvedValueOnce(ACCOUNT);
-  await act(async () => {
-    render(<App />);
-  });
-  expect(screen.getByRole("button", { name: "웹 이음" })).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /새 캔버스/ })));
+  expect(screen.getByLabelText("워크플로우 이름")).toBeTruthy();
+
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "대시보드" })));
+  expect(screen.getByTestId("crumb").textContent).toBe("대시보드");
+  expect(screen.getByRole("heading", { name: "대시보드" })).toBeTruthy();
 });
 
-test("auth_expired_goes_to_login", async () => {
-  vi.spyOn(api, "webAccount").mockResolvedValueOnce(ACCOUNT);
-  vi.spyOn(api, "webListWorkflows").mockRejectedValueOnce({ code: "AUTH_EXPIRED" });
+test("sidebar_has_search_row_opening_command_palette", async () => {
   await act(async () => {
     render(<App />);
   });
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "웹 이음" })));
+  const sidebar = screen.getByRole("complementary", { name: "사이드바" });
+  expect(screen.queryByRole("combobox")).toBeNull();
+  await act(async () => fireEvent.click(within(sidebar).getByRole("button", { name: /찾기/ })));
+  expect(screen.getByRole("combobox", { name: "워크플로우 이름으로 찾기" })).toBeTruthy();
+});
 
-  expect(screen.queryByRole("button", { name: "웹 이음" })).toBeNull();
-  expect(screen.getByRole("button", { name: "설정" }).getAttribute("aria-current")).toBe("page");
-  expect(screen.getByLabelText("비밀번호")).toBeTruthy();
-  expect(screen.getByText(/로그인이 만료됐어요/)).toBeTruthy();
+test("sidebar_collapse_hides_entirely_and_header_shows_expand", async () => {
+  const m = new Map<string, string>();
+  vi.stubGlobal("localStorage", { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) });
+  const r = await act(async () => render(<App />));
+  expect(screen.queryByRole("button", { name: "사이드바 펼치기" })).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "사이드바 접기" })));
+  // 아이콘 줄도 없이 통째로 숨는다.
+  expect(screen.queryByRole("complementary", { name: "사이드바" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "대시보드" })).toBeNull();
+  expect(within(screen.getByRole("banner")).getByRole("button", { name: "사이드바 펼치기" })).toBeTruthy();
+  // 다시 열어도 기억한다.
+  r.unmount();
+  await act(async () => render(<App />));
+  expect(screen.queryByRole("complementary", { name: "사이드바" })).toBeNull();
+  await act(async () => fireEvent.click(within(screen.getByRole("banner")).getByRole("button", { name: "사이드바 펼치기" })));
+  expect(screen.getByRole("complementary", { name: "사이드바" })).toBeTruthy();
+});
+
+test("header_has_no_logo_when_sidebar_shown", async () => {
+  await act(async () => {
+    render(<App />);
+  });
+  const header = screen.getByRole("banner");
+  expect(header.querySelector("img")).toBeNull();
+  expect(within(header).queryByText("IEUM")).toBeNull();
+  expect(within(screen.getByRole("complementary", { name: "사이드바" })).getByText("IEUM")).toBeTruthy();
+  // 위치·찾기·알림·계정은 그대로.
+  expect(within(header).getByTestId("crumb")).toBeTruthy();
+  expect(within(header).getByRole("button", { name: /찾기/ })).toBeTruthy();
+  expect(within(header).getByLabelText(ACCOUNT.email)).toBeTruthy();
+});
+
+test("gate_shows_auth_when_no_account", async () => {
+  vi.mocked(api.currentAccount).mockResolvedValueOnce(null);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByRole("button", { name: "로그인" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "대시보드" })).toBeNull();
+});
+
+test("offline_start_opens_app_without_gate", async () => {
+  vi.mocked(api.webListWorkflows).mockRejectedValueOnce({ code: "NETWORK" });
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByRole("button", { name: "대시보드" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "로그인" })).toBeNull();
+  expect(useWeb.getState().offline).toBe(true);
+});
+
+test("auth_expired_keeps_app_and_relogin_from_account_settings", async () => {
+  vi.mocked(api.webListWorkflows).mockRejectedValueOnce({ code: "AUTH_EXPIRED" });
+  await act(async () => {
+    render(<App />);
+  });
+  // 만료돼도 앱은 그대로 — 관문으로 보내지 않는다.
+  expect(screen.queryByRole("button", { name: "로그인" })).toBeNull();
+  await act(async () => fireEvent.click(screen.getAllByRole("button", { name: "설정" })[0]));
+  expect(screen.getByText("이음 클라우드를 쓰려면 다시 로그인하세요.")).toBeTruthy();
+
+  // [다시 로그인] → 이메일이 채워진 관문, [뒤로]면 앱으로.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "다시 로그인" })));
+  expect((screen.getByLabelText("이메일") as HTMLInputElement).value).toBe(ACCOUNT.email);
+  expect(screen.getByText("로그인이 만료됐어요. 다시 로그인해 주세요.")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "뒤로" })));
+  expect(screen.queryByLabelText("이메일")).toBeNull();
+});
+
+test("gate_waits_for_account_before_rendering", async () => {
+  let resolve!: (a: null) => void;
+  vi.mocked(api.currentAccount).mockReturnValueOnce(new Promise((r) => (resolve = r)));
+  await act(async () => {
+    render(<App />);
+  });
+  // 계정 응답 전에는 관문도 셸도 그리지 않는다(깜빡임 없음).
+  expect(screen.queryByRole("button", { name: "로그인" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "대시보드" })).toBeNull();
+  await act(async () => resolve(null));
+  expect(screen.getByRole("button", { name: "로그인" })).toBeTruthy();
+});
+
+test("recent_web_item_opens_that_workflow", async () => {
+  const id = "aaaaaaaa-0000-4000-8000-000000000001";
+  vi.mocked(api.webListWorkflows).mockResolvedValueOnce([{ id, name: "웹 흐름", active: true, updatedAt: "2026-11-12T00:00:00Z" }]);
+  const get = vi.spyOn(api, "webGetWorkflow").mockResolvedValue({ id, name: "웹 흐름", nodes: [], edges: [] });
+  vi.spyOn(api, "webListExecutions").mockResolvedValue({ content: [], hasNext: false, nextCursor: null });
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /웹 흐름/ })));
+  expect(get).toHaveBeenCalledWith(id);
+  expect(screen.getByTestId("crumb").textContent).toBe("웹 이음");
+  expect(screen.getByRole("heading", { name: "웹 흐름" })).toBeTruthy();
+});
+
+const SUGGEST = {
+  company: "claude" as const,
+  fromId: "system",
+  fromLabel: "이 Mac의 로그인",
+  toId: "abcd",
+  toLabel: "회사",
+  toUsedPct: 12,
+  windowKind: "five_hour",
+  resetsAt: new Date(Date.now() + 3 * 3600_000).toISOString(),
+};
+
+test("suggest_banner_from_event", async () => {
+  let push!: (s: typeof SUGGEST) => void;
+  vi.mocked(api.onAccountSuggest).mockImplementationOnce(async (cb) => {
+    push = cb;
+    return () => {};
+  });
+  const set = vi.spyOn(api, "setDefaultCredential").mockResolvedValue();
+  const usage = vi.spyOn(api, "antigravityPlanUsage").mockResolvedValue(null as never);
+  await act(async () => {
+    render(<App />);
+  });
+  const take = vi.mocked(api.takeAccountSuggestion);
+  take.mockClear();
+  await act(async () => push(SUGGEST));
+  // 띠를 띄우면 대기 칸을 비운다.
+  expect(take).toHaveBeenCalledTimes(1);
+  const banner = screen.getByText(/바꿔서 쓸까요/).closest<HTMLElement>('[role="status"]')!;
+  // 창 신호등과 겹치지 않게 본문 열 안(머리줄 아래)에 뜬다.
+  expect(banner.closest("main")).toBeTruthy();
+  expect(banner.textContent).toContain("회사(12% 사용)으로 바꿔서 쓸까요?");
+  expect(banner.textContent).toContain("세션 100%");
+  await act(async () => fireEvent.click(within(banner).getByRole("button", { name: "바꾸기" })));
+  const dialog = screen.getByRole("dialog");
+  expect(dialog.textContent).toContain("이 Mac의 로그인 → 회사 (12% 사용)");
+  await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "바꾸기" })));
+  expect(set).toHaveBeenCalledWith("claude", "abcd");
+  // 바꾼 뒤 구독 사용량을 캐시 없이 다시 읽는다.
+  expect(usage).toHaveBeenCalledWith(true);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+});
+
+test("pending_suggestion_shows_on_mount", async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST]);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByText(/바꿔서 쓸까요/)).toBeTruthy();
+});
+
+test("suggest_banner_on_focus", async () => {
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST]);
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(screen.getByText(/바꿔서 쓸까요/)).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "나중에" })));
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+});
+
+const CODEX_SUGGEST = { ...SUGGEST, company: "codex" as const, toId: "efgh", toLabel: "개인", windowKind: "weekly" };
+
+test("suggestions_shown_one_after_another", async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST, CODEX_SUGGEST]);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByText(/회사\(12% 사용\)/)).toBeTruthy();
+  expect(screen.queryByText(/개인\(12% 사용\)/)).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "나중에" })));
+  expect(screen.queryByText(/회사\(12% 사용\)/)).toBeNull();
+  expect(screen.getByText(/개인\(12% 사용\)/)).toBeTruthy();
+  // 띠가 닫히면 포커스는 본문으로.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "나중에" })));
+  expect(document.activeElement).toBe(document.querySelector("main"));
+  // 상태 영역은 비어도 남아 있다(내용만 바뀐다).
+  expect(document.querySelector("main [role=status]")?.textContent).toBe("");
+});
+
+test("suggestion_for_unknown_account_not_shown", async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([{ ...SUGGEST, toId: "gone" }]);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+});
+
+const openSwitch = async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST]);
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "바꾸기" })));
+  return screen.getByRole("dialog");
+};
+
+test("switch_dialog_failure_keeps_focus_and_esc_closes", async () => {
+  let fail!: (e: unknown) => void;
+  vi.spyOn(api, "setDefaultCredential").mockReturnValueOnce(new Promise((_, rej) => (fail = rej)));
+  const dialog = await openSwitch();
+  const confirm = within(dialog).getByRole("button", { name: "바꾸기" });
+  await act(async () => fireEvent.click(confirm));
+  // 바꾸는 중에도 포커스를 잃지 않게 disabled 대신 aria-disabled.
+  expect(confirm.hasAttribute("disabled")).toBe(false);
+  expect(confirm.getAttribute("aria-disabled")).toBe("true");
+  // 실패 전에 포커스가 다른 버튼에 있어도 실패하면 확인 버튼으로 돌아온다.
+  within(dialog).getByRole("button", { name: "취소" }).focus();
+  await act(async () => fail("boom"));
+  expect(within(dialog).getByRole("alert")).toBeTruthy();
+  expect(document.activeElement).toBe(confirm);
+  await act(async () => fireEvent.keyDown(document.activeElement!, { key: "Escape" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("switch_dialog_tab_cycles_inside", async () => {
+  const dialog = await openSwitch();
+  const [cancel, confirm] = within(dialog).getAllByRole("button");
+  confirm.focus();
+  fireEvent.keyDown(confirm, { key: "Tab" });
+  expect(document.activeElement).toBe(cancel);
+  fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true });
+  expect(document.activeElement).toBe(confirm);
+});
+
+test("hidden_window_renders_nothing_until_visible", async () => {
+  let state: DocumentVisibilityState = "hidden";
+  const vis = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => state);
+  const sub = vi.spyOn(api, "subscriptionUsage").mockResolvedValue(null as never);
+  const agy = vi.spyOn(api, "antigravityPlanUsage").mockResolvedValue(null as never);
+  const calls = () => [api.listCredentials, sub, agy, api.webListWorkflows].map((f) => vi.mocked(f).mock.calls.length);
+  const before = calls();
+  try {
+    await act(async () => {
+      render(<App />);
+    });
+    // 숨은 창(로그인 시 자동 시작)에선 앱을 그리지 않는다 — 키체인 허용 창이 뜰 조회를 하지 않게.
+    expect(calls()).toEqual(before);
+    expect(screen.queryByRole("main")).toBeNull();
+    state = "visible";
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(screen.getByRole("main")).toBeTruthy();
+    expect(calls()[0]).toBeGreaterThan(before[0]);
+    expect(calls()[3]).toBeGreaterThan(before[3]);
+  } finally {
+    vis.mockRestore();
+  }
+});
+
+test("suggestions_cleared_when_ieum_account_changes", async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST]);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByText(/바꿔서 쓸까요/)).toBeTruthy();
+  await act(async () => useWeb.setState({ account: { email: "other@ieum.dev", serverUrl: ACCOUNT.serverUrl } }));
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+  await act(async () => useWeb.setState({ account: ACCOUNT }));
+  // 원래 계정으로 돌아와도 비운 대기열은 되살아나지 않는다.
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
 });

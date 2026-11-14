@@ -16,8 +16,14 @@
         "create": false,
         "visible": false,
         "title": "IEUM",
-        "width": 800,
-        "height": 600
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1180,
+        "minHeight": 760,
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 16, "y": 27 }
       }
     ],
     "security": {

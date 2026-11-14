@@ -36,6 +36,17 @@ pub struct StoredRun {
     /// 그 실행의 `roots_for_workflow` 결과(실제 경로).
     pub allowed_roots: Vec<PathBuf>,
     pub undo: Option<UndoReport>,
+    /// 옛 기록에는 없다.
+    #[serde(default)]
+    pub trigger: Option<RunTrigger>,
+}
+
+/// 폴더 감시로 돌았는지, 지금 실행(수동)인지.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunTrigger {
+    Watch,
+    Manual,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +59,7 @@ pub struct RunSummary {
     pub finished_at: String,
     pub file_ops: usize,
     pub undone: bool,
+    pub trigger: Option<RunTrigger>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,9 +76,25 @@ pub enum Language {
 pub struct Settings {
     pub language: Language,
     pub autostart: bool,
+    /// 옛 설정 호환용으로만 남긴다(안 씀).
     pub first_run_done: bool,
+    /// 온보딩을 끝냈는가(기기 단위). 옛 설정엔 없어 false.
+    pub onboarding_done: bool,
+    /// 내 PC 실행 시스템 알림 토글. 옛 설정엔 없어 `Default`의 true.
+    pub notify_manual_start: bool,
+    pub notify_manual_end: bool,
+    pub notify_watch_end: bool,
+    /// 구독 한도 도달 시 다른 계정 권하기(띠·시스템 알림). 옛 설정엔 없어 `Default`의 true.
+    pub notify_account_suggest: bool,
     /// 이음 BE 주소. 바꾸면 세션을 지운다(`web::save_settings`).
     pub server_url: String,
+    /// 로그인된(마지막 활성) 계정. 없으면 로그인 관문.
+    pub current_account: Option<crate::account::AccountId>,
+    /// 알림을 마지막으로 연 시각(RFC3339). 빈 문자열 = 한 번도 안 열어 봄.
+    pub notifications_seen_at: String,
+    /// 확인 창 토글. 옛 설정엔 없어 `Default`의 true.
+    pub confirm_delete_workflow: bool,
+    pub confirm_discard_unsaved: bool,
 }
 
 pub const DEFAULT_SERVER_URL: &str = "https://green.kiacms.co.kr";
@@ -77,7 +105,16 @@ impl Default for Settings {
             language: Language::default(),
             autostart: false,
             first_run_done: false,
+            onboarding_done: false,
+            notify_manual_start: true,
+            notify_manual_end: true,
+            notify_watch_end: true,
+            notify_account_suggest: true,
             server_url: DEFAULT_SERVER_URL.into(),
+            current_account: None,
+            notifications_seen_at: String::new(),
+            confirm_delete_workflow: true,
+            confirm_discard_unsaved: true,
         }
     }
 }
@@ -99,7 +136,7 @@ fn check_id(id: &str) -> Result<(), String> {
 }
 
 /// 임시 파일에 쓰고 rename — 쓰다 죽어도 이전 파일이 남는다.
-fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
     let dir = path.parent().ok_or("저장 경로가 잘못됐어요.")?;
     fs::create_dir_all(dir).map_err(err)?;
@@ -213,10 +250,15 @@ impl Store {
         Ok(())
     }
 
+    /// 모든 실행 기록(순서 없음). 깨진 파일은 건너뛴다.
+    pub fn all_runs(&self) -> Result<Vec<StoredRun>, String> {
+        read_all(&self.root.join("runs"))
+    }
+
     /// 최근 실행부터.
     // ponytail: 매번 기록 파일을 전부 읽는다 — 기록이 수천 개가 되면 요약 색인 파일
     pub fn list_runs(&self, workflow_id: Option<&str>) -> Result<Vec<RunSummary>, String> {
-        let runs: Vec<StoredRun> = read_all(&self.root.join("runs"))?;
+        let runs = self.all_runs()?;
         let mut list: Vec<RunSummary> = runs
             .into_iter()
             .filter(|r| workflow_id.is_none_or(|w| r.workflow_id == w))
@@ -228,6 +270,7 @@ impl Store {
                 finished_at: r.finished_at,
                 file_ops: r.file_ops.len(),
                 undone: r.undo.is_some(),
+                trigger: r.trigger,
             })
             .collect();
         list.sort_by(|a, b| b.started_at.cmp(&a.started_at));

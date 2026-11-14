@@ -172,10 +172,13 @@ async fn ask(
         prompt: "하늘 색은?".into(),
         model: model.map(String::from),
         schema: None,
+        key_name: None,
+        config_dir: None,
     };
     let r = provider(kind, base, Some(KEY))
         .ask(req, &|c: &str| chunks.lock().unwrap().push(c.to_string()))
-        .await;
+        .await
+        .map(|a| a.text);
     (chunks.into_inner().unwrap(), r)
 }
 
@@ -276,6 +279,8 @@ async fn missing_key_fails_with_message() {
             prompt: "p".into(),
             model: Some("m".into()),
             schema: None,
+            key_name: None,
+            config_dir: None,
         };
         let err = provider(kind, &base, None)
             .ask(req, &|_: &str| {})
@@ -296,6 +301,8 @@ async fn keychain_error_is_not_missing_key() {
                 prompt: "p".into(),
                 model: None,
                 schema: None,
+                key_name: None,
+                config_dir: None,
             },
             &|_: &str| {},
         )

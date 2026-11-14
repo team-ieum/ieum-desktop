@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use ieum_engine::{
-    BuiltinRunners, Catalog, ExecEvent, NodeRunner, RunResult, RunStatus, Runners, ValidationError,
-    Workflow, run_workflow, validate,
+    BuiltinRunners, Catalog, ExecEvent, NodeRunner, NodeStatus, RunResult, RunStatus, Runners,
+    ValidationError, Workflow, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
 use ieum_local::{
@@ -24,7 +24,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::store::{Store, StoredRun, StoredWorkflow, now};
+use crate::store::{RunTrigger, Store, StoredRun, StoredWorkflow, now};
 
 /// 워크플로우 하나의 대기 실행 상한. 넘으면 가장 오래된 것부터 버린다.
 pub const QUEUE_CAP: usize = 100;
@@ -44,12 +44,36 @@ pub enum AppEvent {
     },
     /// 화면 이벤트 `queue-dropped` — 줄이 넘쳐 버린 실행(트리거 파일 경로).
     QueueDropped { workflow_id: String, path: String },
+    /// 시스템 알림 재료(화면 이벤트 아님) — 실행 시작·끝.
+    RunNotice(RunNotice),
+}
+
+#[derive(Debug, Clone)]
+pub struct RunNotice {
+    pub workflow_id: String,
+    pub workflow_name: String,
+    pub run_id: String,
+    pub trigger: RunTrigger,
+    pub kind: NoticeKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoticeKind {
+    Started,
+    /// `failed_node` = 실패한 첫 노드의 label(없으면 id). 오류 문자열은 싣지 않는다.
+    Finished {
+        ok: bool,
+        secs: u64,
+        failed_node: Option<String>,
+    },
 }
 
 pub type Emit = Arc<dyn Fn(AppEvent) + Send + Sync>;
 
 pub struct Deps {
     pub store: Store,
+    /// 앱 데이터 폴더 전체 — 사용자 폴더 정책의 금지 폴더(계정 폴더만이 아니라).
+    pub app_data: PathBuf,
     /// 사용자 폴더 정책의 홈(운영 = 실제 홈).
     pub home: PathBuf,
     pub trash_dir: PathBuf,
@@ -110,6 +134,8 @@ struct Inner {
     watches: Mutex<HashMap<String, Watch>>,
     lanes: Mutex<HashMap<String, Lane>>,
     undo_lock: Mutex<()>,
+    /// `stop()` 뒤 취소됨 — 새 감시·실행을 받지 않고 재확인 루프가 끝난다.
+    stopped: CancellationToken,
 }
 
 #[derive(Clone)]
@@ -144,10 +170,16 @@ fn trigger_output(f: &NewFile) -> Map<String, Value> {
 impl Supervisor {
     /// tokio 런타임 안에서 부른다. 시작 시 폴더의 기존 파일은 보지 않는다.
     pub fn start(deps: Deps) -> Result<Self, String> {
+        Self::start_with(deps, true)
+    }
+
+    /// `close_unfinished` = 끝 시각 없는 기록을 중단됨으로 닫는다. 이 프로세스에서 그 저장소를
+    /// 처음 열 때만 참 — 다시 열 때는 앞선 감독의 실행이 아직 돌며 그 기록을 쓰고 있을 수 있다.
+    pub fn start_with(deps: Deps, close_unfinished: bool) -> Result<Self, String> {
         let catalog = Catalog::embedded().map_err(|e| format!("노드 정의를 읽지 못했어요: {e}"))?;
         let rt = Handle::try_current().map_err(|e| e.to_string())?;
         let every = deps.recheck;
-        if let Err(e) = deps.store.close_unfinished_runs() {
+        if close_unfinished && let Err(e) = deps.store.close_unfinished_runs() {
             eprintln!("[ieum] 끝나지 않은 실행 기록을 닫지 못했어요: {e}");
         }
         let sup = Supervisor(Arc::new(Inner {
@@ -158,12 +190,16 @@ impl Supervisor {
             watches: Mutex::default(),
             lanes: Mutex::default(),
             undo_lock: Mutex::default(),
+            stopped: CancellationToken::new(),
         }));
         sup.sync();
-        let weak = Arc::downgrade(&sup.0);
+        let (weak, stopped) = (Arc::downgrade(&sup.0), sup.0.stopped.clone());
         sup.0.rt.spawn(async move {
             loop {
-                tokio::time::sleep(every).await;
+                tokio::select! {
+                    () = stopped.cancelled() => break,
+                    () = tokio::time::sleep(every) => {}
+                }
                 match weak.upgrade() {
                     Some(inner) => Supervisor(inner).recheck(),
                     None => break,
@@ -171,6 +207,19 @@ impl Supervisor {
             }
         });
         Ok(sup)
+    }
+
+    /// 감시를 모두 풀고 대기 실행을 버린다. 진행 중인 실행은 끝까지 돌아 기록을 남긴다.
+    /// 사본(`Clone`)이 남아 drop되지 않을 수 있어 명시적으로 부른다. 되돌릴 수 없다.
+    pub fn stop(&self) {
+        self.0.stopped.cancel();
+        lock(&self.0.watches).clear();
+        let ids: Vec<String> = lock(&self.0.lanes).keys().cloned().collect();
+        self.drop_queued(&ids);
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.0.stopped.is_cancelled()
     }
 
     pub fn store(&self) -> &Store {
@@ -211,7 +260,7 @@ impl Supervisor {
 
     /// 사용자 폴더 정책(`validate_user_folder`) — 홈·앱 데이터 폴더는 주입값.
     fn check_folder(&self, folder: &Path) -> Result<(), String> {
-        validate_user_folder(folder, &self.0.deps.home, self.store().root())
+        validate_user_folder(folder, &self.0.deps.home, &self.0.deps.app_data)
     }
 
     fn check_folders(&self, wf: &Workflow) -> Result<(), String> {
@@ -250,6 +299,10 @@ impl Supervisor {
     /// 오류 상태면 바로 다시 건다. 꺼지거나·지워지거나·폴더가 바뀐 워크플로우의 대기 실행은 버린다.
     pub fn sync(&self) {
         let mut watches = lock(&self.0.watches);
+        // stop()은 취소 뒤 이 잠금을 잡고 비우므로, 잠금 안에서 보면 멈춘 뒤 감시를 새로 걸지 않는다.
+        if self.is_stopped() {
+            return;
+        }
         // 목록을 잠금 안에서 읽어 동시 저장이 낡은 목록으로 감시를 지우지 않게.
         let list = match self.store().list_workflows() {
             Ok(l) => l,
@@ -386,6 +439,12 @@ impl Supervisor {
 
     fn push(&self, workflow_id: &str, job: Job) {
         let mut lanes = lock(&self.0.lanes);
+        if self.is_stopped() {
+            if let Some(reply) = job.reply {
+                let _ = reply.send(Err("계정이 바뀌거나 로그아웃되어 취소됐어요.".into()));
+            }
+            return;
+        }
         let lane = lanes.entry(workflow_id.to_string()).or_default();
         lane.jobs.push_back(job);
         while lane.jobs.len() > QUEUE_CAP {
@@ -439,6 +498,11 @@ impl Supervisor {
         trigger: Map<String, Value>,
     ) -> Result<String, String> {
         let wf = self.store().get_workflow(workflow_id)?;
+        let run_trigger = if folder.is_some() {
+            RunTrigger::Watch
+        } else {
+            RunTrigger::Manual
+        };
         // 감시가 보낸 뒤 꺼졌거나 폴더가 바뀐 워크플로우의 늦은 트리거는 버린다.
         if let Some(f) = folder
             && trigger_folder(&wf) != Some(f)
@@ -492,14 +556,26 @@ impl Supervisor {
             file_ops: journal.ops(),
             allowed_roots: roots.paths().to_vec(),
             undo: None,
+            trigger: Some(run_trigger),
         };
         let (tx, mut rx) = mpsc::unbounded_channel();
         let emit = self.0.deps.emit.clone();
+        let clock = std::time::Instant::now();
+        let notice = |run_id: &str, kind| {
+            emit(AppEvent::RunNotice(RunNotice {
+                workflow_id: workflow_id.to_string(),
+                workflow_name: wf.name.clone(),
+                run_id: run_id.to_string(),
+                trigger: run_trigger,
+                kind,
+            }))
+        };
         let forward = async {
             let (mut run_id, mut saved_ops, mut finished) = (String::new(), 0, None);
             while let Some(event) = rx.recv().await {
                 if let ExecEvent::RunStarted { run_id: r } = &event {
                     run_id = r.clone();
+                    notice(r, NoticeKind::Started);
                 }
                 // 파일 작업이 생기면 끝나지 않은 기록(끝 시각 없음)으로 바로 쓴다 — 도중에 앱이 꺼져도 되돌릴 수 있게.
                 if journal.ops().len() > saved_ops {
@@ -548,6 +624,25 @@ impl Supervisor {
                 workflow_id: workflow_id.to_string(),
                 event,
             });
+            let run = &stored.run;
+            let failed_node = wf
+                .workflow
+                .nodes
+                .iter()
+                .find(|n| {
+                    run.nodes
+                        .get(&n.id)
+                        .is_some_and(|r| r.status == NodeStatus::Failed)
+                })
+                .map(|n| n.label.clone().unwrap_or_else(|| n.id.clone()));
+            notice(
+                &run.run_id,
+                NoticeKind::Finished {
+                    ok: run.status == RunStatus::Succeeded,
+                    secs: clock.elapsed().as_secs(),
+                    failed_node,
+                },
+            );
         }
         saved?;
         Ok(stored.run.run_id)

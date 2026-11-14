@@ -39,6 +39,15 @@ pub struct NodeError {
 #[async_trait]
 pub trait NodeRunner: Send + Sync {
     async fn run(&self, ctx: NodeCtx<'_>) -> Result<Map<String, Value>, NodeError>;
+
+    /// `run` + 사용량(AI 토큰 등 — 엔진은 모양을 모르고 `NodeRecord.usage`에 그대로 싣는다).
+    /// 실패해도 이미 쓴 사용량은 돌려줄 수 있다. 기본은 사용량 없음.
+    async fn run_metered(
+        &self,
+        ctx: NodeCtx<'_>,
+    ) -> (Result<Map<String, Value>, NodeError>, Option<Value>) {
+        (self.run(ctx).await, None)
+    }
 }
 
 /// event → 러너.
@@ -59,6 +68,9 @@ pub struct NodeRecord {
     pub status: NodeStatus,
     pub output: Option<Map<String, Value>>,
     pub error: Option<String>,
+    /// 러너가 알린 사용량(`run_metered`). 옛 기록에는 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +179,7 @@ pub async fn run_workflow(
                 status: NodeStatus::NotRun,
                 output: None,
                 error: None,
+                usage: None,
             };
             (n.id.clone(), rec)
         })
@@ -240,8 +253,8 @@ pub async fn run_workflow(
         send(ExecEvent::NodeStarted {
             node_id: node.id.clone(),
         });
-        let result = if is_type(node, "TRIGGER") {
-            Ok(trigger_output.clone())
+        let (result, usage) = if is_type(node, "TRIGGER") {
+            (Ok(trigger_output.clone()), None)
         } else {
             let config = node
                 .config
@@ -254,15 +267,17 @@ pub async fn run_workflow(
                 events: &events,
                 cancel: &cancel,
             };
-            catch_panic(runners[&node.event].run(ctx))
+            catch_panic(runners[&node.event].run_metered(ctx))
                 .await
                 .unwrap_or_else(|| {
-                    Err(NodeError {
+                    let e = NodeError {
                         message: "노드 실행 중 내부 오류가 났습니다.".into(),
-                    })
+                    };
+                    (Err(e), None)
                 })
         };
         let rec = records.get_mut(&node.id).unwrap();
+        rec.usage = usage;
         let output = match result {
             Err(e) => {
                 rec.status = NodeStatus::Failed;

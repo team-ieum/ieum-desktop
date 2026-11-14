@@ -32,6 +32,9 @@ tauri-plugin-single-instance = "2"
 uuid = { version = "1.29.2", features = ["v4"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 tauri-plugin-updater = "2"
+tauri-plugin-notification = "2"
+sha2 = "0.10.9"
+hex = "0.4.3"
 
 [dev-dependencies]
 async-trait = "0.1.92"

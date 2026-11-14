@@ -18,7 +18,7 @@
       "choices": [
         {
           "id": "cli:claude",
-          "name": "Claude 구독(claude CLI)"
+          "name": "Claude (구독)"
         },
         {
           "id": "api:anthropic",
@@ -33,6 +33,13 @@
           "name": "Gemini API 키"
         }
       ]
+    },
+    {
+      "key": "credential",
+      "title": "키·계정",
+      "type": "string",
+      "ref": false,
+      "description": "비우면 그 공급원의 기본 키·계정을 써요."
     },
     {
       "key": "model",

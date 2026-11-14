@@ -1,6 +1,6 @@
-import { expect, test } from "vitest";
-import type { WebExecPayload } from "../api";
-import { applyWebEvent, emptyWebLive, webStatuses } from "./web";
+import { expect, test, vi } from "vitest";
+import { api, type WebExecPayload } from "../api";
+import { applyWebEvent, emptyWebLive, useWeb, webStatuses } from "./web";
 
 const EX = "ex-1";
 const ev = (type: string, extra: Record<string, unknown> = {}): WebExecPayload => ({
@@ -74,4 +74,25 @@ test("web_ended_execution_stops_running_nodes", () => {
   run(ev("NODE_STARTED", { nodeId: "b" }));
   run({ executionId: EX, logs: [{ id: "1", nodeId: "a", status: "SUCCESS" }] });
   expect(webStatuses([], live)).toEqual({ a: "succeeded" });
+});
+
+test("expire_keeps_account_logout_clears", async () => {
+  const acc = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" };
+  useWeb.setState({ account: acc, expired: false, offline: false });
+
+  useWeb.getState().expireIf({ code: "AUTH_EXPIRED" });
+  expect(useWeb.getState().account).toEqual(acc);
+  expect(useWeb.getState().expired).toBe(true);
+
+  // 네트워크·서버 오류는 만료가 아니라 오프라인.
+  useWeb.setState({ expired: false });
+  useWeb.getState().expireIf({ code: "NETWORK" });
+  expect(useWeb.getState()).toMatchObject({ account: acc, expired: false, offline: true });
+  await useWeb.getState().guard(Promise.resolve(1));
+  expect(useWeb.getState().offline).toBe(false);
+
+  vi.spyOn(api, "webLogout").mockResolvedValue();
+  await useWeb.getState().logout();
+  expect(useWeb.getState().account).toBeNull();
+  expect(useWeb.getState().expired).toBe(false);
 });

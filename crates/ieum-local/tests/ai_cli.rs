@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use ieum_engine::{ExecEvent, Node, NodeCtx, NodeError, NodeRunner};
 use ieum_local::AllowedRoots;
 use ieum_local::ai::{
-    AiError, AiProvider, AiRequest, AiRunner, ChunkFn, CliKind, CliProvider, Skip, file_text,
-    parse_stream, read_file_text,
+    AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn, CliKind, CliProvider, Skip,
+    file_text, parse_stream, read_file_text,
 };
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
@@ -30,7 +30,7 @@ fn parse(kind: CliKind, name: &str) -> (Vec<String>, Result<String, AiError>) {
     let r = parse_stream(kind, text.lines(), &|c: &str| {
         chunks.lock().unwrap().push(c.to_string())
     });
-    (chunks.into_inner().unwrap(), r)
+    (chunks.into_inner().unwrap(), r.map(|a| a.text))
 }
 
 #[test]
@@ -63,7 +63,9 @@ fn codex_error_line_then_success_is_ok() {
         r#"{"type":"turn.completed"}"#,
     ];
     assert_eq!(
-        parse_stream(CliKind::Codex, lines, &|_: &str| {}).unwrap(),
+        parse_stream(CliKind::Codex, lines, &|_: &str| {})
+            .unwrap()
+            .text,
         "ok"
     );
     // 답이 없으면 경고가 실패 이유가 된다.
@@ -77,7 +79,9 @@ fn codex_error_line_then_success_is_ok() {
 #[test]
 fn claude_prefers_structured_output() {
     let line = r#"{"type":"result","subtype":"success","is_error":false,"result":"설명 글","structured_output":{"color":"파랑"}}"#;
-    let r = parse_stream(CliKind::Claude, [line], &|_: &str| {}).unwrap();
+    let r = parse_stream(CliKind::Claude, [line], &|_: &str| {})
+        .unwrap()
+        .text;
     assert_eq!(
         serde_json::from_str::<Value>(&r).unwrap(),
         json!({"color": "파랑"})
@@ -103,7 +107,7 @@ impl Fake {
 
 #[async_trait]
 impl AiProvider for Fake {
-    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<String, AiError> {
+    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
         let i = self.calls.fetch_add(1, Ordering::SeqCst);
         *self.last.lock().unwrap() = Some(req);
         let a = self.answers[i.min(self.answers.len() - 1)];
@@ -111,7 +115,10 @@ impl AiProvider for Fake {
             return Err(AiError(e.to_string()));
         }
         chunk(a);
-        Ok(a.to_string())
+        Ok(AiAnswer {
+            text: a.to_string(),
+            usage: None,
+        })
     }
 }
 
@@ -454,6 +461,8 @@ fn req(model: Option<&str>) -> AiRequest {
         prompt: "p".into(),
         model: model.map(String::from),
         schema: None,
+        key_name: None,
+        config_dir: None,
     }
 }
 
@@ -497,7 +506,10 @@ async fn bad_model_name_fails() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stderr_flood_is_capped_and_drained() {
     let (_t, provider) = fake_cli("fake_cli_stderr.sh", Duration::from_secs(30));
-    assert_eq!(provider.ask(req(None), &|_: &str| {}).await.unwrap(), "ok");
+    assert_eq!(
+        provider.ask(req(None), &|_: &str| {}).await.unwrap().text,
+        "ok"
+    );
 }
 
 #[tokio::test]
@@ -743,6 +755,37 @@ fn fake_cli(name: &str, timeout: Duration) -> (tempfile::TempDir, CliProvider) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn claude_cli_result_usage_parsed() {
+    let (_t, provider) = fake_cli("fake_cli_usage.sh", Duration::from_secs(30));
+    let a = provider
+        .ask(
+            AiRequest {
+                prompt: "p".into(),
+                model: Some("sonnet".into()),
+                schema: None,
+                key_name: None,
+                config_dir: None,
+            },
+            &|_: &str| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(a.text, "ok");
+    assert_eq!(
+        a.usage,
+        Some(ieum_local::ai::AiUsage {
+            source: "cli:claude".into(),
+            model: Some("sonnet".into()),
+            input_tokens: 12,
+            output_tokens: 3,
+            cache_read_tokens: Some(100),
+            cache_write_tokens: Some(5),
+            credential: None,
+        })
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stdout_cap_kills_flooding_cli() {
     let (_t, provider) = fake_cli("fake_cli_flood.sh", Duration::from_secs(60));
     let started = Instant::now();
@@ -752,6 +795,8 @@ async fn stdout_cap_kills_flooding_cli() {
                 prompt: "p".into(),
                 model: None,
                 schema: None,
+                key_name: None,
+                config_dir: None,
             },
             &|_: &str| {},
         )
@@ -825,6 +870,8 @@ async fn timeout_kills_cli_process() {
                 prompt: "p".into(),
                 model: None,
                 schema: None,
+                key_name: None,
+                config_dir: None,
             },
             &|_: &str| {},
         )
@@ -834,6 +881,43 @@ async fn timeout_kills_cli_process() {
     assert!(started.elapsed() < Duration::from_secs(30));
     let cwd = t.path().join("cwd");
     assert_gone(&[read_pid(&cwd, "cli.pid"), read_pid(&cwd, "child.pid")]).await;
+}
+
+/// `system`이면 CLI 기본 설정(None), 그 밖의 id는 `/accts/<id>`.
+struct DirResolver;
+
+impl ieum_local::ai::CredentialResolver for DirResolver {
+    fn api_key_name(&self, _: &str, _: Option<&str>) -> Result<String, String> {
+        Err("unused".into())
+    }
+    fn claude_config_dir(&self, credential: Option<&str>) -> Result<Option<PathBuf>, String> {
+        Ok(match credential {
+            None | Some("system") => None,
+            Some(id) => Some(PathBuf::from(format!("/tmp/ieum test accts/{id}"))),
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn claude_node_runs_with_account_config_dir() {
+    let (_t, provider) = fake_cli("fake_cli_env.sh", Duration::from_secs(30));
+    let runner = AiRunner::empty()
+        .with_provider("cli:claude", Arc::new(provider))
+        .with_resolver(Arc::new(DirResolver));
+    let out = run(
+        &runner,
+        json!({"provider": "cli:claude", "prompt": "p", "credential": "a1b2c3d4"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out["output"], "/tmp/ieum test accts/a1b2c3d4");
+    for cfg in [
+        json!({"provider": "cli:claude", "prompt": "p", "credential": "system"}),
+        json!({"provider": "cli:claude", "prompt": "p"}),
+    ] {
+        let out = run(&runner, cfg).await.unwrap();
+        assert_eq!(out["output"], "unset");
+    }
 }
 
 /// 이 PC의 claude 구독으로 한 번 실제 호출한다: `cargo test -p ieum-local --test ai_cli -- --ignored`

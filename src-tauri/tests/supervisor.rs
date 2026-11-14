@@ -7,11 +7,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use ieum_desktop_lib::store::{Store, StoredWorkflow};
-use ieum_desktop_lib::supervisor::{AppEvent, Deps, QUEUE_CAP, Supervisor, WatchState};
+use ieum_desktop_lib::store::{RunTrigger, Store, StoredWorkflow};
+use ieum_desktop_lib::supervisor::{
+    AppEvent, Deps, NoticeKind, QUEUE_CAP, RunNotice, Supervisor, WatchState,
+};
 use ieum_engine::{ExecEvent, NodeStatus, RunStatus, Workflow};
 use ieum_local::WatchTiming;
-use ieum_local::ai::{AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
+use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
@@ -29,7 +31,7 @@ struct FakeAi {
 
 #[async_trait]
 impl AiProvider for FakeAi {
-    async fn ask(&self, req: AiRequest, _chunk: &ChunkFn<'_>) -> Result<String, AiError> {
+    async fn ask(&self, req: AiRequest, _chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.prompts.lock().unwrap().push(req.prompt);
         let now = self.active.fetch_add(1, Ordering::SeqCst) + 1;
@@ -40,7 +42,10 @@ impl AiProvider for FakeAi {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         self.active.fetch_sub(1, Ordering::SeqCst);
-        Ok(r#"{"folder": "sorted"}"#.into())
+        Ok(AiAnswer {
+            text: r#"{"folder": "sorted"}"#.into(),
+            usage: None,
+        })
     }
 }
 
@@ -76,6 +81,7 @@ fn env_full(ai: FakeAi, recheck: Duration, repeat_window: Duration) -> Env {
     let ev = events.clone();
     let sup = Supervisor::start(Deps {
         store: store.clone(),
+        app_data: root.join("data"),
         home: root.clone(),
         trash_dir: root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", ai.clone())),
@@ -274,6 +280,37 @@ async fn disabled_workflow_not_watched() {
     assert!(inbox.join("a.pdf").exists());
     let entry = env.sup.list_workflows().unwrap().remove(0);
     assert_eq!(entry.watch, WatchState::Off);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn watch_run_records_watch_trigger() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let id = save(&env, move_wf(&inbox, &out), true);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    assert!(wait_until(Duration::from_secs(5), || runs(&env, &id) == 1).await);
+    let summary = &env.store.list_runs(Some(&id)).unwrap()[0];
+    assert_eq!(summary.trigger, Some(RunTrigger::Watch));
+    let run = env.store.get_run(&summary.run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Watch));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_now_records_manual_trigger() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let id = save(&env, move_wf(&inbox, &out), false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+
+    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Manual));
+    assert_eq!(
+        env.store.list_runs(Some(&id)).unwrap()[0].trigger,
+        Some(RunTrigger::Manual)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -537,6 +574,7 @@ fn trigger(p: &Path) -> serde_json::Map<String, serde_json::Value> {
 fn restart(env: &Env) -> Supervisor {
     Supervisor::start(Deps {
         store: env.store.clone(),
+        app_data: env.root.join("data"),
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty()),
@@ -610,6 +648,7 @@ async fn run_finished_emitted_after_final_save() {
     let (store, s) = (env.store.clone(), seen.clone());
     let sup = Supervisor::start(Deps {
         store: env.store.clone(),
+        app_data: env.root.join("data"),
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", env.ai.clone())),
@@ -708,4 +747,81 @@ async fn undo_ignores_tampered_roots_outside_policy() {
     assert!(report.restored.is_empty(), "{report:?}");
     assert!(out.join("sorted/a.pdf").exists());
     assert!(!inbox.join("a.pdf").exists());
+}
+
+fn notices(env: &Env, id: &str) -> Vec<RunNotice> {
+    env.events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            AppEvent::RunNotice(n) if n.workflow_id == id => Some(n.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_notice_emitted_with_trigger_and_name() {
+    let env = env();
+    // 수동 실행(꺼진 워크플로우)
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let id = save(&env, move_wf(&inbox, &out), false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let manual = notices(&env, &id);
+    assert_eq!(manual.len(), 2, "{manual:?}");
+    assert!(matches!(manual[0].kind, NoticeKind::Started));
+    assert!(
+        matches!(
+            manual[1].kind,
+            NoticeKind::Finished {
+                ok: true,
+                failed_node: None,
+                ..
+            }
+        ),
+        "{manual:?}"
+    );
+    for n in &manual {
+        assert_eq!(n.trigger, RunTrigger::Manual);
+        assert_eq!(n.workflow_name, "정리");
+        assert_eq!(n.run_id, run_id);
+    }
+
+    // 감시 실행
+    let (inbox2, out2) = (env.dir("in2"), env.dir("out2"));
+    let wid = save(&env, move_wf(&inbox2, &out2), true);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    fs::write(inbox2.join("b.pdf"), "pdf").unwrap();
+    assert!(wait_until(Duration::from_secs(5), || notices(&env, &wid).len() == 2).await);
+    let watch = notices(&env, &wid);
+    assert!(matches!(watch[0].kind, NoticeKind::Started));
+    assert!(matches!(
+        watch[1].kind,
+        NoticeKind::Finished { ok: true, .. }
+    ));
+    assert!(watch.iter().all(|n| n.trigger == RunTrigger::Watch));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_notice_failed_node_is_label_not_error() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let mut wf = move_wf(&inbox, &out);
+    wf.nodes[2].label = Some("파일 옮기기".into());
+    let id = save(&env, wf, false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    // 옮길 폴더 자리에 파일을 두어 옮기기 노드를 실패시킨다.
+    fs::write(out.join("sorted"), "not a folder").unwrap();
+    env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let n = notices(&env, &id);
+    match &n[1].kind {
+        NoticeKind::Finished {
+            ok: false,
+            failed_node,
+            ..
+        } => assert_eq!(failed_node.as_deref(), Some("파일 옮기기")),
+        k => panic!("{k:?}"),
+    }
 }
