@@ -228,14 +228,19 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
   } else if (field.choices) {
     input = (
       <div className="flex items-center gap-2">
-        <select id={id} className={INPUT} value={str} onChange={(e) => onChange(e.target.value)}>
-          {!str && <option value="" disabled />}
-          {field.choices.map((c) => (
-            <option key={c.id} value={c.id}>
-              {tDyn(`choice.${field.key}.${c.id}`) ?? c.name}
-            </option>
-          ))}
-        </select>
+        <Dropdown
+          label={label}
+          items={[
+            // 비어 있으면 첫 선택지를 고른 것처럼 보이지 않게.
+            ...(str ? [] : [{ id: "", name: t("editor.pickChoice"), icon: null }]),
+            ...field.choices.map((c) => ({ id: c.id, name: tDyn(`choice.${field.key}.${c.id}`) ?? c.name, icon: null })),
+          ]}
+          sel={str}
+          onSel={(v) => v !== str && onChange(v)}
+          left
+          root="relative min-w-0 flex-1"
+          trigger={SELECT_TRIGGER}
+        />
       </div>
     );
   } else if (field.type === "boolean") {
@@ -270,19 +275,16 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
       <div className="flex flex-col gap-1.5">
         <Tag id={id} className={`${INPUT} ${Tag === "textarea" ? "min-h-20 resize-y" : ""}`} value={str} onChange={(e) => onChange(e.target.value)} />
         {field.ref !== false && refs.length > 0 && (
-          <select
-            className={`${INPUT} typo-caption1_regular text-neutral-600`}
-            aria-label={t("editor.insertRef")}
-            value=""
-            onChange={(e) => e.target.value && onChange(str + e.target.value)}
-          >
-            <option value="">{t("editor.insertRef")}</option>
-            {refs.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
+          // 고르는 칸이 아니라 동작 메뉴 — 늘 맨 위 항목을 보이고, 고르면 글 끝에 참조식을 붙인다.
+          <Dropdown
+            label={t("editor.insertRef")}
+            items={[{ id: "", name: t("editor.insertRef"), icon: null }, ...refs.map((r) => ({ id: r.value, name: r.label, icon: null }))]}
+            sel=""
+            onSel={(v) => v && onChange(str + v)}
+            left
+            root="relative w-full"
+            trigger={`${SELECT_TRIGGER} typo-caption1_regular text-neutral-600`}
+          />
         )}
       </div>
     );

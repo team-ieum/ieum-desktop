@@ -517,8 +517,8 @@ test("add_key_then_set_default_and_delete_with_confirm", async () => {
   // 키가 없으면 바로 입력란 — 이름표 + 키.
   const anthropic = keys("Claude");
   expect(anthropic.queryByRole("button", { name: "삭제" })).toBeNull();
-  await act(async () => fireEvent.change(anthropic.getByLabelText("Anthropic API 이름표"), { target: { value: "회사" } }));
-  const key = anthropic.getByLabelText("Anthropic API 키") as HTMLInputElement;
+  await act(async () => fireEvent.change(anthropic.getByLabelText("Claude API 이름표"), { target: { value: "회사" } }));
+  const key = anthropic.getByLabelText("Claude API 키") as HTMLInputElement;
   await act(async () => fireEvent.change(key, { target: { value: "sk-secret" } }));
   await act(async () => fireEvent.click(anthropic.getByRole("button", { name: "저장" })));
   expect(add).toHaveBeenCalledWith("anthropic", "회사", "sk-secret");

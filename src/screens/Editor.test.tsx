@@ -110,7 +110,7 @@ test("tech_info_toggle_shows_event_ids", async () => {
   await addNode(PALETTE[0]);
   await addNode("local.ai");
   await act(async () => fireEvent.click(within(screen.getByTestId("field-provider")).getByRole("button")));
-  await act(async () => fireEvent.click(screen.getByRole("option", { name: /^Anthropic/ })));
+  await act(async () => fireEvent.click(screen.getByRole("option", { name: /^Claude API/ })));
   expect(screen.queryByText(PALETTE[0])).toBeNull();
   const sw = screen.getByRole("switch", { name: "기술 정보" });
   await act(async () => fireEvent.click(sw));
