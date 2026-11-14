@@ -133,27 +133,29 @@ pub fn suggest(
     })
 }
 
-/// 이미 보인(또는 "나중에"로 넘긴) 제안: (회사, 기본 계정, 창) → 마지막 초기화 시각(ms). 메모리에만 둔다.
+/// 이미 보인(또는 "나중에"로 넘긴) 제안: (이음 계정 키, 회사, 기본 계정, 창) → 마지막 초기화 시각(ms).
+/// 이음 계정마다 따로 기억한다(`system` 같은 계정 id는 이음 계정이 달라도 같다). 메모리에만 둔다.
 #[derive(Default)]
-pub struct Seen(HashMap<(&'static str, String, &'static str), i64>);
+pub struct Seen(HashMap<(String, &'static str, String, &'static str), i64>);
 
 /// 서버가 조회마다 초기화 시각을 조금씩 다르게 줘도(분 경계를 넘어도) 이 안이면 같은 창.
 const SAME_WINDOW_MS: i64 = 60_000;
 
 impl Seen {
-    pub fn contains(&self, k: &LimitKey) -> bool {
+    pub fn contains(&self, account: &str, k: &LimitKey) -> bool {
         self.0
-            .get(&(k.company, k.from_id.clone(), k.kind))
+            .get(&(account.to_string(), k.company, k.from_id.clone(), k.kind))
             .is_some_and(|&r| (r - k.reset_ms).abs() <= SAME_WINDOW_MS)
     }
 
     /// 처음 보는 제안이면 기억하고 true.
-    pub fn first_time(&mut self, s: &Suggestion) -> bool {
+    pub fn first_time(&mut self, account: &str, s: &Suggestion) -> bool {
         let k = s.key();
-        if self.contains(&k) {
+        if self.contains(account, &k) {
             return false;
         }
-        self.0.insert((k.company, k.from_id, k.kind), k.reset_ms);
+        self.0
+            .insert((account.to_string(), k.company, k.from_id, k.kind), k.reset_ms);
         true
     }
 }
@@ -299,12 +301,12 @@ pub fn deliver_once(
     enabled: bool,
     focused: bool,
 ) -> Delivery {
-    if seen.contains(&s.key()) {
+    if seen.contains(account, &s.key()) {
         return Delivery::Drop;
     }
     let d = route_suggestion(enabled, focused);
     if d != Delivery::Drop {
-        seen.first_time(s);
+        seen.first_time(account, s);
         pending.put(account, s.clone());
     }
     d
@@ -331,7 +333,7 @@ async fn run_once(app: AppHandle, seen: Arc<Mutex<Seen>>) -> Duration {
     let usage = app.state::<SubscriptionUsage>();
     let usage = &*usage;
     let want = |k: &LimitKey| {
-        s.notify_account_suggest && !seen.lock().unwrap_or_else(|e| e.into_inner()).contains(k)
+        s.notify_account_suggest && !seen.lock().unwrap_or_else(|e| e.into_inner()).contains(&account, k)
     };
     let mut t = tick(view.as_ref(), lang, want, |kind, id| {
         let creds = creds.clone();

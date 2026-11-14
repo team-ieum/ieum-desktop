@@ -528,6 +528,17 @@ async fn quiet_get_forgets_expired_token() {
 }
 
 #[tokio::test]
+async fn quiet_get_keeps_token_on_403() {
+    // 403은 만료가 아니다(권한·일시 거절) — 기억한 토큰을 그대로 둔다.
+    let (url, n) = sequence(&[200, 403]).await;
+    let c = PlanUsageClient::with_url(&url, token(Some(TOKEN)), Duration::ZERO).unwrap();
+    assert_eq!(c.get().await.state, "ok");
+    c.get_quiet().await;
+    assert!(c.get_quiet().await.is_some());
+    assert_eq!(n.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
 async fn subscription_quiet_get_claude_after_read() {
     let (url, _) = serve(|_| (200, sample().to_string())).await;
     let (token, seen) = per_dir(None);

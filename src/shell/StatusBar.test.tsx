@@ -177,23 +177,3 @@ test("popover_links_to_usage_and_accounts", async () => {
   await act(async () => fireEvent.click(within(screen.getByRole("region", { name: "Claude" })).getByRole("button", { name: "계정 관리…" })));
   expect(onSettings).toHaveBeenCalledTimes(2);
 });
-
-test("status_bar_hidden_window_defers_first_load", async () => {
-  let state: DocumentVisibilityState = "hidden";
-  const vis = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => state);
-  try {
-    const sub = mockAll();
-    await mount();
-    // 창이 안 보이면 구독·자격 목록을 처음부터 읽지 않는다.
-    expect(sub).not.toHaveBeenCalled();
-    expect(api.antigravityPlanUsage).not.toHaveBeenCalled();
-    expect(api.listCredentials).not.toHaveBeenCalled();
-    state = "visible";
-    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-    expect(api.listCredentials).toHaveBeenCalledTimes(1);
-    expect(sub).toHaveBeenCalled();
-    expect(api.antigravityPlanUsage).toHaveBeenCalled();
-  } finally {
-    vis.mockRestore();
-  }
-});

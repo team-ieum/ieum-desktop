@@ -24,7 +24,22 @@ import { useWeb } from "./stores/web";
 import { useWorkflows } from "./stores/workflows";
 import { SuggestBanner } from "./usage/SuggestBanner";
 
+/** 창이 한 번이라도 보이기 전(로그인 시 숨은 채 자동 시작)엔 아무것도 그리지 않는다
+ *  — 화면마다 막지 않고 여기 한 곳에서, 키체인 허용 창이 뜰 수 있는 첫 조회를 미룬다. */
 export default function App() {
+  const [shown, setShown] = useState(() => document.visibilityState === "visible");
+  useEffect(() => {
+    if (shown) return;
+    const on = () => {
+      if (document.visibilityState === "visible") setShown(true);
+    };
+    document.addEventListener("visibilitychange", on);
+    return () => document.removeEventListener("visibilitychange", on);
+  }, [shown]);
+  return shown ? <AppBody /> : null;
+}
+
+function AppBody() {
   const lang = useSettings((s) => s.lang);
   const loadSettings = useSettings((s) => s.load);
   const [view, setView] = useState<View>({ page: "dashboard" });
@@ -32,9 +47,13 @@ export default function App() {
   const account = useWeb((s) => s.account);
   // 로그아웃하면 다음 로그인은 대시보드에서 시작한다.
   const [lastAccount, setLastAccount] = useState(account);
+  // 계정 권하기 띠 대기열(아래 설명).
+  const [suggests, setSuggests] = useState<Suggestion[]>([]);
   if (account !== lastAccount) {
     setLastAccount(account);
     if (!account) setView({ page: "dashboard" });
+    // 다른 이음 계정(또는 로그아웃) — 이전 계정 때 받은 제안은 버린다.
+    if (account?.email !== lastAccount?.email || account?.serverUrl !== lastAccount?.serverUrl) setSuggests([]);
   }
   const loadAccount = useWeb((s) => s.load);
   const expired = useWeb((s) => s.expired);
@@ -80,7 +99,6 @@ export default function App() {
   // 마운트·창이 다시 앞에 올 때·알림 클릭 때 꺼내 오고, 이벤트로 띄울 때도 대기 칸을 비운다.
   // "나중에"는 띠만 닫는다 — 같은 제안을 다시 띄우지 않는 건 Rust가 기억한다.
   // 회사별로 하나씩 줄 세워 앞의 것부터 보인다. 같은 회사 제안이 다시 오면 그 자리를 바꾼다.
-  const [suggests, setSuggests] = useState<Suggestion[]>([]);
   const creds = useCredentials((c) => c.view);
   const addSuggests = (list: Suggestion[]) =>
     setSuggests((q) => {

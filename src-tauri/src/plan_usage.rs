@@ -204,8 +204,8 @@ impl PlanUsageClient {
                 .ok()?;
             if !resp.status().is_success() {
                 wait = retry_after(&resp);
-                // 토큰 만료·거절 — 백그라운드가 이 토큰을 다시 쓰지 않게 버린다(get은 키체인을 다시 읽는다).
-                if matches!(resp.status().as_u16(), 401 | 403) {
+                // 401 = 토큰 만료 — 백그라운드가 이 토큰을 다시 쓰지 않게 버린다(get은 키체인을 다시 읽는다).
+                if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
                     let mut r = self.remembered();
                     if r.as_deref() == Some(token.as_str()) {
                         *r = None;

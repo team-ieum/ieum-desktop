@@ -4,7 +4,7 @@ import { api, type UsageSummary } from "../api";
 import { ProviderLogo } from "../assets/providers";
 import { t } from "../i18n";
 import { useCredentials } from "../stores/credentials";
-import { useDefaultPlans, whenVisible } from "../stores/plans";
+import { useDefaultPlans } from "../stores/plans";
 import { formatReset, formatUsd } from "../usage/format";
 import { hot, resetText, usedOf, usedText, windowName } from "../usage/parts";
 import { connectedSubs, UsagePopover } from "./UsagePopover";
@@ -22,8 +22,8 @@ export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSett
   const opener = useRef<HTMLButtonElement>(null);
   const loadToday = () => api.usageSummary("today").then(setToday, () => setToday(null));
   useEffect(() => {
+    useCredentials.getState().load().catch(() => {});
     void loadToday();
-    return whenVisible(() => void useCredentials.getState().load().catch(() => {}));
   }, []);
 
   // 구독은 useDefaultPlans가 처음 읽고, 이후엔 백그라운드 감시(plans-updated)가 채운다. 여기선 오늘 API 금액만 — 창이 안 보이면 멈추고, 다시 보이면 바로 읽는다.

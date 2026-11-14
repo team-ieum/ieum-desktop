@@ -309,6 +309,8 @@ test("switch_dialog_failure_keeps_focus_and_esc_closes", async () => {
   // 바꾸는 중에도 포커스를 잃지 않게 disabled 대신 aria-disabled.
   expect(confirm.hasAttribute("disabled")).toBe(false);
   expect(confirm.getAttribute("aria-disabled")).toBe("true");
+  // 실패 전에 포커스가 다른 버튼에 있어도 실패하면 확인 버튼으로 돌아온다.
+  within(dialog).getByRole("button", { name: "취소" }).focus();
   await act(async () => fail("boom"));
   expect(within(dialog).getByRole("alert")).toBeTruthy();
   expect(document.activeElement).toBe(confirm);
@@ -324,4 +326,41 @@ test("switch_dialog_tab_cycles_inside", async () => {
   expect(document.activeElement).toBe(cancel);
   fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true });
   expect(document.activeElement).toBe(confirm);
+});
+
+test("hidden_window_renders_nothing_until_visible", async () => {
+  let state: DocumentVisibilityState = "hidden";
+  const vis = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => state);
+  const sub = vi.spyOn(api, "subscriptionUsage").mockResolvedValue(null as never);
+  const agy = vi.spyOn(api, "antigravityPlanUsage").mockResolvedValue(null as never);
+  const calls = () => [api.listCredentials, sub, agy, api.webListWorkflows].map((f) => vi.mocked(f).mock.calls.length);
+  const before = calls();
+  try {
+    await act(async () => {
+      render(<App />);
+    });
+    // 숨은 창(로그인 시 자동 시작)에선 앱을 그리지 않는다 — 키체인 허용 창이 뜰 조회를 하지 않게.
+    expect(calls()).toEqual(before);
+    expect(screen.queryByRole("main")).toBeNull();
+    state = "visible";
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(screen.getByRole("main")).toBeTruthy();
+    expect(calls()[0]).toBeGreaterThan(before[0]);
+    expect(calls()[3]).toBeGreaterThan(before[3]);
+  } finally {
+    vis.mockRestore();
+  }
+});
+
+test("suggestions_cleared_when_ieum_account_changes", async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST]);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByText(/바꿔서 쓸까요/)).toBeTruthy();
+  await act(async () => useWeb.setState({ account: { email: "other@ieum.dev", serverUrl: ACCOUNT.serverUrl } }));
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+  await act(async () => useWeb.setState({ account: ACCOUNT }));
+  // 원래 계정으로 돌아와도 비운 대기열은 되살아나지 않는다.
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
 });

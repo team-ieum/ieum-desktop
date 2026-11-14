@@ -137,8 +137,8 @@ fn suggest_not_repeated_for_same_key() {
     assert_eq!(limit_key("claude", &def), Some(k));
     assert_eq!(limit_key("claude", &cand("me", plan("ok", &[("five_hour", 99.0)]))), None);
     let mut seen = Seen::default();
-    assert!(seen.first_time(&s));
-    assert!(!seen.first_time(&s));
+    assert!(seen.first_time("acct", &s));
+    assert!(!seen.first_time("acct", &s));
 }
 
 #[test]
@@ -151,12 +151,12 @@ fn suggest_again_after_reset() {
     )
     .unwrap();
     let mut seen = Seen::default();
-    assert!(seen.first_time(&s));
+    assert!(seen.first_time("acct", &s));
     let later = ieum_desktop_lib::limit_watch::Suggestion {
         resets_at: "2026-11-13T10:00:00+00:00".into(),
         ..s
     };
-    assert!(seen.first_time(&later));
+    assert!(seen.first_time("acct", &later));
 }
 
 #[test]
@@ -164,12 +164,12 @@ fn suggest_key_ignores_subsecond_jitter() {
     let def = cand("me", plan("ok", &[("five_hour", 100.0)]));
     let s = suggest("claude", &def, &[cand("b", plan("ok", &[("five_hour", 3.0)]))]).unwrap();
     let mut seen = Seen::default();
-    assert!(seen.first_time(&ieum_desktop_lib::limit_watch::Suggestion {
+    assert!(seen.first_time("acct", &ieum_desktop_lib::limit_watch::Suggestion {
         resets_at: "2026-11-13T05:00:00.123+00:00".into(),
         ..s.clone()
     }));
     // 같은 창, 소수점 초·오프셋 표기만 다름 → 다시 권하지 않는다.
-    assert!(!seen.first_time(&ieum_desktop_lib::limit_watch::Suggestion {
+    assert!(!seen.first_time("acct", &ieum_desktop_lib::limit_watch::Suggestion {
         resets_at: "2026-11-13T05:00:00.456Z".into(),
         ..s
     }));
@@ -181,11 +181,11 @@ fn suggest_key_same_window_within_60s() {
     let s = suggest("claude", &def, &[cand("b", plan("ok", &[("five_hour", 3.0)]))]).unwrap();
     let at = |r: &str| Suggestion { resets_at: r.into(), ..s.clone() };
     let mut seen = Seen::default();
-    assert!(seen.first_time(&at("2026-11-13T04:59:59.990+00:00")));
+    assert!(seen.first_time("acct", &at("2026-11-13T04:59:59.990+00:00")));
     // 분 경계를 넘는 20ms 차이 — 같은 창.
-    assert!(!seen.first_time(&at("2026-11-13T05:00:00.010+00:00")));
+    assert!(!seen.first_time("acct", &at("2026-11-13T05:00:00.010+00:00")));
     // 1시간 차이 — 다른 창.
-    assert!(seen.first_time(&at("2026-11-13T06:00:00+00:00")));
+    assert!(seen.first_time("acct", &at("2026-11-13T06:00:00+00:00")));
 }
 
 #[test]
@@ -325,8 +325,8 @@ async fn tick_skips_others_when_already_seen_or_disabled() {
     // 이미 보인 제안 키(기본 계정 plan만으로 만든 키) — 다른 계정을 묻지 않는다.
     let mut seen = Seen::default();
     let s = suggest("claude", &cand("me", plan("ok", &[("five_hour", 100.0)])), &[cand("x", plan("ok", &[]))]).unwrap();
-    assert!(seen.first_time(&s));
-    let t = tick(Some(&v), Lang::Ko, |k| !seen.contains(k), fetch).await;
+    assert!(seen.first_time("acct", &s));
+    let t = tick(Some(&v), Lang::Ko, |k| !seen.contains("acct", k), fetch).await;
     assert_eq!(*fetched.lock().unwrap(), ["me"]);
     assert!(t.suggestions.is_empty());
     // 알림이 꺼져 있어도 묻지 않는다.
@@ -361,4 +361,17 @@ fn pending_dropped_after_account_change() {
     deliver_once(&mut Seen::default(), &pending, "old", &s, true, false);
     assert!(pending.take(None).is_empty());
     assert!(pending.take(Some("old")).is_empty());
+}
+
+#[test]
+fn seen_is_per_ieum_account() {
+    let def = cand("system", plan("ok", &[("five_hour", 100.0)]));
+    let s = suggest("claude", &def, &[cand("b", plan("ok", &[("five_hour", 3.0)]))]).unwrap();
+    let mut seen = Seen::default();
+    let pending = PendingSuggest::default();
+    assert_eq!(deliver_once(&mut seen, &pending, "old", &s, true, true), Delivery::Banner);
+    // 다른 이음 계정에선 같은 기본 계정(이 Mac의 로그인)·같은 창이어도 처음 보는 제안.
+    assert!(!seen.contains("new", &s.key()));
+    assert_eq!(deliver_once(&mut seen, &pending, "new", &s, true, true), Delivery::Banner);
+    assert_eq!(deliver_once(&mut seen, &pending, "old", &s, true, true), Delivery::Drop);
 }
