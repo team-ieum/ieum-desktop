@@ -9,7 +9,7 @@ export interface AiChoice {
   label: string;
 }
 
-/** localStorage — 마지막으로 고른 `{value, model}`. */
+/** localStorage — 마지막으로 고른 `{value, model, effort}`. */
 export const AI_KEY = "ieum.chat.ai";
 
 const API_NAMES: [ApiProvider, string][] = [

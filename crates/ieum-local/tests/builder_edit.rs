@@ -173,6 +173,7 @@ async fn ai_node_connection_is_filled_by_app_not_by_caller() {
         provider: "cli:claude".into(),
         credential: None,
         model: None,
+        effort: None,
     }));
     let r = b.apply(W, add.clone(), None).await;
     assert_eq!(r.data["needsAi"], false);
@@ -182,22 +183,27 @@ async fn ai_node_connection_is_filled_by_app_not_by_caller() {
         provider: "api:anthropic".into(),
         credential: Some("k1".into()),
         model: Some("claude-haiku-5-5".into()),
+        effort: Some("high".into()),
     };
     b.apply(W, add.clone(), Some(chat)).await;
     let c = &h.doc(W).workflow.nodes[3].config;
     assert_eq!(
-        (&c["provider"], &c["credential"], &c["model"]),
+        (&c["provider"], &c["credential"], &c["model"], &c["effort"]),
         (
             &json!("api:anthropic"),
             &json!("k1"),
-            &json!("claude-haiku-5-5")
+            &json!("claude-haiku-5-5"),
+            &json!("high")
         )
     );
+    // 터미널(앱 기본)은 수준을 채우지 않는다.
+    assert!(!h.doc(W).workflow.nodes[2].config.contains_key("effort"));
     // OpenAI는 기본 모델이 없다.
     let openai = AiDefault {
         provider: "api:openai".into(),
         credential: None,
         model: None,
+        effort: None,
     };
     let r = b.apply(W, add, Some(openai)).await;
     assert_eq!(r.data["needsAi"], true);

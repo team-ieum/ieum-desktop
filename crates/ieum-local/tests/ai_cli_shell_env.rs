@@ -12,6 +12,7 @@ fn ask(provider: &CliProvider, config_dir: Option<PathBuf>) -> String {
         AiRequest {
             prompt: "p".into(),
             model: None,
+            effort: None,
             schema: None,
             key_name: None,
             config_dir,

@@ -79,6 +79,7 @@ async fn ask(kind: ApiKind, base: &str, model: Option<&str>) -> AiAnswer {
     let req = AiRequest {
         prompt: "p".into(),
         model: model.map(String::from),
+        effort: None,
         schema: None,
         key_name: None,
         config_dir: None,
@@ -239,6 +240,7 @@ async fn extra_system_follows_fixed_instruction_each_api() {
         let req = AiRequest {
             prompt: "p".into(),
             model: model.map(String::from),
+            effort: None,
             schema: None,
             key_name: None,
             config_dir: None,
@@ -253,6 +255,57 @@ async fn extra_system_follows_fixed_instruction_each_api() {
             &json!(format!("{FIXED}\n\n빌더 규칙")),
             "{kind:?}"
         );
+    }
+}
+
+/// 추론 수준은 공급원마다 문서의 자리로 — 구조화 출력과 함께여도 둘 다 남는다. 비우면 칸이 없다.
+#[tokio::test]
+async fn effort_goes_where_each_api_reads_it() {
+    let schema =
+        json!({"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]});
+    for (kind, at, want, kept) in [
+        (
+            ApiKind::Anthropic,
+            "/output_config/effort",
+            "xhigh",
+            "/output_config/format",
+        ),
+        (
+            ApiKind::OpenAi,
+            "/reasoning_effort",
+            "xhigh",
+            "/response_format",
+        ),
+        (
+            ApiKind::Gemini,
+            "/generationConfig/thinkingConfig/thinkingLevel",
+            "XHIGH",
+            "/generationConfig/responseSchema",
+        ),
+    ] {
+        for effort in [Some("xhigh"), None] {
+            let (base, log) = serve(&events_for(kind), kind == ApiKind::OpenAi).await;
+            let req = AiRequest {
+                prompt: "p".into(),
+                model: Some("m".into()),
+                effort: effort.map(String::from),
+                schema: Some(schema.clone()),
+                key_name: None,
+                config_dir: None,
+                system: None,
+            };
+            // 답은 스키마에 안 맞지만 공급원은 글자만 넘긴다 — 본문만 본다.
+            let _ = ApiProvider::with(kind, &base, Arc::new(Key))
+                .ask(req, &|_: &str| {})
+                .await;
+            let body = log.lock().unwrap()[0].clone();
+            assert!(body.pointer(kept).is_some(), "{kind:?}: {body}");
+            assert_eq!(
+                body.pointer(at),
+                effort.map(|_| json!(want)).as_ref(),
+                "{kind:?}: {body}"
+            );
+        }
     }
 }
 

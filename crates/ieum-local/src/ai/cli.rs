@@ -1,8 +1,10 @@
 //! 구독 CLI 공급원(claude·codex·agy). 감지·실행 모두 `$SHELL -lc`(사용자 PATH), 프롬프트는 stdin.
 //! 빈 폴더에서 도구를 막고 돌린다. 취소·시간 초과 시 프로세스 그룹째 kill.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -11,7 +13,9 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use super::{AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, system_text};
+use super::{
+    AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, check_effort, system_text,
+};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 /// 실패 메시지에 붙이는 stderr 끝부분(글자).
@@ -256,6 +260,18 @@ impl CliKind {
             .map(String::from)
             .to_vec(),
         };
+        // agy는 수준이 모델 id에 붙는다(`ask`가 `agy_run_id`로 이미 합쳤다).
+        if let Some(e) = &req.effort {
+            match self {
+                CliKind::Claude => a.extend(["--effort".into(), e.clone()]),
+                // TOML 문자열 = JSON 문자열 인용.
+                CliKind::Codex => a.extend([
+                    "-c".into(),
+                    format!("model_reasoning_effort={}", Value::String(e.clone())),
+                ]),
+                CliKind::Agy => {}
+            }
+        }
         if let Some(m) = &req.model {
             a.push(
                 if self == CliKind::Codex {
@@ -290,6 +306,95 @@ impl CliKind {
         }
         a
     }
+}
+
+/// agy 모델 id 끝에 붙는 추론 수준(`agy models`의 `gemini-4-argon-high` 식).
+pub const AGY_EFFORTS: [&str; 4] = ["low", "medium", "high", "xhigh"];
+
+/// `gemini-4-argon-high` → (`gemini-4-argon`, Some(`high`)). 접미사가 없으면 (id, None).
+pub fn agy_split(id: &str) -> (&str, Option<&'static str>) {
+    for e in AGY_EFFORTS {
+        if let Some(base) = id.strip_suffix(e).and_then(|b| b.strip_suffix('-'))
+            && !base.is_empty()
+        {
+            return (base, Some(e));
+        }
+    }
+    (id, None)
+}
+
+/// 실행할 agy 모델 id. 수준을 골랐으면 묶음 이름 + `-수준`. 안 골랐으면(기본):
+/// 이미 접미사가 붙은 id(예전 저장값)는 그대로, 아니면 `listed`(`agy models`의 id들)에서 그 묶음의 `-medium`,
+/// 없으면 묶음의 첫 것 — agy 기본 모델들이 보통 medium이라 그에 맞춘다. 묶음이 없으면(접미사 없는 모델) 그대로.
+pub fn agy_run_id(model: &str, effort: Option<&str>, listed: &[String]) -> String {
+    let (base, suffix) = agy_split(model);
+    if let Some(e) = effort {
+        return format!("{base}-{e}");
+    }
+    if suffix.is_some() {
+        return model.to_string();
+    }
+    let group: Vec<&String> = listed
+        .iter()
+        .filter(|id| matches!(agy_split(id), (b, Some(_)) if b == base))
+        .collect();
+    group
+        .iter()
+        .find(|id| id.ends_with("-medium"))
+        .or(group.first())
+        .map_or_else(|| model.to_string(), |id| id.to_string())
+}
+
+/// claude `--effort`가 받는 수준(도움말). `minimal`은 없다.
+const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+
+/// 공급원·모델이 받지 않는 추론 수준 오류의 앞부분 — 러너가 이것으로 칸 오류 코드를 고른다.
+pub const EFFORT_NOT_SUPPORTED: &str = "고른 공급원·모델이 받지 않는 추론 수준이에요";
+
+fn effort_not_supported(name: &str, effort: &str) -> AiError {
+    AiError(format!(
+        "{EFFORT_NOT_SUPPORTED}({name}, {effort}). 추론 수준을 다시 골라 주세요."
+    ))
+}
+
+/// 기본 수준을 풀 `agy models`를 못 읽었을 때. 러너는 `AI_MODEL_LIST_FAILED`로 알린다.
+pub const AGY_LIST_FAILED: &str = "Antigravity 모델 목록(agy models)을 읽지 못해 기본 추론 수준을 정하지 못했어요. Antigravity 로그인을 확인하고 다시 실행해 주세요.";
+
+/// `agy models` 시간 상한.
+const AGY_LIST_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// 성공한 `agy models` id 목록, 프로그램 경로별. 실행마다 로그인 셸 + 목록 조회를 띄우지 않게 한 번만 읽는다.
+// ponytail: 앱이 켜져 있는 동안 갱신하지 않는다 — agy가 모델을 바꾸면 앱을 다시 켜야 반영된다.
+static AGY_IDS: Mutex<Option<HashMap<String, Vec<String>>>> = Mutex::new(None);
+
+/// `agy models` id 목록(캐시). 실패·빈 목록이면 None(캐시하지 않는다). 자동 업데이트는 끈다.
+async fn agy_ids(program: &str) -> Option<Vec<String>> {
+    let cache = || AGY_IDS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(ids) = cache().get_or_insert_default().get(program) {
+        return Some(ids.clone());
+    }
+    let line = format!(
+        "AGY_CLI_DISABLE_AUTO_UPDATE=true {} models",
+        sh_quote(program)
+    );
+    let ids = tokio::task::spawn_blocking(move || shell_output(&line, AGY_LIST_TIMEOUT))
+        .await
+        .ok()
+        .flatten()
+        .map(|out| agy_listed_ids(&out))
+        .filter(|ids| !ids.is_empty())?;
+    cache()
+        .get_or_insert_default()
+        .insert(program.to_string(), ids.clone());
+    Some(ids)
+}
+
+/// `agy models` 출력(`<id>\t<이름>` 줄들) → id 목록. 앞의 안내 줄은 탭이 없어 빠진다.
+pub fn agy_listed_ids(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|l| Some(l.split_once('\t')?.0.trim().to_string()))
+        .filter(|id| !id.is_empty())
+        .collect()
 }
 
 /// 셸 작은따옴표 인용.
@@ -628,12 +733,52 @@ impl CliProvider {
 
 #[async_trait]
 impl AiProvider for CliProvider {
-    async fn ask(&self, req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
+    async fn ask(&self, mut req: AiRequest, chunk: &ChunkFn<'_>) -> Result<AiAnswer, AiError> {
         let name = self.kind.label();
         if let Some(m) = req.model.as_deref().filter(|m| !valid_model(m)) {
             return Err(AiError(format!(
                 "모델 이름이 올바르지 않아요(‘-’로 시작하거나 공백·제어문자가 있음): {m:?}"
             )));
+        }
+        check_effort(req.effort.as_deref())?;
+        if let Some(e) = req.effort.as_deref() {
+            let ok = match self.kind {
+                CliKind::Claude => CLAUDE_EFFORTS.contains(&e),
+                // 수준이 모델 id에 붙는다 — 기본 모델(id 없음)엔 붙일 자리가 없다.
+                CliKind::Agy => AGY_EFFORTS.contains(&e) && req.model.is_some(),
+                // 모델마다 다르다 — codex가 알린다.
+                CliKind::Codex => true,
+            };
+            if !ok {
+                return Err(effort_not_supported(name, e));
+            }
+        }
+        if self.kind == CliKind::Agy
+            && let Some(m) = req.model.take()
+        {
+            let (base, suffix) = agy_split(&m);
+            // 수준을 골랐으면 그 id가 있는지, 기본이면 묶음의 실제 id를 목록에서 본다. 예전 접미사 값은 목록이 필요 없다.
+            let listed = if req.effort.is_some() || suffix.is_none() {
+                agy_ids(&self.program).await
+            } else {
+                None
+            };
+            match (req.effort.as_deref(), &listed) {
+                (Some(e), Some(ids)) if !ids.contains(&format!("{base}-{e}")) => {
+                    return Err(effort_not_supported(name, e));
+                }
+                // 묶음 이름을 그대로 넘기면 agy의 "모르는 모델"로 끝나 원인이 안 보인다.
+                (None, None) if suffix.is_none() => {
+                    return Err(AiError(AGY_LIST_FAILED.into()));
+                }
+                // 수준을 골랐는데 목록을 못 읽었으면 합친 id로 돌린다(없는 id면 agy가 알린다).
+                _ => {}
+            }
+            req.model = Some(agy_run_id(
+                &m,
+                req.effort.as_deref(),
+                listed.as_deref().unwrap_or(&[]),
+            ));
         }
         std::fs::create_dir_all(&self.cwd)
             .map_err(|e| AiError(format!("작업 폴더를 못 만들었어요: {e}")))?;

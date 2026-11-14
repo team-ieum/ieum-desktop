@@ -10,7 +10,9 @@ use reqwest::header::HeaderValue;
 use serde_json::{Map, Value, json};
 
 use super::keys::{ApiKey, KeyStore, Keychain};
-use super::{AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, system_text};
+use super::{
+    AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, check_effort, system_text,
+};
 
 pub const API_TIMEOUT: Duration = Duration::from_secs(300);
 /// 응답 본문 전체 상한.
@@ -98,8 +100,12 @@ impl ApiKind {
                 // 강제 tool_choice는 Opus·Sonnet 5.5 등에서 400 — output_config로 받는다(답은 text 블록).
                 // thinking·temperature는 모델마다 400이 나므로 보내지 않는다.
                 if let Some(s) = &req.schema {
-                    body["output_config"] =
-                        json!({"format": {"type": "json_schema", "schema": strict_schema(s)}});
+                    body["output_config"]["format"] =
+                        json!({"type": "json_schema", "schema": strict_schema(s)});
+                }
+                // `output_config.effort` (GA, 헤더 없음) — low·medium·high·xhigh·max.
+                if let Some(e) = &req.effort {
+                    body["output_config"]["effort"] = json!(e);
                 }
                 (format!("{base}/v1/messages"), body)
             }
@@ -120,6 +126,10 @@ impl ApiKind {
                         "json_schema": {"name": OUTPUT_NAME, "strict": true, "schema": strict_schema(s)},
                     });
                 }
+                // Chat Completions `reasoning_effort` — 추론 모델만, 지원 값은 모델마다 다르다.
+                if let Some(e) = &req.effort {
+                    body["reasoning_effort"] = json!(e);
+                }
                 (format!("{base}/v1/chat/completions"), body)
             }
             ApiKind::Gemini => {
@@ -132,6 +142,11 @@ impl ApiKind {
                         "responseMimeType": "application/json",
                         "responseSchema": gemini_schema(s),
                     });
+                }
+                // `generationConfig.thinkingConfig.thinkingLevel` — enum이 대문자(`LOW` …).
+                if let Some(e) = &req.effort {
+                    body["generationConfig"]["thinkingConfig"] =
+                        json!({"thinkingLevel": e.to_uppercase()});
                 }
                 (
                     format!("{base}/v1beta/models/{model}:streamGenerateContent?alt=sse"),
@@ -303,6 +318,7 @@ impl AiProvider for ApiProvider {
         if !valid_model(model) {
             return Err(AiError(format!("모델 이름이 올바르지 않아요: {model:?}")));
         }
+        check_effort(req.effort.as_deref())?;
         let key = self
             .keys
             .get(req.key_name.as_deref().unwrap_or(self.kind.account()))

@@ -8,7 +8,17 @@ import { ConfigPanel } from "./ConfigPanel";
 
 beforeEach(() => {
   vi.spyOn(api, "listModels").mockImplementation(async (p) =>
-    p === "api:anthropic" ? [{ id: "claude-haiku-5-5", label: "claude-haiku-5-5" }, { id: "claude-opus-5-5", label: "claude-opus-5-5" }] : [],
+    p === "api:anthropic"
+      ? {
+          models: [
+            { id: "claude-haiku-5-5", label: "claude-haiku-5-5", efforts: ["low", "high"] },
+            { id: "claude-opus-5-5", label: "claude-opus-5-5", efforts: ["low", "max"] },
+          ],
+          defaultEfforts: ["low", "high"],
+        }
+      : p === "cli:agy"
+        ? { models: [{ id: "gemini-4-argon", label: "Gemini 4 Argon", efforts: ["low", "medium", "high"] }], defaultEfforts: [] }
+        : { models: [], defaultEfforts: [] },
   );
 });
 afterEach(() => {
@@ -185,10 +195,13 @@ test("ai_node_model_is_a_dropdown_of_the_provider_models", async () => {
 
 test("openai_node_without_model_asks_to_pick_one_instead_of_showing_the_first", async () => {
   setLang("ko");
-  vi.mocked(api.listModels).mockResolvedValue([
-    { id: "gpt-6-astra", label: "GPT-6 Astra" },
-    { id: "gpt-6-luna", label: "GPT-6 Luna" },
-  ]);
+  vi.mocked(api.listModels).mockResolvedValue({
+    models: [
+      { id: "gpt-6-astra", label: "GPT-6 Astra", efforts: [] },
+      { id: "gpt-6-luna", label: "GPT-6 Luna", efforts: [] },
+    ],
+    defaultEfforts: [],
+  });
   const onChange = vi.fn();
   const node = aiNode({ provider: "api:openai" });
   render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
@@ -202,6 +215,58 @@ test("openai_node_without_model_asks_to_pick_one_instead_of_showing_the_first", 
   expect(onChange).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("option", { name: "GPT-6 Luna" }));
   expect(onChange.mock.lastCall![0].config.model).toBe("gpt-6-luna"); // 저장은 원래 id
+});
+
+test("ai_node_effort_follows_the_model_and_resets_when_it_changes", async () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node = aiNode({ model: "claude-opus-5-5", effort: "max" });
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
+  const effort = await screen.findByRole("button", { name: "추론 수준: Max" });
+  await act(async () => fireEvent.click(effort));
+  expect(within(screen.getByRole("listbox", { name: "추론 수준" })).getAllByRole("option").map((o) => o.textContent)).toEqual([
+    "기본",
+    "Low",
+    "Max",
+  ]);
+  fireEvent.click(within(screen.getByRole("listbox", { name: "추론 수준" })).getByRole("option", { name: "기본" }));
+  expect("effort" in onChange.mock.lastCall![0].config).toBe(false); // 기본이면 칸을 뺀다
+  // 모델을 바꾸면 수준은 기본으로.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: /^모델: / })));
+  fireEvent.click(screen.getByRole("option", { name: "claude-haiku-5-5" }));
+  expect(onChange.mock.lastCall![0].config).toEqual({ provider: "api:anthropic", prompt: "p", model: "claude-haiku-5-5" });
+  // 공급원을 바꿔도.
+  fireEvent.change(screen.getByLabelText(/AI 공급원/), { target: { value: "cli:claude" } });
+  expect(onChange.mock.lastCall![0].config).toEqual({ provider: "cli:claude", prompt: "p" });
+});
+
+test("ai_node_splits_an_old_antigravity_model_and_rewrites_only_on_change", async () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node = aiNode({ provider: "cli:agy", model: "gemini-4-argon-high" });
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
+  expect(await screen.findByRole("button", { name: "모델: Gemini 4 Argon" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "추론 수준: High" })).toBeTruthy();
+  // 같은 모델·수준을 다시 골라도 저장본을 고치지 않는다.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "모델: Gemini 4 Argon" })));
+  fireEvent.click(screen.getByRole("option", { name: "Gemini 4 Argon" }));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "추론 수준: High" })));
+  fireEvent.click(screen.getByRole("option", { name: "High" }));
+  expect(onChange).not.toHaveBeenCalled();
+  // 수준을 바꾸면 모델은 수준을 뗀 이름으로 함께 저장.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "추론 수준: High" })));
+  fireEvent.click(screen.getByRole("option", { name: "Low" }));
+  expect(onChange.mock.lastCall![0].config).toEqual({ provider: "cli:agy", prompt: "p", model: "gemini-4-argon", effort: "low" });
+});
+
+test("ai_node_effort_is_off_with_a_reason_for_agy_default_model", async () => {
+  setLang("ko");
+  const node = aiNode({ provider: "cli:agy" });
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={() => {}} />);
+  await screen.findByRole("button", { name: "모델: 기본 모델" });
+  const effort = screen.getByRole("button", { name: "추론 수준: 기본" }) as HTMLButtonElement;
+  expect(effort.disabled).toBe(true);
+  expect(effort.title).toBe("Antigravity는 모델을 골라야 추론 수준을 고를 수 있어요.");
 });
 
 test("ai_node_model_list_failure_is_shown_not_swallowed", async () => {

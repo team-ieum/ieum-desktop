@@ -129,6 +129,7 @@ async fn set_rejects_all_when_one_locked() {
         ("m", "config.baseFolder"),
         ("a", "config.provider"),
         ("a", "config.model"),
+        ("a", "config.effort"),
     ] {
         assert_eq!(
             run(&b, set(id, json!({k: "/h/x"}))).await.code,
@@ -136,7 +137,7 @@ async fn set_rejects_all_when_one_locked() {
             "{k}"
         );
     }
-    for k in ["provider", "credential", "model"] {
+    for k in ["provider", "credential", "model", "effort"] {
         assert_eq!(
             run(&b, set("a", json!({"prompt": "새 지시", k: "x"})))
                 .await

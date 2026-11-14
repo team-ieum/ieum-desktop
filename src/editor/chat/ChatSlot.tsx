@@ -1,11 +1,11 @@
-import { ArrowUp, Sparkles } from "lucide-react";
+import { ArrowUp, Gauge, Sparkles } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type ChatCard } from "../../api";
 import symbol from "../../assets/symbol.png";
 import { type Key, t } from "../../i18n";
 import { useCredentials } from "../../stores/credentials";
 import { Dropdown } from "../../usage/parts";
-import { modelItems, needsModel, useModels } from "../models";
+import { effortItems, effortLevels, modelItems, needsModel, shownModel, useModels } from "../models";
 import { PickFolderCard, TestCard } from "./ChatCards";
 import { AI_KEY, aiChoices } from "./chatAi";
 
@@ -15,17 +15,20 @@ const BUBBLE = "max-w-[280px] px-3.5 py-2.5 text-sm leading-relaxed whitespace-p
 const ASSISTANT_BG = { background: "#F0F4FC" };
 /** 입력 카드 아래 줄의 고르기 칩. */
 const CHIP =
-  "inline-flex h-7 min-w-0 max-w-[150px] cursor-pointer items-center gap-1 rounded-full border border-[#cde9f4] bg-main-light-blue/40 px-2.5 typo-caption2_semibold whitespace-nowrap text-main-deep-blue hover:bg-main-light-blue disabled:cursor-default disabled:opacity-50";
+  "inline-flex h-7 min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-full border border-[#cde9f4] bg-main-light-blue/40 px-2.5 typo-caption2_semibold whitespace-nowrap text-main-deep-blue hover:bg-main-light-blue disabled:cursor-default disabled:opacity-50";
 const EXAMPLES: Key[] = ["chat.example.1", "chat.example.2", "chat.example.3"];
 /** 입력칸이 자라는 최대 높이(px) — 넘으면 안에서 스크롤. */
 const MAX_INPUT = 160;
 
-function savedAi(): { value: string; model: string } {
+type Ai = { value: string; model: string; effort: string };
+
+function savedAi(): Ai {
+  const str = (x: unknown) => (typeof x === "string" ? x : "");
   try {
     const v = JSON.parse(localStorage.getItem(AI_KEY) ?? "{}");
-    return { value: typeof v.value === "string" ? v.value : "", model: typeof v.model === "string" ? v.model : "" };
+    return { value: str(v.value), model: str(v.model), effort: str(v.effort) };
   } catch {
-    return { value: "", model: "" };
+    return { value: "", model: "", effort: "" };
   }
 }
 
@@ -107,7 +110,11 @@ export function ChatSlot({
   const loaded = useRef(false);
 
   const choice = choices.find((c) => c.value === ai.value) ?? choices[0];
-  const { models, failed } = useModels(choice?.provider);
+  const got = useModels(choice?.provider);
+  const { models, failed } = got;
+  // 예전 Antigravity 값(`…-high`)은 모델·수준으로 나눠 보여 준다.
+  const shown = shownModel(choice?.provider, ai.model, ai.effort);
+  const effort = effortLevels(choice?.provider, got, shown.model);
   const missingModel = needsModel(choice?.provider) && !ai.model.trim();
   const ready = !!choice && !busy && !missingModel;
 
@@ -156,7 +163,7 @@ export function ChatSlot({
     el.style.height = `${Math.min(el.scrollHeight, MAX_INPUT)}px`;
   }, [text]);
 
-  const pickAi = (next: { value: string; model: string }) => {
+  const pickAi = (next: Ai) => {
     setAi(next);
     try {
       localStorage.setItem(AI_KEY, JSON.stringify(next));
@@ -167,7 +174,7 @@ export function ChatSlot({
 
   // OpenAI는 기본 모델이 없다 — 비어 있으면 목록 첫 모델을 골라 둔다.
   useEffect(() => {
-    if (choice && missingModel && models?.length) pickAi({ value: choice.value, model: models[0].id });
+    if (choice && missingModel && models?.length) pickAi({ value: choice.value, model: models[0].id, effort: "" });
   }, [choice?.value, missingModel, models]);
 
   const send = async (message: string) => {
@@ -181,6 +188,7 @@ export function ChatSlot({
         provider: choice.provider,
         credential: choice.credential || null,
         model: ai.model.trim() || null,
+        effort: ai.effort || null,
       });
       setItems((now) => [
         ...now,
@@ -272,23 +280,36 @@ export function ChatSlot({
                   label={t("chat.ai")}
                   items={choices.map((c) => ({ id: c.value, name: c.label, icon: null }))}
                   sel={choice.value}
-                  onSel={(value) => pickAi({ value, model: "" })}
+                  onSel={(value) => value !== choice.value && pickAi({ value, model: "", effort: "" })}
                   up
                   left
-                  root="relative min-w-0"
+                  // 칩 셋이 한 줄에 들게 — 좁으면 키 칩이 먼저 줄고 글은 말줄임.
+                  root="relative min-w-0 max-w-[150px] shrink-[3]"
                   trigger={CHIP}
                   disabled={busy}
                 />
                 <Dropdown
                   label={t("chat.model")}
-                  items={modelItems(choice.provider, models, ai.model)}
-                  sel={ai.model}
-                  onSel={(model) => pickAi({ value: choice.value, model })}
+                  items={modelItems(choice.provider, models, shown.model)}
+                  sel={shown.model}
+                  // 모델마다 받는 수준이 달라 모델을 바꾸면 수준은 기본으로.
+                  onSel={(model) => model !== shown.model && pickAi({ value: choice.value, model, effort: "" })}
                   up
                   left
-                  root="relative min-w-0"
+                  root="relative min-w-0 max-w-[150px]"
                   trigger={CHIP}
                   disabled={busy}
+                />
+                <Dropdown
+                  label={t("effort.label")}
+                  items={effortItems(effort.levels, shown.effort).map((i) => ({ ...i, icon: <Gauge size={12} aria-hidden="true" className="shrink-0" /> }))}
+                  sel={shown.effort}
+                  onSel={(e) => pickAi({ value: choice.value, model: shown.model, effort: e })}
+                  up
+                  root="relative shrink-0"
+                  trigger={CHIP}
+                  disabled={busy || !!effort.off}
+                  title={effort.off ? t(effort.off) : undefined}
                 />
               </>
             )}

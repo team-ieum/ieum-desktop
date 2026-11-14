@@ -223,6 +223,7 @@ fn usage_report_counts_agy_under_google() {
         &[
             usage("gemini", "gemini-x", 7, 3),
             usage("cli:agy", "gemini-3.8-flash-low", 20, 4),
+            usage("cli:agy", "gemini-3.8-flash-high", 1, 1),
         ],
     )];
     let r = report(
@@ -236,9 +237,21 @@ fn usage_report_counts_agy_under_google() {
     let g = provider(&v, "google");
     assert_eq!(
         (g["calls"].clone(), g["input"].clone()),
-        (json!(2), json!(27))
+        (json!(3), json!(28))
     );
     assert_eq!(g["usd"], 0.0);
+    // agy의 수준 접미사는 떼고 한 모델로 묶는다.
+    let agy: Vec<&Value> = g["byModel"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["model"].as_str().unwrap().starts_with("gemini-3.8"))
+        .collect();
+    assert_eq!(agy.len(), 1, "{agy:?}");
+    assert_eq!(
+        (agy[0]["model"].clone(), agy[0]["calls"].clone()),
+        (json!("gemini-3.8-flash"), json!(2))
+    );
 }
 
 fn provider<'a>(v: &'a Value, id: &str) -> &'a Value {

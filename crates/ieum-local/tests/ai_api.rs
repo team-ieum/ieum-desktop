@@ -171,6 +171,7 @@ async fn ask(
     let req = AiRequest {
         prompt: "하늘 색은?".into(),
         model: model.map(String::from),
+        effort: None,
         schema: None,
         key_name: None,
         config_dir: None,
@@ -308,6 +309,7 @@ async fn missing_key_fails_with_message() {
         let req = AiRequest {
             prompt: "p".into(),
             model: Some("m".into()),
+            effort: None,
             schema: None,
             key_name: None,
             config_dir: None,
@@ -331,6 +333,7 @@ async fn keychain_error_is_not_missing_key() {
             AiRequest {
                 prompt: "p".into(),
                 model: None,
+                effort: None,
                 schema: None,
                 key_name: None,
                 config_dir: None,

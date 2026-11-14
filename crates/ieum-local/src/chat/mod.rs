@@ -168,6 +168,7 @@ pub async fn run_turn(
                 cli,
             ),
             model: turn.ai.model.clone(),
+            effort: turn.ai.effort.clone(),
             schema: Some(schema.clone()),
             key_name: None,
             config_dir: None,

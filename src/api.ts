@@ -398,6 +398,13 @@ export interface TermTools {
 export interface ModelChoice {
   id: string;
   label: string;
+  /** 고를 수 있는 추론 수준, 낮은 것부터. 비면 못 고른다. */
+  efforts: string[];
+}
+/** 모델 목록 + "기본 모델"일 때 고를 수 있는 수준. */
+export interface ModelList {
+  models: ModelChoice[];
+  defaultEfforts: string[];
 }
 
 export interface ChatFile {
@@ -425,6 +432,7 @@ export interface ChatAi {
   provider: string;
   credential: string | null;
   model: string | null;
+  effort: string | null;
 }
 export type ChatStage = { id: string; stage: "designing" | "testing" };
 
@@ -534,7 +542,14 @@ export const api = {
     listen<{ id: string; name: string }>("finish-pending", (e) => cb(e.payload)),
   // ── 채팅 패널 ──
   chatSend: (workflowId: string, text: string, ai: ChatAi) =>
-    invoke<ChatTurn>("chat_send", { workflowId, text, provider: ai.provider, credential: ai.credential, model: ai.model }),
+    invoke<ChatTurn>("chat_send", {
+      workflowId,
+      text,
+      provider: ai.provider,
+      credential: ai.credential,
+      model: ai.model,
+      effort: ai.effort,
+    }),
   /** 폴더 고르기 카드의 버튼 — 시스템 폴더 창을 연다. */
   chatPickFolder: (workflowId: string, nodeId: string, field: string) =>
     invoke<BuilderReply>("chat_pick_folder", { workflowId, nodeId, field }),
@@ -545,7 +560,7 @@ export const api = {
   /** 쓸 수 있는 CLI(설치 + 로그인)와 이 워크플로우에 살아 있는 세션. */
   termTools: (workflowId: string) => invoke<TermTools>("term_tools", { workflowId }),
   /** 공급원의 모델 목록(가격표·codex 내장 목록·agy models). 못 읽으면 reject. */
-  listModels: (provider: string) => invoke<ModelChoice[]>("list_models", { provider }),
+  listModels: (provider: string) => invoke<ModelList>("list_models", { provider }),
   /** 터미널을 띄우거나 살아 있는 세션에 붙는다. 출력은 `onData`로 온다. */
   termSpawn: (workflowId: string, tool: TermTool, cols: number, rows: number, onData: (bytes: Uint8Array) => void) => {
     const ch = new Channel<ArrayBuffer>();

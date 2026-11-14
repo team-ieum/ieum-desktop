@@ -91,6 +91,7 @@ pub async fn send(
         provider: ai.provider,
         credential: filled(ai.credential),
         model: filled(ai.model),
+        effort: filled(ai.effort),
     };
     if ai.provider == "api:openai" && ai.model.is_none() {
         return Err(CHAT_MODEL_REQUIRED.into());
@@ -145,7 +146,7 @@ pub async fn send(
 }
 
 /// 채팅 패널의 한 턴. 단계는 `chat-stage {id, stage}`로 흘린다.
-// 인자 모양은 화면의 `chat_send` 호출과 같다(State 셋 + 화면이 넘기는 다섯).
+// 인자 모양은 화면의 `chat_send` 호출과 같다(State 셋 + 화면이 넘기는 여섯).
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn chat_send(
@@ -157,6 +158,7 @@ pub async fn chat_send(
     provider: String,
     credential: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
 ) -> Result<ChatTurn, String> {
     let builder = builder_of(&active, &pick).await?;
     let sup = active.sup().await?;
@@ -164,6 +166,7 @@ pub async fn chat_send(
         provider,
         credential,
         model,
+        effort,
     };
     let on_stage = |stage: Stage| {
         if let Err(e) = app.emit("chat-stage", json!({"id": workflow_id, "stage": stage})) {

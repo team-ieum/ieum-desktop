@@ -29,6 +29,8 @@ pub struct AiDefault {
     pub provider: String,
     pub credential: Option<String>,
     pub model: Option<String>,
+    /// 추론 수준. None이면 기본.
+    pub effort: Option<String>,
 }
 
 #[derive(Debug, Clone)]

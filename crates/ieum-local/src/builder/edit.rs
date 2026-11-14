@@ -14,7 +14,7 @@ pub const FOLDER_FIELDS: [(&str, &str); 2] = [
     ("local.file_move", "baseFolder"),
 ];
 /// `local.ai`에서 앱만 채우는 칸.
-pub const AI_LOCKED_FIELDS: [&str; 3] = ["provider", "credential", "model"];
+pub const AI_LOCKED_FIELDS: [&str; 4] = ["provider", "credential", "model", "effort"];
 
 pub(super) const AI_EVENT: &str = "local.ai";
 
@@ -172,6 +172,7 @@ pub(super) fn add(
             provider: String::new(),
             credential: None,
             model: None,
+            effort: None,
         });
         let model = ai.model.filter(|m| !m.is_empty());
         // OpenAI는 기본 모델이 없다 — 모델이 비면 실행이 실패한다.
@@ -184,6 +185,9 @@ pub(super) fn add(
         }
         if let Some(m) = model {
             config.insert("model".into(), m.into());
+        }
+        if let Some(e) = ai.effort.filter(|e| !e.is_empty()) {
+            config.insert("effort".into(), e.into());
         }
     }
     wf.nodes.push(Node {
