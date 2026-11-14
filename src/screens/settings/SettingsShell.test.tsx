@@ -756,11 +756,16 @@ test("relogin_after_logout_opens_dashboard", async () => {
 });
 
 test("general_update_check_shows_result", async () => {
-  vi.spyOn(api, "checkUpdateNow").mockResolvedValueOnce({ status: "latest" }).mockRejectedValueOnce("offline");
+  vi.spyOn(api, "checkUpdateNow")
+    .mockResolvedValueOnce({ status: "latest" })
+    .mockResolvedValueOnce({ status: "available", version: "1.2.3" })
+    .mockRejectedValueOnce("offline");
   await renderShell("general");
-  expect(screen.getByText("업데이트는 시작할 때 자동으로 확인해요.")).toBeTruthy();
+  expect(screen.getByText("새 버전이 나오면 오른쪽 아래에 알려 드려요.")).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "업데이트 확인" })));
   expect(screen.getByText("최신 버전이에요.")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "업데이트 확인" })));
+  expect(screen.getByText("새 버전 1.2.3이 있어요 — 오른쪽 아래에서 업데이트할 수 있어요.")).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "업데이트 확인" })));
   expect(screen.getByText("업데이트를 확인하지 못했어요. 네트워크를 확인해 주세요.")).toBeTruthy();
 });

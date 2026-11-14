@@ -154,7 +154,11 @@ export interface Suggestion {
   resetsAt: string;
 }
 /** 설정 [업데이트 확인] 결과(Rust `UpdateCheck`). */
-export type UpdateCheck = { status: "dev" } | { status: "latest" } | { status: "installed"; version: string };
+export type UpdateCheck = { status: "dev" } | { status: "latest" } | { status: "available"; version: string };
+/** Rust `update-available` 이벤트 — `manual`이면 설정에서 직접 확인한 것(숨긴 버전도 다시 띄운다). */
+export type UpdateAvailable = { version: string; manual: boolean };
+/** Rust `update-progress` — 받은 바이트·전체(모르면 null), 다 받아 설치 중이면 `installing`. */
+export type UpdateProgress = { downloaded: number; total: number | null; installing: boolean };
 export type SystemSettingsPane = "files" | "notifications" | "login_items";
 /** 시스템 알림 클릭으로 열 화면(Rust `notify::Target`). */
 export type OpenTarget =
@@ -492,6 +496,14 @@ export const api = {
   /** 앞 여부·알림 토글과 무관하게 "알림이 켜졌어요". */
   sendTestNotification: () => invoke<void>("send_test_notification"),
   checkUpdateNow: () => invoke<UpdateCheck>("check_update_now"),
+  /** 이미 찾아 둔 새 버전(없으면 null) — 이벤트를 놓친 화면용. */
+  pendingUpdate: () => invoke<string | null>("pending_update"),
+  /** 받아 설치하고 앱을 다시 시작한다(성공하면 돌아오지 않는다). */
+  installUpdateAndRestart: () => invoke<void>("install_update_and_restart"),
+  onUpdateAvailable: (cb: (p: UpdateAvailable) => void): Promise<UnlistenFn> =>
+    listen<UpdateAvailable>("update-available", (e) => cb(e.payload)),
+  onUpdateProgress: (cb: (p: UpdateProgress) => void): Promise<UnlistenFn> =>
+    listen<UpdateProgress>("update-progress", (e) => cb(e.payload)),
   /** 시스템 알림을 누르면 열 화면. */
   onOpenTarget: (cb: (t: OpenTarget) => void): Promise<UnlistenFn> =>
     listen<OpenTarget>("open-target", (e) => cb(e.payload)),
