@@ -17,7 +17,7 @@ const statusText = (s: string) => (STATUS[s] ? t(STATUS[s]) : s);
 const shown = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v)).slice(0, 200);
 
 /** 테스트 결과 — 값은 실행 기록에서 직접 읽어 화면에만 보인다(AI에게 다시 가지 않는다). */
-export function TestCard({ runId, status }: { runId: string; status: string }) {
+export function TestCard({ runId, status, nodeNames }: { runId: string; status: string; nodeNames?: Record<string, string> }) {
   const [run, setRun] = useState<StoredRun | null>(null);
   useEffect(() => {
     api.getRun(runId).then(setRun, () => {});
@@ -31,7 +31,7 @@ export function TestCard({ runId, status }: { runId: string; status: string }) {
       </p>
       {nodes.map(([id, n]) => (
         <div key={id} className="flex flex-col gap-0.5 border-t border-neutral-100 pt-1.5">
-          <p className="font-semibold">{statusText(n.status)}</p>
+          <p className="font-semibold">{nodeNames?.[id] ? `${nodeNames[id]} · ${statusText(n.status)}` : statusText(n.status)}</p>
           {Object.entries(n.output ?? {}).map(([k, v]) => (
             <p key={k} className="break-all">
               {k}: {shown(v)}

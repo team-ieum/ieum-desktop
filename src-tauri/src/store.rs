@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ieum_engine::{RunResult, RunStatus, Workflow};
+use ieum_local::ai::AiUsage;
 use ieum_local::builder::ChatFile;
 use ieum_local::{FileOp, UndoReport};
 use serde::de::DeserializeOwned;
@@ -41,6 +42,14 @@ pub struct StoredRun {
     /// 옛 기록에는 없다.
     #[serde(default)]
     pub trigger: Option<RunTrigger>,
+}
+
+/// 채팅 패널의 AI 호출 한 건(채팅 파일의 `usage` 항목 + 어느 워크플로우의 채팅인지).
+#[derive(Debug, Clone)]
+pub struct ChatUsage {
+    pub workflow_id: String,
+    pub at: String,
+    pub usage: AiUsage,
 }
 
 /// 폴더 감시로 돌았는지, 지금 실행(수동)인지, 채팅 빌더의 노드 테스트인지.
@@ -160,6 +169,11 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
 
 /// 폴더 안 `<uuid>.json`들을 읽는다. 없는 폴더는 빈 목록, 깨진 파일은 건너뛴다.
 fn read_all<T: DeserializeOwned>(dir: &Path) -> Result<Vec<T>, String> {
+    Ok(read_named(dir)?.into_iter().map(|(_, v)| v).collect())
+}
+
+/// `read_all`과 같되 파일 이름의 id도 같이 준다.
+fn read_named<T: DeserializeOwned>(dir: &Path) -> Result<Vec<(String, T)>, String> {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -167,16 +181,14 @@ fn read_all<T: DeserializeOwned>(dir: &Path) -> Result<Vec<T>, String> {
     };
     Ok(entries
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension().is_some_and(|x| x == "json")
-                && p.file_stem()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|s| check_id(s).is_ok())
-        })
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .filter_map(|p| {
-            read_json(&p)
+            let id = p.file_stem()?.to_str()?.to_string();
+            check_id(&id).ok()?;
+            let value = read_json(&p)
                 .inspect_err(|e| eprintln!("[ieum] 기록을 읽지 못해 건너뜀: {e}"))
-                .ok()
+                .ok()?;
+            Some((id, value))
         })
         .collect())
 }
@@ -248,6 +260,21 @@ impl Store {
         f(&mut chat);
         write_atomic(&self.chat_path(workflow_id)?, &chat)?;
         Ok(chat)
+    }
+
+    /// 모든 채팅 파일의 사용량(`chats/<워크플로우 id>.json`). 폴더가 없으면 빈 목록, 깨진 파일은 건너뛴다.
+    pub fn all_chat_usage(&self) -> Result<Vec<ChatUsage>, String> {
+        let chats: Vec<(String, ChatFile)> = read_named(&self.root.join("chats"))?;
+        Ok(chats
+            .into_iter()
+            .flat_map(|(workflow_id, chat)| {
+                chat.usage.into_iter().map(move |e| ChatUsage {
+                    workflow_id: workflow_id.clone(),
+                    at: e.at,
+                    usage: e.usage,
+                })
+            })
+            .collect())
     }
 
     pub fn list_workflows(&self) -> Result<Vec<StoredWorkflow>, String> {

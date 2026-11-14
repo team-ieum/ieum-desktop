@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, FixedOffset};
 use ieum_desktop_lib::pricing::{Pricing, estimate_usd};
-use ieum_desktop_lib::store::StoredRun;
+use ieum_desktop_lib::store::{ChatUsage, StoredRun};
 use ieum_desktop_lib::usage::summarize;
 use ieum_local::ai::AiUsage;
 use serde_json::{Value, json};
@@ -129,6 +129,7 @@ fn summary_groups_by_source_workflow_day() {
     ];
     let s = summarize(
         &runs,
+        &[],
         at("2026-11-10T00:00:00+09:00"),
         at("2026-11-13T00:00:00+09:00"),
         &t,
@@ -176,6 +177,7 @@ fn old_run_without_usage_reads() {
     assert!(run.run.nodes["a"].usage.is_none());
     let s = summarize(
         &[run],
+        &[],
         at("2026-11-01T00:00:00Z"),
         at("2026-12-01T00:00:00Z"),
         &table(),
@@ -211,7 +213,13 @@ fn usage_report_counts_agy_under_google() {
             usage("cli:agy", "gemini-3.8-flash-low", 20, 4),
         ],
     )];
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let v = serde_json::to_value(&r).unwrap();
     let g = provider(&v, "google");
     assert_eq!(
@@ -241,7 +249,13 @@ fn test_runs_keep_tokens_but_not_run_count() {
         run("w1", started, &[usage("anthropic", "claude-x", 10, 10)]),
         tested,
     ];
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     assert_eq!(r.totals.runs, 1);
     assert_eq!(r.totals.run_seconds, 0);
     assert_eq!(r.totals.ai_calls, 2);
@@ -275,7 +289,13 @@ fn usage_report_groups_providers_and_days() {
         ),
         run("w1", "2026-11-12T01:00:00.000Z", &[]),
     ];
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let v = serde_json::to_value(&r).unwrap();
     assert_eq!(v["trackingSince"], "2026-10-01T00:00:00.000Z");
     assert_eq!(v["totals"]["runs"], 4);
@@ -341,7 +361,13 @@ fn usage_report_cache_ratios() {
             cached("anthropic", "claude-x", 100, 10, 0, 50),
         ],
     )];
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let v = serde_json::to_value(&r).unwrap();
     // 캐시 읽기 ÷ (입력 + 캐시 읽기) = 300 / 500
     assert_eq!(v["overview"]["cacheShare"], 0.6);
@@ -368,7 +394,13 @@ fn usage_report_recent_is_latest_10() {
             )
         })
         .collect();
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let v = serde_json::to_value(&r).unwrap();
     let recent = provider(&v, "claude")["recent"].as_array().unwrap().clone();
     assert_eq!(recent.len(), 10);
@@ -382,6 +414,7 @@ fn usage_report_recent_is_latest_10() {
 #[test]
 fn usage_report_empty_store() {
     let r = report(
+        &[],
         &[],
         &HashMap::new(),
         at("2026-11-13T09:00:00+09:00"),
@@ -427,7 +460,13 @@ fn usage_report_heat_covers_42_days() {
             &[cached("openai", "gpt-x", 1, 2, 3, 4)],
         ),
     ];
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let v = serde_json::to_value(&r).unwrap();
     let heat = v["overview"]["heat"].as_array().unwrap();
     assert_eq!(heat.len(), 42);
@@ -464,8 +503,116 @@ fn usage_report_10k_timing() {
     let start = std::time::Instant::now();
     let runs = store.all_runs().unwrap();
     let read = start.elapsed();
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let total = start.elapsed();
     assert_eq!(r.totals.runs, 10_000);
     println!("10k runs: all_runs {read:?}, all_runs+report {total:?}");
+}
+
+fn chat(wf: &str, at: &str, u: AiUsage) -> ChatUsage {
+    ChatUsage {
+        workflow_id: wf.into(),
+        at: at.into(),
+        usage: u,
+    }
+}
+
+/// 채팅 패널의 호출은 토큰·금액에만 더해지고 실행 건수·시간·워크플로우별 실행 수는 그대로다.
+#[test]
+fn chat_usage_adds_tokens_but_not_runs() {
+    let runs = vec![run(
+        "w1",
+        "2026-11-12T01:00:00.000Z",
+        &[usage("anthropic", "claude-x", 1_000_000, 0)],
+    )];
+    let chats = vec![
+        chat(
+            "w1",
+            "2026-11-12T02:00:00.000Z",
+            usage("anthropic", "claude-x", 1_000_000, 0),
+        ),
+        chat(
+            "w2",
+            "2026-11-12T03:00:00.000Z",
+            usage("cli:claude", "sonnet", 100, 50),
+        ),
+    ];
+    let r = report(
+        &runs,
+        &chats,
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["totals"]["runs"], 1); // 실행 건수는 그대로
+    assert_eq!(v["totals"]["runSeconds"], 0);
+    assert_eq!(v["totals"]["aiCalls"], 3);
+    let claude = provider(&v, "claude");
+    assert_eq!((&claude["calls"], &claude["runs"]), (&json!(3), &json!(1)));
+    // 실행 1 + 채팅 1 (구독은 값 없음)
+    assert!((r.overview.usd - 2.0).abs() < 1e-9, "{}", r.overview.usd);
+    assert_eq!(r.overview.unpriced_calls, 1);
+    let w1 = claude["byWorkflow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["workflowId"] == "w1")
+        .unwrap();
+    assert_eq!((&w1["calls"], &w1["runs"]), (&json!(2), &json!(1)));
+    let w2 = claude["byWorkflow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["workflowId"] == "w2")
+        .unwrap();
+    assert_eq!((&w2["calls"], &w2["runs"]), (&json!(1), &json!(0)));
+    // 최근 호출에도 보인다
+    assert_eq!(claude["recent"][0]["at"], "2026-11-12T03:00:00.000Z");
+}
+
+#[test]
+fn chat_usage_in_range_summary_and_tracking_since() {
+    let chats = vec![
+        chat(
+            "w1",
+            "2026-11-12T01:00:00.000Z",
+            usage("openai", "gpt-x", 500_000, 100_000),
+        ),
+        // 범위 밖
+        chat(
+            "w1",
+            "2026-11-01T00:00:00.000Z",
+            usage("openai", "gpt-x", 9, 9),
+        ),
+    ];
+    let s = summarize(
+        &[],
+        &chats,
+        at("2026-11-10T00:00:00+09:00"),
+        at("2026-11-13T00:00:00+09:00"),
+        &table(),
+    );
+    assert!((s.total_usd - 2.0).abs() < 1e-9, "{}", s.total_usd);
+    assert_eq!((s.total_input, s.total_output), (500_000, 100_000));
+    assert_eq!(s.by_workflow[0].workflow_id, "w1");
+    assert_eq!(s.by_day.len(), 1);
+    let r = report(
+        &[],
+        &chats,
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
+    assert_eq!(
+        r.tracking_since.as_deref(),
+        Some("2026-11-01T00:00:00.000Z")
+    );
+    assert_eq!(r.totals.runs, 0);
 }

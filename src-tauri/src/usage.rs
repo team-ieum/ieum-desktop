@@ -7,7 +7,7 @@ use ieum_local::ai::AiUsage;
 use serde::Serialize;
 
 use crate::pricing::{Pricing, estimate_usd};
-use crate::store::StoredRun;
+use crate::store::{ChatUsage, StoredRun};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,9 +85,47 @@ impl Acc {
     }
 }
 
-/// `from` ≤ 시작 시각 < `to`인 실행만. 날짜는 `from`의 시각대로 나눈다.
+fn run_usages(r: &StoredRun) -> Vec<AiUsage> {
+    r.run
+        .nodes
+        .values()
+        .filter_map(|n| serde_json::from_value(n.usage.clone()?).ok())
+        .collect()
+}
+
+/// 집계 한 묶음: 시각, 워크플로우, 사용량들, 실행이면 그 번호와 기록(채팅 호출은 None — 실행 건수·시간에 안 든다).
+type Item<'a> = (
+    &'a str,
+    &'a str,
+    Vec<AiUsage>,
+    Option<(usize, &'a StoredRun)>,
+);
+
+/// 실행 기록과 채팅 패널 호출을 같은 누적 코드에 태울 한 줄.
+fn items<'a>(runs: &'a [StoredRun], chats: &'a [ChatUsage]) -> impl Iterator<Item = Item<'a>> {
+    let runs = runs.iter().enumerate().map(|(i, r)| {
+        (
+            r.started_at.as_str(),
+            r.workflow_id.as_str(),
+            run_usages(r),
+            Some((i, r)),
+        )
+    });
+    let chats = chats.iter().map(|c| {
+        (
+            c.at.as_str(),
+            c.workflow_id.as_str(),
+            vec![c.usage.clone()],
+            None,
+        )
+    });
+    runs.chain(chats)
+}
+
+/// `from` ≤ 시작 시각 < `to`인 실행과 채팅 호출만. 날짜는 `from`의 시각대로 나눈다.
 pub fn summarize<Tz: TimeZone>(
     runs: &[StoredRun],
+    chats: &[ChatUsage],
     from: DateTime<Tz>,
     to: DateTime<Tz>,
     table: &Pricing,
@@ -103,19 +141,14 @@ pub fn summarize<Tz: TimeZone>(
         BTreeMap::<String, Acc>::new(),
         BTreeMap::<String, Acc>::new(),
     );
-    for r in runs {
-        let Ok(at) = DateTime::parse_from_rfc3339(&r.started_at) else {
+    for (started, workflow_id, usages, _) in items(runs, chats) {
+        let Ok(at) = DateTime::parse_from_rfc3339(started) else {
             continue;
         };
         if at < from || at >= to {
             continue;
         }
         let date = at.with_timezone(&tz).date_naive().to_string();
-        let usages = r
-            .run
-            .nodes
-            .values()
-            .filter_map(|n| serde_json::from_value::<AiUsage>(n.usage.clone()?).ok());
         for u in usages {
             let usd = estimate_usd(&u, table);
             let input = u.input_tokens
@@ -138,7 +171,7 @@ pub fn summarize<Tz: TimeZone>(
                 .or_default()
                 .add(input, output, usd);
             src.entry(u.source).or_default().add(input, output, usd);
-            wf.entry(r.workflow_id.clone())
+            wf.entry(workflow_id.to_string())
                 .or_default()
                 .add(input, output, usd);
             day.entry(date.clone()).or_default().add(input, output, usd);
@@ -364,6 +397,7 @@ struct ProvAcc {
 /// (히트맵은 42일). `names` = 워크플로우 id → 이름.
 pub fn report<Tz: TimeZone>(
     runs: &[StoredRun],
+    chats: &[ChatUsage],
     names: &std::collections::HashMap<String, String>,
     now: DateTime<Tz>,
     table: &Pricing,
@@ -382,26 +416,22 @@ where
     let mut active = std::collections::BTreeSet::<String>::new();
     let mut prov: [ProvAcc; 3] = Default::default();
 
-    for (i, r) in runs.iter().enumerate() {
-        let Ok(at) = DateTime::parse_from_rfc3339(&r.started_at) else {
+    for (started, workflow_id, usages, run) in items(runs, chats) {
+        let Ok(at) = DateTime::parse_from_rfc3339(started) else {
             continue;
         };
-        // 노드 테스트는 실행 건수·시간에서 뺀다. 토큰·금액은 실제로 쓴 것이라 아래에서 그대로 센다.
-        if r.trigger != Some(crate::store::RunTrigger::Test) {
+        // 노드 테스트와 채팅 호출은 실행 건수·시간에서 뺀다. 토큰·금액은 실제로 쓴 것이라 아래에서 그대로 센다.
+        if let Some((_, r)) = run
+            && r.trigger != Some(crate::store::RunTrigger::Test)
+        {
             totals.runs += 1;
             if let Ok(end) = DateTime::parse_from_rfc3339(&r.finished_at) {
                 totals.run_seconds += u64::try_from((end - at).num_seconds()).unwrap_or(0);
             }
         }
         if oldest.is_none_or(|(o, _)| at < o) {
-            oldest = Some((at, &r.started_at));
+            oldest = Some((at, started));
         }
-        let usages: Vec<AiUsage> = r
-            .run
-            .nodes
-            .values()
-            .filter_map(|n| serde_json::from_value(n.usage.clone()?).ok())
-            .collect();
         totals.ai_calls += usages.len() as u64;
         let date = at.with_timezone(&tz).date_naive();
         if at > now || date < heat_from {
@@ -429,16 +459,16 @@ where
             a.unpriced += u64::from(usd.is_none());
             a.calls += 1;
             a.no_cache_calls += u64::from(u.cache_read_tokens.unwrap_or(0) == 0);
-            a.runs.insert(i);
+            a.runs.extend(run.map(|(i, _)| i));
             a.day.entry(key.clone()).or_default().add(&u);
             let model = u.model.clone().unwrap_or_default();
             let m = a.model.entry(model).or_default();
             m.0 += t.total();
             m.1 += 1;
-            let w = a.wf.entry(r.workflow_id.clone()).or_default();
+            let w = a.wf.entry(workflow_id.to_string()).or_default();
             w.0 += t.total();
             w.1 += 1;
-            w.2.insert(i);
+            w.2.extend(run.map(|(i, _)| i));
             let credential = u.credential.clone().unwrap_or_else(|| {
                 if u.source.starts_with("cli:") {
                     "system"
@@ -450,9 +480,9 @@ where
             a.recent.push((
                 at,
                 RecentCall {
-                    at: r.started_at.clone(),
-                    workflow_id: r.workflow_id.clone(),
-                    workflow_name: names.get(&r.workflow_id).cloned(),
+                    at: started.to_string(),
+                    workflow_id: workflow_id.to_string(),
+                    workflow_name: names.get(workflow_id).cloned(),
                     model: u.model,
                     credential,
                     input: t.input,

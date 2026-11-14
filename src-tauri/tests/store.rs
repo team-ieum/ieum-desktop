@@ -164,3 +164,48 @@ fn chat_write_after_workflow_delete_is_rejected() {
     assert!(store.save_chat(&id, &Default::default()).is_err());
     assert!(!t.path().join("chats").join(format!("{id}.json")).exists());
 }
+
+#[test]
+fn all_chat_usage_reads_every_chat_file() {
+    use ieum_local::ai::AiUsage;
+    use ieum_local::builder::UsageEntry;
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    assert!(store.all_chat_usage().unwrap().is_empty()); // chats 폴더가 없어도 된다
+    let id = store.save_workflow(stored("")).unwrap().id;
+    let u = AiUsage {
+        source: "anthropic".into(),
+        model: Some("m".into()),
+        input_tokens: 5,
+        output_tokens: 2,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        credential: Some("k1".into()),
+    };
+    store
+        .update_chat(&id, |c| {
+            c.usage.push(UsageEntry {
+                at: "2026-11-13T00:00:00.000Z".into(),
+                usage: u.clone(),
+            })
+        })
+        .unwrap();
+    fs::write(
+        t.path()
+            .join("chats/33333333-3333-4333-8333-333333333333.json"),
+        "깨진 파일",
+    )
+    .unwrap();
+    let all = store.all_chat_usage().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(
+        (
+            all[0].workflow_id.as_str(),
+            all[0].at.as_str(),
+            &all[0].usage
+        ),
+        (id.as_str(), "2026-11-13T00:00:00.000Z", &u)
+    );
+    store.delete_workflow(&id).unwrap();
+    assert!(store.all_chat_usage().unwrap().is_empty()); // 워크플로우와 함께 사라진다
+}

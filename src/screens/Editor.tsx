@@ -357,7 +357,11 @@ export function Editor({
           />
         </div>
         <PaletteButton onAdd={add} />
-        <AssistantPanel workflowId={draft.id} onOpenChange={(open) => void onAssistant(open)} />
+        <AssistantPanel
+          workflowId={draft.id}
+          onOpenChange={(open) => void onAssistant(open)}
+          nodeNames={Object.fromEntries(draft.workflow.nodes.map((n) => [n.id, n.label || nodeTitle(n.event)]))}
+        />
         <FinishCard workflowId={draft.id} version={base.updatedAt} />
         {selected && (
           <SidePanel
