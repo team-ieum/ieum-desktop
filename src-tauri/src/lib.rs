@@ -210,7 +210,8 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     ));
     app.manage(pick::system_pick(app.handle().clone()));
     app.manage(terminal::Terms::default());
-    app.manage(terminal::no_gate());
+    app.manage(channel::app_gate(app.handle()));
+    app.manage(channel::app_channel(app.handle()));
     tray::create(app)?;
     check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
@@ -320,6 +321,7 @@ pub fn run() {
             // 앱이 끝나면 터미널 세션도 전부 끝낸다.
             if let tauri::RunEvent::Exit = e {
                 app.state::<terminal::Terms>().kill_all();
+                app.state::<channel::Channel>().close();
             }
         });
 }

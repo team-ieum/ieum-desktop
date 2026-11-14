@@ -14,6 +14,7 @@ use tauri_plugin_autostart::ManagerExt;
 use crate::account::AccountId;
 use crate::active::Active;
 use crate::builder_host::{PickFolder, builder_of};
+use crate::channel::Channel;
 use crate::credentials::{AccountCredentials, ApiKeyMeta, CliAccountBegin, CredentialsView};
 use crate::permissions;
 use crate::plan_usage::PlanUsage;
@@ -73,12 +74,31 @@ pub fn save_from_canvas(sup: &Supervisor, wf: StoredWorkflow) -> Result<StoredWo
 #[tauri::command]
 pub async fn delete_workflow(
     active: State<'_, Active>,
+    channel: State<'_, Channel>,
     terms: State<'_, Terms>,
     id: String,
 ) -> Result<(), String> {
-    active.sup().await?.delete_workflow(&id)?;
-    terms.kill(&id);
+    delete_workflow_and_sessions(&active, &channel, &terms, &id).await
+}
+
+/// 워크플로우를 지우며 그 세션도 끝낸다: 토큰을 먼저 버려 지우는 사이에 온 명령이 닿지 못하게 하고,
+/// 지운 뒤 터미널을 끝낸다.
+pub async fn delete_workflow_and_sessions(
+    active: &Active,
+    channel: &Channel,
+    terms: &Terms,
+    id: &str,
+) -> Result<(), String> {
+    channel.revoke_workflow(id);
+    active.sup().await?.delete_workflow(id)?;
+    terms.kill(id);
     Ok(())
+}
+
+/// 로그아웃: 터미널을 전부 끝내고 토큰·소켓을 버린다.
+pub fn end_all_sessions(channel: &Channel, terms: &Terms) {
+    terms.kill_all();
+    channel.close();
 }
 
 #[tauri::command]
@@ -574,9 +594,10 @@ pub async fn web_logout(
     active: State<'_, Active>,
     keys: State<'_, Keys>,
     watches: State<'_, Watches>,
+    channel: State<'_, Channel>,
     terms: State<'_, Terms>,
 ) -> Result<(), WebError> {
-    terms.kill_all();
+    end_all_sessions(&channel, &terms);
     watches.clear();
     logout_and_deactivate(&active, be_client(&active, &keys)).await
 }
