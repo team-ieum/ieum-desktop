@@ -2,16 +2,19 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use ieum_desktop_lib::builder_host::{AppHost, PickFolder, no_pick};
 use ieum_desktop_lib::credentials::AccountCredentials;
-use ieum_desktop_lib::store::{RunTrigger, Store, StoredWorkflow};
+use ieum_desktop_lib::store::{RunSummary, RunTrigger, Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{AppEvent, Deps, Supervisor, WatchState};
-use ieum_engine::{ExecEvent, Workflow};
+use ieum_engine::{ExecEvent, RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::KeyError;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn, KeyStore};
@@ -318,6 +321,70 @@ async fn watch_starts_only_after_person_confirms() {
         env.sup.list_workflows().unwrap()[0].watch,
         WatchState::Watching
     );
+}
+
+/// 그 워크플로우의 실행 기록이 `n`건 끝날 때까지 기다린다.
+async fn wait_runs(env: &Env, id: &str, n: usize) -> Vec<RunSummary> {
+    for _ in 0..500 {
+        let runs = env.store.list_runs(Some(id)).unwrap();
+        if runs.len() >= n && runs.iter().all(|r| !r.finished_at.is_empty()) {
+            return runs;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("실행 {n}건이 끝나지 않았다");
+}
+
+/// future를 한 번만 poll한다(실행 줄에 넣는 데까지).
+async fn poll_once<F: Future + Unpin>(fut: &mut F) -> Poll<F::Output> {
+    std::future::poll_fn(|cx| Poll::Ready(Pin::new(&mut *fut).poll(cx))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_run_is_undone_even_if_caller_goes_away() {
+    let env = env();
+    let (watch, base) = (env.dir("watch"), env.dir("base"));
+    fs::write(watch.join("a.txt"), "hello").unwrap();
+    let id = save(&env, move_only_wf(&watch, &base), false);
+    let wf = env.store.get_workflow(&id).unwrap().workflow;
+    // 테스트를 요청한 쪽이 결과를 기다리지 않고 사라진다(소켓 끊김·시간 초과).
+    let sample = watch.join("a.txt");
+    let mut fut = Box::pin(env.sup.run_test(&id, wf, &sample));
+    assert!(poll_once(&mut fut).await.is_pending());
+    drop(fut);
+    let runs = wait_runs(&env, &id, 1).await;
+    assert_eq!(
+        (runs[0].trigger, runs[0].undone, runs[0].file_ops),
+        (Some(RunTrigger::Test), true, 1)
+    );
+    assert!(watch.join("a.txt").exists()); // 원래 자리로
+    assert!(!base.join("sorted/a.txt").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_queued_behind_test_starts_from_restored_files() {
+    let env = env();
+    let (watch, base) = (env.dir("watch"), env.dir("base"));
+    fs::write(watch.join("a.txt"), "hello").unwrap();
+    let id = save(&env, move_only_wf(&watch, &base), true);
+    let wf = env.store.get_workflow(&id).unwrap().workflow;
+    let sample = watch.join("a.txt");
+    let mut fut = Box::pin(env.sup.run_test(&id, wf, &sample));
+    assert!(poll_once(&mut fut).await.is_pending());
+    // 테스트 바로 뒤에 같은 파일의 감시 실행이 줄을 선다.
+    let trigger = json!({"path": sample, "name": "a.txt", "extension": "txt", "size": 5});
+    env.sup
+        .enqueue(&id, &watch, trigger.as_object().unwrap().clone());
+    let tested = fut.await.unwrap();
+    assert!(tested.undo.skipped.is_empty());
+    let runs = wait_runs(&env, &id, 2).await;
+    let queued = runs
+        .iter()
+        .find(|r| r.trigger == Some(RunTrigger::Watch))
+        .unwrap();
+    // 되돌려진 상태에서 시작했으니 옮길 파일이 있다.
+    assert_eq!(queued.status, RunStatus::Succeeded);
+    assert!(base.join("sorted/a.txt").exists());
 }
 
 #[tokio::test(flavor = "multi_thread")]

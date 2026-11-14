@@ -691,8 +691,21 @@ impl Supervisor {
             ),
             forward
         );
-        let stored = stored(run, now());
+        let mut stored = stored(run, now());
+        // 노드 테스트는 여기서(실행 줄 안에서) 바로 되돌린다 — 요청한 쪽이 사라졌거나 기록 저장이
+        // 실패해도 파일이 옮겨진 채 남지 않고, 줄 선 다음 실행은 되돌려진 상태에서 시작한다.
+        if run_trigger == RunTrigger::Test {
+            let _one_at_a_time = lock(&self.0.undo_lock);
+            stored.undo = Some(self.undo_ops(&stored));
+        }
         let saved = self.store().save_run(&stored);
+        // 못 되돌린 경로는 화면이 기록에서 읽는다 — 기록을 쓴 뒤에 알린다.
+        if stored.undo.as_ref().is_some_and(|u| !u.skipped.is_empty()) {
+            emit(AppEvent::TestUndoFailed {
+                workflow_id: workflow_id.to_string(),
+                run_id: stored.run.run_id.clone(),
+            });
+        }
         if let Some(event) = finished {
             emit(AppEvent::Exec {
                 workflow_id: workflow_id.to_string(),
@@ -759,20 +772,14 @@ impl Supervisor {
         sample: &Path,
     ) -> Result<TestRun, String> {
         let trigger = self.file_trigger(&wf, sample)?;
+        // 되돌리기는 실행 줄(`run_one`)이 한다 — 이 future가 버려져도 끝까지 간다.
         let run_id = self.queue(workflow_id, trigger, Some(wf)).await?;
-        let undo = self.undo_run(&run_id)?;
-        if !undo.skipped.is_empty() {
-            self.emit(AppEvent::TestUndoFailed {
-                workflow_id: workflow_id.to_string(),
-                run_id: run_id.clone(),
-            });
-        }
-        let run = self.store().get_run(&run_id)?.run;
+        let stored = self.store().get_run(&run_id)?;
         Ok(TestRun {
             run_id,
-            status: run.status,
-            nodes: run.nodes,
-            undo,
+            status: stored.run.status,
+            nodes: stored.run.nodes,
+            undo: stored.undo.unwrap_or_default(),
         })
     }
 
@@ -822,6 +829,14 @@ impl Supervisor {
         if run.finished_at.is_empty() {
             return Err("아직 끝나지 않은 실행이에요.".into());
         }
+        let report = self.undo_ops(&run);
+        run.undo = Some(report.clone());
+        self.store().save_run(&run)?;
+        Ok(report)
+    }
+
+    /// 기록의 파일 작업을 되돌린다(기록은 쓰지 않는다). `undo_lock`을 잡은 채 부른다.
+    fn undo_ops(&self, run: &StoredRun) -> UndoReport {
         // 기록이 심어졌어도 정책 밖 폴더에서는 움직이지 않는다.
         let roots = AllowedRoots::new(
             run.allowed_roots
@@ -829,14 +844,11 @@ impl Supervisor {
                 .filter(|r| self.check_folder(r).is_ok())
                 .cloned(),
         );
-        let report = undo(
+        undo(
             &run.file_ops,
             &roots,
             &self.0.deps.trash_dir,
             &self.0.recent,
-        );
-        run.undo = Some(report.clone());
-        self.store().save_run(&run)?;
-        Ok(report)
+        )
     }
 }
