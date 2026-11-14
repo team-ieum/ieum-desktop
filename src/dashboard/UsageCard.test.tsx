@@ -160,6 +160,24 @@ test("subscription_usage_fetched_once_for_bar_and_dashboard", async () => {
   expect(agy).toHaveBeenCalledTimes(1);
 });
 
+test("plans_reload_when_window_comes_forward", async () => {
+  const { sub } = mockSubs();
+  await act(async () => {
+    render(
+      <>
+        <StatusBar onUsage={() => {}} onSettings={() => {}} />
+        <UsageCard hidden={false} onUsage={() => {}} onAccounts={() => {}} />
+      </>,
+    );
+  });
+  expect(sub).toHaveBeenCalledTimes(1);
+  await act(async () => void window.dispatchEvent(new Event("focus")));
+  expect(sub).toHaveBeenCalledTimes(2);
+  expect(sub).toHaveBeenLastCalledWith("claude", "system", false);
+  await act(async () => void document.dispatchEvent(new Event("visibilitychange")));
+  expect(sub).toHaveBeenCalledTimes(3);
+});
+
 test("dashboard_subscription_refresh_asks_fresh", async () => {
   const { sub, agy } = mockSubs();
   await mountCard();

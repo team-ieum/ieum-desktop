@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use ieum_desktop_lib::plan_usage::{
     CACHE_TTL, ClaudeTokenFor, PlanUsage, PlanUsageClient, TokenRead, TokenSource,
-    claude_keychain_service, token_from_security,
+    claude_keychain_service, is_expired, token_from_security,
 };
 use ieum_desktop_lib::sub_usage::SubscriptionUsage;
 use serde_json::{Value, json};
@@ -504,18 +504,50 @@ async fn expired_not_hidden_by_last_ok_and_not_sticky() {
 }
 
 #[tokio::test]
-async fn quiet_get_expired_after_remembered_expiry() {
+async fn quiet_get_none_after_remembered_expiry() {
     let (url, log) = serve(|_| (200, sample().to_string())).await;
-    let until = chrono::Utc::now().timestamp_millis() + 300;
-    let src: TokenSource = Arc::new(move || TokenRead::Expiring(TOKEN.into(), until));
-    let c = PlanUsageClient::with_url(&url, src, Duration::ZERO).unwrap();
+    let now = chrono::Utc::now().timestamp_millis();
+    // 아직 한 시간 남은 토큰 — 백그라운드도 그대로 묻는다.
+    let later: TokenSource = Arc::new(move || TokenRead::Expiring(TOKEN.into(), now + 3_600_000));
+    let c = PlanUsageClient::with_url(&url, later, Duration::ZERO).unwrap();
     assert_eq!(c.get().await.state, "ok");
     assert_eq!(c.get_quiet().await.map(|u| u.state), Some("ok"));
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    let u = c.get_quiet().await.unwrap();
-    assert_eq!(u.state, "expired");
-    assert!(u.windows.is_empty());
     assert_eq!(log.lock().unwrap().len(), 2);
+    // 기억한 만료 시각이 지남 — CLI가 갱신했을 수 있으니 expired라 단정하지 않고 None, 서버도 안 부른다.
+    let (url, log) = serve(|_| (200, sample().to_string())).await;
+    let past: TokenSource = Arc::new(move || TokenRead::Expiring(TOKEN.into(), now - 1));
+    let c = PlanUsageClient::with_url(&url, past, CACHE_TTL).unwrap();
+    assert_eq!(c.get().await.state, "ok");
+    assert!(c.get_quiet().await.is_none());
+    assert!(c.get_quiet().await.is_none());
+    assert_eq!(log.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn get_rereads_keychain_after_remembered_expiry() {
+    let (url, _) = serve(|_| (200, sample().to_string())).await;
+    let past = chrono::Utc::now().timestamp_millis() - 1;
+    let (src, reads) = counting(|| TokenRead::Found(TOKEN.into()));
+    let src: TokenSource = Arc::new(move || match src() {
+        TokenRead::Found(t) => TokenRead::Expiring(t, past),
+        r => r,
+    });
+    // 캐시 60초 안이라도 기억한 만료가 지났으면 키체인을 다시 읽는다.
+    let c = PlanUsageClient::with_url(&url, src, CACHE_TTL).unwrap();
+    c.get().await;
+    c.get().await;
+    assert_eq!(reads.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn expiry_boundary_same_ms_is_expired() {
+    let raw = br#"{"claudeAiOauth":{"accessToken":"abc","expiresAt":1000}}"#;
+    assert!(matches!(
+        token_from_security(Some(0), raw, 1000),
+        TokenRead::Expired
+    ));
+    assert!(is_expired(1000, 1000));
+    assert!(!is_expired(1000, 999));
 }
 
 #[tokio::test]

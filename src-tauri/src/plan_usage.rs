@@ -85,6 +85,11 @@ impl Cache {
         }
     }
 
+    /// 저장한 결과를 버린다(거부·429 대기 표시도 같이).
+    pub(crate) async fn clear(&self) {
+        *self.cell.lock().await = None;
+    }
+
     /// `fresh`([새로 고침])면 시간 안이라도 새로 읽는다. 거부·429 대기 중이면 그대로.
     pub(crate) async fn get(&self, fresh: bool, fetch: impl Future<Output = Fetched>) -> PlanUsage {
         let mut cell = self.cell.lock().await;
@@ -159,13 +164,25 @@ impl PlanUsageClient {
 
     /// 백그라운드용 — 키체인(허용 창)을 부르지 않는다. 기억한 토큰이 없으면 None,
     /// 있으면 그 토큰으로 캐시를 거쳐 묻는다(실패하면 캐시 규칙대로 직전 성공값).
-    /// 기억한 만료 시각이 지났으면 묻지 않고 `expired`.
+    /// 기억한 만료 시각이 지났으면 묻지 않고 None — CLI가 이미 갱신했을 수 있어 `expired`라 단정하지 않는다.
+    /// 기억한 토큰과 캐시를 비워, 다음 일반 get이 키체인을 다시 읽게 한다(만료 표시는 그 읽기에서만).
     pub async fn get_quiet(&self) -> Option<PlanUsage> {
         let (token, until) = self.remembered().clone()?;
-        if until.is_some_and(|u| u <= chrono::Utc::now().timestamp_millis()) {
-            return Some(usage("expired", Vec::new()));
+        if self.remembered_expired(until).await {
+            return None;
         }
         Some(self.cache.get(false, self.request(token)).await)
+    }
+
+    /// 기억한 만료 시각이 지났으면 기억한 토큰과 캐시를 비우고 true.
+    async fn remembered_expired(&self, until: Option<i64>) -> bool {
+        let now = chrono::Utc::now().timestamp_millis();
+        if !until.is_some_and(|u| is_expired(u, now)) {
+            return false;
+        }
+        *self.remembered() = None;
+        self.cache.clear().await;
+        true
     }
 
     fn remembered(&self) -> std::sync::MutexGuard<'_, Option<(String, Option<i64>)>> {
@@ -173,7 +190,10 @@ impl PlanUsageClient {
     }
 
     /// `ttl` 안에 다시 부르면 저장해 둔 결과(키체인·네트워크를 건드리지 않음). 키체인 거부는 계속 쓴다.
+    /// 기억한 만료 시각이 지났으면 캐시를 건너뛰고 키체인을 다시 읽는다.
     pub async fn get(&self) -> PlanUsage {
+        let until = self.remembered().as_ref().and_then(|(_, u)| *u);
+        self.remembered_expired(until).await;
         self.cache.get(false, self.fetch()).await
     }
 
@@ -374,7 +394,12 @@ pub fn keychain_token(config_dir: Option<&Path>) -> TokenRead {
 
 /// `security` 종료 코드는 OSStatus 아래 8비트: 44 = errSecItemNotFound(-25300, 실행 확인),
 /// 128 = errSecUserCanceled(-128), 51 = errSecAuthFailed(-25293) — 허용 창 취소·거부.
-/// `now_ms`보다 이른 `claudeAiOauth.expiresAt`(밀리초)은 `Expired`. 없거나 숫자가 아니면 `Found`.
+/// 만료 경계 — 만료 시각과 같은 ms면 만료. 키체인 판정과 기억한 토큰 판정이 같이 쓴다.
+pub fn is_expired(until_ms: i64, now_ms: i64) -> bool {
+    until_ms <= now_ms
+}
+
+/// `now_ms`보다 이르거나 같은 `claudeAiOauth.expiresAt`(밀리초)은 `Expired`. 없거나 숫자가 아니면 `Found`.
 pub fn token_from_security(code: Option<i32>, stdout: &[u8], now_ms: i64) -> TokenRead {
     match code {
         Some(0) => {}
@@ -389,7 +414,7 @@ pub fn token_from_security(code: Option<i32>, stdout: &[u8], now_ms: i64) -> Tok
         return TokenRead::Missing;
     };
     match oauth["expiresAt"].as_i64() {
-        Some(e) if e < now_ms => TokenRead::Expired,
+        Some(e) if is_expired(e, now_ms) => TokenRead::Expired,
         Some(e) => TokenRead::Expiring(t.to_string(), e),
         None => TokenRead::Found(t.to_string()),
     }

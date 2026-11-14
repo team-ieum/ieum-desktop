@@ -33,6 +33,21 @@ function watchPlans() {
     });
 }
 
+/** 창이 앞으로 오면(포커스·보이게 됨) 기본 계정 키를 다시 읽는다 — 일반 조회라 앱 캐시 60초는 지킨다.
+ *  백그라운드가 만료로 놓친 계정도 여기서 키체인을 다시 읽는다. 리스너는 앱 전체에서 한 번만. */
+let focusSig = "";
+let focusWatching = false;
+function watchFocus(sig: string) {
+  focusSig = sig;
+  if (focusWatching) return;
+  focusWatching = true;
+  const again = () => loadPlans(focusSig, true);
+  window.addEventListener("focus", again);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") again();
+  });
+}
+
 /** 마지막으로 본 이음 계정 — 바뀌면(로그아웃·다른 계정) 이전 계정의 사용량을 비운다. */
 let lastWho: string | undefined;
 
@@ -49,6 +64,7 @@ export function useDefaultPlans(view: CredentialsView | null | undefined) {
   const plans = usePlanStore((s) => s.plans);
   useEffect(() => {
     watchPlans();
+    watchFocus(sig);
     if (lastWho !== undefined && lastWho !== who) usePlanStore.setState({ plans: {} });
     lastWho = who;
     loadPlans(sig);
