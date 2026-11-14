@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
-import symbol from "../assets/symbol.png";
+import { ProviderLogo } from "../assets/providers";
 import { t, type Key } from "../i18n";
 import { BUTTON, PRIMARY } from "../screens/Editor";
 import { TOP_ROW } from "../shell/Sidebar";
@@ -117,7 +117,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       <div data-tauri-drag-region className={`absolute inset-x-0 top-0 ${TOP_ROW}`} />
       <div className="w-full max-w-[560px] rounded-brand-lg bg-white px-10 py-9 shadow-[0_12px_32px_-12px_rgba(41,83,124,.25)]">
         <div className="flex items-center justify-between">
-          <img src={symbol} className="h-8 w-8" alt="" />
+          <ProviderLogo id="ieum" size={32} />
           <ol className="flex gap-2" aria-label={t("onboarding.progress")}>
             {STEPS.map((s, i) => (
               <li
