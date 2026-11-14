@@ -1,15 +1,21 @@
 pub mod account;
 pub mod active;
+pub mod builder_host;
+pub mod channel;
+pub mod chat;
 pub mod commands;
 pub mod credentials;
 pub mod limit_watch;
 pub mod notify;
 pub mod permissions;
+pub mod pick;
 pub mod plan_usage;
 pub mod pricing;
+pub mod skill;
 pub mod store;
 pub mod sub_usage;
 pub mod supervisor;
+pub mod terminal;
 mod tray;
 pub mod usage;
 pub mod web;
@@ -136,6 +142,38 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 notify::on_run_notice(&handle, &n);
                 Ok(())
             }
+            AppEvent::WorkflowChanged {
+                workflow_id,
+                updated_at,
+            } => handle.emit(
+                "workflow-changed",
+                json!({"id": workflow_id, "updatedAt": updated_at}),
+            ),
+            AppEvent::FinishPending {
+                workflow_id,
+                workflow_name,
+            } => handle.emit(
+                "finish-pending",
+                json!({"id": workflow_id, "name": workflow_name}),
+            ),
+            // 앱 시작 때 실패: 화면이 아직 듣지 않는다(웹뷰 로드 전·로그인 관문) — 여기서 바로 알린다.
+            // 그 편집 화면이 떠 있을 수 없으니 화면 표시 여부는 묻지 않는다. 문구에 경로는 없다.
+            AppEvent::TestUndoFailed {
+                workflow_id,
+                at_start: Some(name),
+                ..
+            } => {
+                notify::on_test_undo_failed(&handle, &workflow_id, &name, false);
+                Ok(())
+            }
+            AppEvent::TestUndoFailed {
+                workflow_id,
+                run_id,
+                at_start: None,
+            } => handle.emit(
+                "test-undo-failed",
+                json!({"id": workflow_id, "runId": run_id}),
+            ),
         };
         if let Err(e) = sent {
             eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");
@@ -185,6 +223,10 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     ));
     app.manage(crate::limit_watch::PendingSuggest::default());
     crate::limit_watch::spawn(app.handle().clone());
+    app.manage(pick::system_pick(app.handle().clone()));
+    app.manage(terminal::Terms::default());
+    app.manage(channel::app_gate(app.handle()));
+    app.manage(channel::app_channel(app.handle()));
     tray::create(app)?;
     check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
@@ -268,6 +310,23 @@ pub fn run() {
             commands::send_test_notification,
             commands::open_data_folder,
             commands::check_update_now,
+            // ── 캔버스 채팅: 토대 ──
+            commands::get_chat,
+            commands::pending_finish,
+            commands::confirm_finish,
+            // ── 캔버스 채팅 B(통로·동기화) — 여기 아래에 추가 ──
+            commands::set_editing,
+            commands::finish_notice,
+            commands::undo_failed_notice,
+            // ── 캔버스 채팅 C(터미널 term_*) — 여기 아래에 추가 ──
+            terminal::term_spawn,
+            terminal::term_write,
+            terminal::term_resize,
+            terminal::term_kill,
+            terminal::term_tools,
+            // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
+            chat::chat_send,
+            chat::chat_pick_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -276,6 +335,11 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = e {
                 tray::show_main(app);
+            }
+            // 앱이 끝나면 터미널 세션도 전부 끝낸다.
+            if let tauri::RunEvent::Exit = e {
+                app.state::<terminal::Terms>().kill_all();
+                app.state::<channel::Channel>().close();
             }
         });
 }

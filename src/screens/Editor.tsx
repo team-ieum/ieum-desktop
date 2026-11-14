@@ -2,8 +2,11 @@ import { Play, Plus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type StoredWorkflow, type ValidationError, type WfNode, type WorkflowEntry } from "../api";
 import { Canvas, LocalBadge, nodeTitle, StatusIcon } from "../editor/Canvas";
+import { AssistantPanel } from "../editor/chat/AssistantPanel";
+import { FinishCard } from "../editor/chat/FinishCard";
 import { ConfigPanel } from "../editor/ConfigPanel";
 import { Palette } from "../editor/Palette";
+import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
 import { Toolbar } from "../editor/Toolbar";
 import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
@@ -138,12 +141,15 @@ export function Editor({
   onBack,
   onOpenRuns,
   onDirty,
+  onIdChange,
 }: {
   id: string | null;
   onBack: () => void;
   onOpenRuns: (id: string) => void;
   /** 저장본과 다른지 — 화면을 떠날 때 확인 줄을 띄우는 데 쓴다. */
   onDirty?: (dirty: boolean) => void;
+  /** 지금 보여 주는 워크플로우 id — 새 캔버스는 선저장 뒤에 생긴다. 아직 없거나 편집기를 떠나면 "". */
+  onIdChange?: (id: string) => void;
 }) {
   const entry = useWorkflows((s) => s.list.find((w) => w.id === id));
   const save = useWorkflows((s) => s.save);
@@ -152,16 +158,35 @@ export function Editor({
   );
   const [base, setBase] = useState(draft);
   const dirty = JSON.stringify(draft) !== JSON.stringify(base);
+  // 채팅을 한 번이라도 열었거나 명령이 이 워크플로우를 고친 뒤로는 편집기를 떠날 때까지 자동 저장한다
+  // (패널을 닫아도 터미널 세션은 살아 있어 명령이 계속 올 수 있다).
+  const [assist, setAssist] = useState(false);
+  /** 저장본을 다시 불러오며 새 노드 자리만 잡아 준 draft — 사람이 고친 것이 아니다. */
+  const placed = useRef<StoredWorkflow | null>(null);
+  /** 저장이 거부된 draft — 같은 내용으로 자동 저장을 되풀이하지 않는다. */
+  const rejected = useRef<StoredWorkflow | null>(null);
+  const edited = dirty && draft !== placed.current;
+  const now = useRef({ draft, base, dirty, edited, assist });
+  now.current = { draft, base, dirty, edited, assist };
+  // 자동 저장이 맡은 편집은 떠날 때 "버릴까요"를 묻지 않는다. 자동 저장이 맡지 못하는 편집
+  // (저장이 거부된 내용 그대로이거나, 선저장이 실패해 id가 없는 새 워크플로우)은 묻는다 — 조용히 사라지면 안 된다.
+  const askOnLeave = dirty && (!assist || !draft.id || draft === rejected.current);
   useEffect(() => {
-    onDirty?.(dirty);
+    onDirty?.(askOnLeave);
     return () => onDirty?.(false);
-  }, [dirty, onDirty]);
+  }, [askOnLeave, onDirty]);
+  useEffect(() => {
+    onIdChange?.(draft.id);
+    return () => onIdChange?.("");
+  }, [draft.id, onIdChange]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [techInfo, setTechInfo] = useState(false);
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [status, setStatus] = useState<{ saving?: boolean; error?: string }>({});
   const live = useRuns((s) => s.live[draft.id]) ?? emptyLive(draft.id);
   const testRun = useTestRun(draft.id);
+  /** 빌더의 테스트가 되돌리지 못한 파일(`원래 자리 → 지금 자리`) — 터미널 입구에는 결과 카드가 없어 여기 배너로 보인다. */
+  const [stuck, setStuck] = useState<string[]>([]);
 
   // 고칠 때마다 검증 결과를 노드 위에 보여 준다.
   useEffect(() => {
@@ -197,19 +222,99 @@ export function Editor({
     setSelectedId(null);
   };
 
-  const onSave = async () => {
-    setStatus({ saving: true });
-    try {
-      const saved = await save(draft);
-      setDraft(saved);
-      setBase(saved);
-      setStatus({});
-    } catch (e) {
-      setStatus({ error: String(e) });
-    }
+  /** 저장본으로 화면을 바꾼다(자리·살아 있는 선택은 지킨다). */
+  const reload = async () => {
+    await useWorkflows.getState().load();
+    const found = useWorkflows.getState().list.find((w) => w.id === now.current.draft.id);
+    if (!found) return;
+    const remote = strip(found);
+    const merged = mergeRemote(now.current.draft, remote);
+    placed.current = merged;
+    setBase(remote);
+    setDraft(merged);
+    setSelectedId((s) => (s && merged.workflow.nodes.some((n) => n.id === s) ? s : null));
   };
 
-  const banner = [...general.map((e) => e.message), status.error, testRun.error].filter((m): m is string => !!m);
+  const persist = async (d: StoredWorkflow) => {
+    setStatus({ saving: true });
+    try {
+      const saved = await save(d);
+      setBase(saved);
+      // 저장 중에 친 글자를 지우지 않는다.
+      setDraft((cur) => (cur === d ? saved : { ...cur, id: saved.id, updatedAt: saved.updatedAt }));
+      setStatus({});
+    } catch (e) {
+      rejected.current = d;
+      if (String(e) !== STALE) return setStatus({ error: String(e) });
+      // 그사이 명령이 저장본을 고쳤다 — 덮지 않고 다시 불러온다. 사람이 고친 것을 잃었을 때만 알린다.
+      const lost = d !== placed.current;
+      await reload();
+      setStatus(lost ? { error: t("sync.reloaded") } : {});
+    }
+  };
+  const onSave = () => void persist(draft);
+
+  const onAssistant = async (open: boolean) => {
+    if (!open) return;
+    setAssist(true);
+    if (draft.id || status.saving) return;
+    // 새 워크플로우는 꺼진 채로 먼저 저장해 id를 만든다. 화면 draft도 꺼야 자동 저장이 다시 켜지 않는다.
+    const d = { ...draft, enabled: false };
+    setDraft(d);
+    await persist(d);
+  };
+
+  useEffect(() => {
+    if (!assist || !dirty || status.saving || !draft.id || draft === rejected.current) return;
+    const timer = setTimeout(() => void persist(draft), AUTOSAVE_MS);
+    return () => clearTimeout(timer);
+  }, [assist, dirty, status.saving, draft]);
+
+  // 사람의 편집 우선: 미저장 편집이 있는 동안 빌더의 고치는 동작은 USER_EDITING으로 거절된다.
+  // 저장·버림·다시 불러옴·화면을 떠남으로 풀린다. 새 노드 자리만 잡아 준 것은 편집으로 치지 않는다.
+  const editing = edited && !!draft.id;
+  useEffect(() => {
+    if (!editing) return;
+    const id = draft.id;
+    api.setEditing(id, true).catch(() => {});
+    return () => void api.setEditing(id, false).catch(() => {});
+  }, [editing, draft.id]);
+
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    const undo = api.onTestUndoFailed((p) => {
+      if (p.id !== now.current.draft.id) return;
+      api.getRun(p.runId).then(
+        (run) => !gone && setStuck((run.undo?.skipped ?? []).map(([op]) => `${op.from} → ${op.to}`)),
+        (e) => !gone && setStatus({ error: String(e) }),
+      );
+    });
+    void api
+      .onWorkflowChanged((p) => {
+        const { draft, base, edited } = now.current;
+        if (p.id !== draft.id || p.updatedAt === base.updatedAt) return;
+        setAssist(true);
+        // 빌더는 미저장 편집이 있으면 고치지 않는다 — 그래도 편집이 있었다면(사람의 [켜기], 확인과 저장 사이 틈새) 알린다.
+        void reload().then(() => edited && setStatus({ error: t("sync.reloaded") }));
+      })
+      .then(
+        (u) => (gone ? u() : (off = u)),
+        () => {},
+      );
+    return () => {
+      gone = true;
+      off?.();
+      void undo.then((f) => f(), () => {});
+      // 떠날 때 자동 저장을 기다리던 편집은 한 번 던지고 간다.
+      const { draft, dirty, assist } = now.current;
+      if (assist && dirty && draft.id && draft !== rejected.current) void save(draft).catch(() => {});
+    };
+  }, []); // 편집기가 떠 있는 동안 한 번만 건다 — 최신 값은 now로 읽는다.
+
+  const banner = [...general.map((e) => e.message), status.error, testRun.error, ...(stuck.length ? [t("sync.undoFailed"), ...stuck] : [])].filter(
+    (m): m is string => !!m,
+  );
   const unsaved = dirty || !draft.id;
   const nodeStatus = selected && live.nodes[selected.id];
 
@@ -252,6 +357,12 @@ export function Editor({
           />
         </div>
         <PaletteButton onAdd={add} />
+        <AssistantPanel
+          workflowId={draft.id}
+          onOpenChange={(open) => void onAssistant(open)}
+          nodeNames={Object.fromEntries(draft.workflow.nodes.map((n) => [n.id, n.label || nodeTitle(n.event)]))}
+        />
+        <FinishCard workflowId={draft.id} version={base.updatedAt} />
         {selected && (
           <SidePanel
             label={selected.label || nodeTitle(selected.event)}

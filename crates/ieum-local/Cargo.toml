@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 async-trait = "0.1.92"
+hex = "0.4.3"
 ieum-engine = { path = "../ieum-engine" }
 keyring = { version = "3", default-features = false, features = ["apple-native"] }
 notify = "8.2.2"
@@ -12,6 +13,7 @@ pdf-extract = "0.12.1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10.9"
 thiserror = "2"
 tokio = { version = "1.54.1", default-features = false, features = ["sync", "process", "io-util", "time", "macros"] }
 uuid = { version = "1.29.2", features = ["v4"] }

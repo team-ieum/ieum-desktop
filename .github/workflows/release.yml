@@ -36,6 +36,9 @@ jobs:
       # 의존성 설치 스크립트는 돌리지 않는다(fsevents는 미리 빌드된 바이너리를 쓴다).
       - run: npm ci --ignore-scripts
 
+      # 번들에 넣을 ieum(workflow 전용) — tauri.bundle.conf.json의 externalBin이 찾는다.
+      - run: sh scripts/build-ieum-bin.sh aarch64-apple-darwin
+
       # 서명 비밀은 이 단계에만 — job·workflow env에 두지 않는다.
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0
         env:
@@ -52,3 +55,4 @@ jobs:
             --target aarch64-apple-darwin
             --bundles app,dmg
             --config ${{ github.workspace }}/src-tauri/tauri.updater.conf.json
+            --config ${{ github.workspace }}/src-tauri/tauri.bundle.conf.json

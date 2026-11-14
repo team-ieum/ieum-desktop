@@ -1,24 +1,28 @@
 //! 화면이 부르는 Tauri 명령 — 로직은 `store`·`supervisor`에 두고 여기는 얇게 감싼다.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ieum_engine::{ValidationError, Workflow};
 use ieum_local::UndoReport;
 use ieum_local::ai::{KeyStore, detect_clis};
+use ieum_local::builder::{ChatFile, PendingFinish, Reply};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::account::AccountId;
-use crate::active::Active;
+use crate::active::{Active, NOT_SIGNED_IN};
+use crate::builder_host::{PickFolder, builder_of};
+use crate::channel::Channel;
 use crate::credentials::{AccountCredentials, ApiKeyMeta, CliAccountBegin, CredentialsView};
 use crate::permissions;
 use crate::plan_usage::PlanUsage;
 use crate::pricing;
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::sub_usage::{AntigravityUsageClient, SubscriptionUsage};
-use crate::supervisor::WorkflowEntry;
+use crate::supervisor::{Supervisor, WorkflowEntry};
+use crate::terminal::Terms;
 use crate::usage::{self, UsageReport, UsageSummary};
 use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
 use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
@@ -54,12 +58,54 @@ pub async fn save_workflow(
     active: State<'_, Active>,
     wf: StoredWorkflow,
 ) -> Result<StoredWorkflow, String> {
-    active.sup().await?.save_workflow(wf)
+    save_from_canvas(&active.sup().await?, wf)
+}
+
+/// 캔버스 저장. 화면이 읽은 `wf.updated_at`이 저장본과 다르면 `STALE` — 그사이 빌더가 고친 것을 덮지 않는다.
+/// id가 빈 새 워크플로우만 검사 없이 저장한다.
+pub fn save_from_canvas(sup: &Supervisor, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
+    if wf.id.is_empty() {
+        return sup.save_workflow(wf);
+    }
+    let expected = wf.updated_at.clone();
+    sup.save_workflow_expecting(wf, &expected)
 }
 
 #[tauri::command]
-pub async fn delete_workflow(active: State<'_, Active>, id: String) -> Result<(), String> {
-    active.sup().await?.delete_workflow(&id)
+pub async fn delete_workflow(
+    app: AppHandle,
+    active: State<'_, Active>,
+    channel: State<'_, Channel>,
+    terms: State<'_, Terms>,
+    id: String,
+) -> Result<(), String> {
+    let key = active.account_key().await.ok_or(NOT_SIGNED_IN)?;
+    let cache = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    let work = crate::terminal::work_root(&cache, &key);
+    delete_workflow_and_sessions(&active, &channel, &terms, &work, &id).await
+}
+
+/// 워크플로우를 지우며 그 세션도 끝낸다: 토큰을 먼저 버려 지우는 사이에 온 명령이 닿지 못하게 하고,
+/// 지운 뒤 터미널을 끝내고 그 작업 폴더(`work_root/<id>` — 세션 없이 남은 것 포함)를 지운다.
+pub async fn delete_workflow_and_sessions(
+    active: &Active,
+    channel: &Channel,
+    terms: &Terms,
+    work_root: &Path,
+    id: &str,
+) -> Result<(), String> {
+    channel.revoke_workflow(id);
+    // 저장소가 id(UUID 정규형)를 검사한다 — 통과한 id만 폴더 이름이 된다.
+    active.sup().await?.delete_workflow(id)?;
+    terms.kill(id);
+    crate::terminal::remove_work(&work_root.join(id));
+    Ok(())
+}
+
+/// 로그아웃: 터미널을 전부 끝내고 토큰·소켓을 버린다.
+pub fn end_all_sessions(channel: &Channel, terms: &Terms) {
+    terms.kill_all();
+    channel.close();
 }
 
 #[tauri::command]
@@ -105,7 +151,8 @@ pub async fn usage_summary(
     let now = chrono::Local::now();
     let from = usage::range_start(&range, now)?;
     let runs = sup.store().all_runs()?;
-    Ok(usage::summarize(&runs, from, now, pricing::table()))
+    let chats = sup.store().all_chat_usage()?;
+    Ok(usage::summarize(&runs, &chats, from, now, pricing::table()))
 }
 
 /// 활성 계정의 통계 및 사용량 화면 — 합계·최근 30일 개요·공급자별 분석(로컬 시각대).
@@ -114,6 +161,7 @@ pub async fn usage_report(active: State<'_, Active>) -> Result<UsageReport, Stri
     let sup = active.sup().await?;
     let store = sup.store();
     let runs = store.all_runs()?;
+    let chats = store.all_chat_usage()?;
     let names = store
         .list_workflows()?
         .into_iter()
@@ -121,6 +169,7 @@ pub async fn usage_report(active: State<'_, Active>) -> Result<UsageReport, Stri
         .collect();
     Ok(usage::report(
         &runs,
+        &chats,
         &names,
         chrono::Local::now(),
         pricing::table(),
@@ -137,7 +186,6 @@ pub async fn undo_run(active: State<'_, Active>, run_id: String) -> Result<UndoR
     active.sup().await?.undo_run(&run_id)
 }
 
-/// 구독 CLI는 claude만(codex·gemini 보류).
 #[tauri::command]
 pub async fn detect_providers(active: State<'_, Active>) -> Result<Providers, String> {
     with_credentials(&active, |c| {
@@ -148,7 +196,6 @@ pub async fn detect_providers(active: State<'_, Active>) -> Result<Providers, St
         Ok(Providers {
             clis: detect_clis()
                 .into_iter()
-                .filter(|c| c.id == "cli:claude")
                 .map(|c| CliInfo {
                     id: c.id.to_string(),
                     path: c.path,
@@ -576,7 +623,10 @@ pub async fn web_logout(
     active: State<'_, Active>,
     keys: State<'_, Keys>,
     watches: State<'_, Watches>,
+    channel: State<'_, Channel>,
+    terms: State<'_, Terms>,
 ) -> Result<(), WebError> {
+    end_all_sessions(&channel, &terms);
     watches.clear();
     logout_and_deactivate(&active, be_client(&active, &keys)).await
 }
@@ -682,4 +732,71 @@ pub async fn web_watch_execution(
 #[tauri::command]
 pub fn web_unwatch_execution(watches: State<'_, Watches>, execution_id: String) {
     watches.unwatch(&execution_id);
+}
+
+/// 채팅 상태 파일(대화·테스트 상태). 없으면 빈 값.
+#[tauri::command]
+pub async fn get_chat(active: State<'_, Active>, workflow_id: String) -> Result<ChatFile, String> {
+    active.sup().await?.store().get_chat(&workflow_id)
+}
+
+/// 사람의 확인을 기다리는 완료 요청(확인 카드 내용). 없으면 None.
+#[tauri::command]
+pub async fn pending_finish(
+    active: State<'_, Active>,
+    pick: State<'_, PickFolder>,
+    workflow_id: String,
+) -> Result<Option<PendingFinish>, String> {
+    Ok(builder_of(&active, &pick).await?.pending(&workflow_id))
+}
+
+/// 확인 카드의 [켜기]/[아직] — 워크플로우를 켜는 유일한 길(사람이 누른다).
+#[tauri::command]
+pub async fn confirm_finish(
+    active: State<'_, Active>,
+    pick: State<'_, PickFolder>,
+    workflow_id: String,
+    accept: bool,
+) -> Result<Reply, String> {
+    Ok(builder_of(&active, &pick)
+        .await?
+        .confirm_finish(&workflow_id, accept)
+        .await)
+}
+
+/// 편집기의 미저장 편집 표시 — 켜져 있는 동안 빌더의 고치는 동작은 `USER_EDITING`으로 거절된다(사람의 편집 우선).
+#[tauri::command]
+pub async fn set_editing(
+    active: State<'_, Active>,
+    workflow_id: String,
+    editing: bool,
+) -> Result<(), String> {
+    active.sup().await?.set_editing(&workflow_id, editing);
+    Ok(())
+}
+
+/// 완료 확인 대기 알림 — 화면이 `finish-pending`을 받으면 부른다. 그 편집 화면이 떠 있고 창이 앞이면 보내지 않는다.
+#[tauri::command]
+pub async fn finish_notice(
+    app: AppHandle,
+    active: State<'_, Active>,
+    workflow_id: String,
+    on_screen: bool,
+) -> Result<(), String> {
+    let name = active.sup().await?.store().get_workflow(&workflow_id)?.name;
+    crate::notify::on_finish_pending(&app, &workflow_id, &name, on_screen);
+    Ok(())
+}
+
+/// 테스트 되돌리기 실패 알림 — 화면이 `test-undo-failed`를 받으면 부른다. 판정은 `finish_notice`와 같다.
+#[tauri::command]
+pub async fn undo_failed_notice(
+    app: AppHandle,
+    active: State<'_, Active>,
+    workflow_id: String,
+    on_screen: bool,
+) -> Result<(), String> {
+    let name = active.sup().await?.store().get_workflow(&workflow_id)?.name;
+    crate::notify::on_test_undo_failed(&app, &workflow_id, &name, on_screen);
+    Ok(())
 }

@@ -1,5 +1,5 @@
 // Tauri 명령 타입 래퍼 — 타입은 러스트 직렬화(camelCase)와 1:1.
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 type Obj = Record<string, unknown>;
@@ -56,6 +56,8 @@ export interface NodeRecord {
   status: NodeStatus;
   output: Obj | null;
   error: string | null;
+  /** AI에게 보여도 되는 오류 코드(`<CODE>` 또는 `<CODE> <칸 key>`). 옛 기록에는 없다. */
+  errorCode?: string | null;
 }
 export type RejectReason =
   | { kind: "TOO_LARGE" }
@@ -110,7 +112,7 @@ export interface StoredRun {
   trigger?: RunTrigger | null;
 }
 /** 폴더 감시·수동. 옛 기록은 없음. */
-export type RunTrigger = "watch" | "manual";
+export type RunTrigger = "watch" | "manual" | "test";
 export interface RunSummary {
   runId: string;
   workflowId: string;
@@ -155,7 +157,11 @@ export interface Suggestion {
 export type UpdateCheck = { status: "dev" } | { status: "latest" } | { status: "installed"; version: string };
 export type SystemSettingsPane = "files" | "notifications" | "login_items";
 /** 시스템 알림 클릭으로 열 화면(Rust `notify::Target`). */
-export type OpenTarget = { kind: "run"; runId: string } | { kind: "history" } | { kind: "suggest" };
+export type OpenTarget =
+  | { kind: "run"; runId: string }
+  | { kind: "history" }
+  | { kind: "suggest" }
+  | { kind: "workflow"; id: string };
 /** 계정 = 서버 + 이메일. */
 export interface AccountId {
   email: string;
@@ -362,6 +368,53 @@ export interface PlanUsage {
   accountEmail: string | null;
 }
 
+// ── 캔버스 채팅(ieum-local builder) ──
+export interface BuilderReply {
+  ok: boolean;
+  code?: string;
+  message?: string;
+  data?: unknown;
+}
+
+export interface PendingFinish {
+  hash: string;
+  folder: string;
+  actions: { nodeId: string; event: string; label: string; target: string | null }[];
+  /** AI 노드마다 한 줄. 이 칸이 생기기 전에 저장된 확인 대기에는 없다. */
+  ai?: { nodeId: string; label: string; provider: string; sendContent: boolean }[];
+}
+
+/** 앱 안 터미널에 띄울 수 있는 CLI. */
+export type TermTool = "claude" | "codex" | "agy";
+
+export interface ChatFile {
+  messages: { role: "user" | "assistant"; text: string; at: string }[];
+  state: {
+    outline: string[];
+    baseline: Record<string, string> | null;
+    tests: Record<string, { hash: string; status: "success" | "failed" | "skipped" }>;
+    pendingFinish: PendingFinish | null;
+  };
+  usage: { at: string; usage: unknown }[];
+}
+
+/** 채팅 턴 응답에만 실리는 카드. 테스트 값은 없다 — 화면이 `runId`로 실행 기록을 읽는다. */
+export type ChatCard =
+  | { kind: "test"; nodeId: string; runId: string; status: string }
+  | { kind: "pickFolder"; nodeId: string; field: string }
+  | { kind: "finish" };
+export interface ChatTurn {
+  say: string;
+  cards: ChatCard[];
+  error: string | null;
+}
+export interface ChatAi {
+  provider: string;
+  credential: string | null;
+  model: string | null;
+}
+export type ChatStage = { id: string; stage: "designing" | "testing" };
+
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
   saveWorkflow: (wf: StoredWorkflow) => invoke<StoredWorkflow>("save_workflow", { wf }),
@@ -450,4 +503,51 @@ export const api = {
   /** 이 Mac의 CLI 로그인(`system`)을 IEUM에서 숨기기·되살리기 — CLI 로그아웃은 하지 않는다. */
   setSystemHidden: (kind: SubKind, hidden: boolean) => invoke<void>("set_system_hidden", { kind, hidden }),
   antigravityPlanUsage: (fresh = false) => invoke<PlanUsage>("antigravity_plan_usage", { fresh }),
+  // ── 캔버스 채팅 ──
+  getChat: (workflowId: string) => invoke<ChatFile>("get_chat", { workflowId }),
+  pendingFinish: (workflowId: string) => invoke<PendingFinish | null>("pending_finish", { workflowId }),
+  /** 확인 카드의 [켜기]/[아직] — 워크플로우를 켜는 유일한 길. */
+  confirmFinish: (workflowId: string, accept: boolean) =>
+    invoke<BuilderReply>("confirm_finish", { workflowId, accept }),
+  /** 편집기의 미저장 편집 표시 — 켜져 있는 동안 빌더의 고치는 동작은 `USER_EDITING`으로 거절된다. */
+  setEditing: (workflowId: string, editing: boolean) => invoke<void>("set_editing", { workflowId, editing }),
+  /** 완료 확인 대기 알림 — 그 편집 화면이 떠 있고(`onScreen`) 창이 앞이면 Rust가 보내지 않는다. */
+  finishNotice: (workflowId: string, onScreen: boolean) => invoke<void>("finish_notice", { workflowId, onScreen }),
+  /** 테스트 되돌리기 실패 알림 — 판정은 `finishNotice`와 같다. */
+  undoFailedNotice: (workflowId: string, onScreen: boolean) => invoke<void>("undo_failed_notice", { workflowId, onScreen }),
+  onWorkflowChanged: (cb: (p: { id: string; updatedAt: string }) => void): Promise<UnlistenFn> =>
+    listen<{ id: string; updatedAt: string }>("workflow-changed", (e) => cb(e.payload)),
+  onFinishPending: (cb: (p: { id: string; name: string }) => void): Promise<UnlistenFn> =>
+    listen<{ id: string; name: string }>("finish-pending", (e) => cb(e.payload)),
+  // ── 채팅 패널 ──
+  chatSend: (workflowId: string, text: string, ai: ChatAi) =>
+    invoke<ChatTurn>("chat_send", { workflowId, text, provider: ai.provider, credential: ai.credential, model: ai.model }),
+  /** 폴더 고르기 카드의 버튼 — 시스템 폴더 창을 연다. */
+  chatPickFolder: (workflowId: string, nodeId: string, field: string) =>
+    invoke<BuilderReply>("chat_pick_folder", { workflowId, nodeId, field }),
+  onChatStage: (cb: (p: ChatStage) => void): Promise<UnlistenFn> => listen<ChatStage>("chat-stage", (e) => cb(e.payload)),
+  onTestUndoFailed: (cb: (p: { id: string; runId: string }) => void): Promise<UnlistenFn> =>
+    listen<{ id: string; runId: string }>("test-undo-failed", (e) => cb(e.payload)),
+  // ── 캔버스 채팅 C(터미널) — 화면은 도구 이름만 넘긴다. 실행 줄은 Rust가 만든다. ──
+  /** 쓸 수 있는 CLI(설치 + 로그인)와 이 워크플로우에 살아 있는 세션. */
+  termTools: (workflowId: string) =>
+    invoke<{ tools: TermTool[]; running: TermTool | null }>("term_tools", { workflowId }),
+  /** 터미널을 띄우거나 살아 있는 세션에 붙는다. 출력은 `onData`로 온다. */
+  termSpawn: (workflowId: string, tool: TermTool, cols: number, rows: number, onData: (bytes: Uint8Array) => void) => {
+    const ch = new Channel<ArrayBuffer>();
+    ch.onmessage = (b) => onData(new Uint8Array(b));
+    return invoke<{ tool: TermTool; attached: boolean; skillInstalled: boolean }>("term_spawn", {
+      workflowId,
+      tool,
+      cols,
+      rows,
+      onData: ch,
+    });
+  },
+  termWrite: (workflowId: string, data: string) => invoke<void>("term_write", { workflowId, data }),
+  termResize: (workflowId: string, cols: number, rows: number) =>
+    invoke<void>("term_resize", { workflowId, cols, rows }),
+  termKill: (workflowId: string) => invoke<void>("term_kill", { workflowId }),
+  onTermExit: (cb: (p: { workflowId: string }) => void): Promise<UnlistenFn> =>
+    listen<{ workflowId: string }>("term-exit", (e) => cb(e.payload)),
 };

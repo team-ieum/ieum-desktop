@@ -6,7 +6,7 @@ import type { Workflow } from "../api";
 import { setLang } from "../i18n";
 import { useCredentials } from "../stores/credentials";
 import { AnimatedEdge } from "./AnimatedEdge";
-import { Canvas } from "./Canvas";
+import { Canvas, modelLabel } from "./Canvas";
 
 // ReactFlow는 진짜로 그리되, Canvas가 넘긴 핸들러를 꺼내 직접 부를 수 있게 한다.
 const probe = vi.hoisted(() => ({ props: null as unknown as Record<string, any> }));
@@ -155,6 +155,11 @@ test("ai_node_shows_model_pill", () => {
   expect(screen.getByText("모델 정보 없음")).toBeTruthy();
   r.rerender(<Canvas workflow={ai({ provider: "cli:claude", model: "x" })} />);
   expect(screen.getByText("Claude (구독)")).toBeTruthy();
+});
+
+test("model_label_names_subscription_providers", () => {
+  expect(modelLabel({ provider: "cli:codex", model: "gpt-5.6-luna" })).toBe("Codex (구독)");
+  expect(modelLabel({ provider: "cli:claude" })).toBe("Claude (구독)");
 });
 
 test("canvas_pill_shows_credential_label", () => {

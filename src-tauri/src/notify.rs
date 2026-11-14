@@ -91,15 +91,18 @@ pub enum Target {
     History,
     /// 다른 계정 권하기(대기 중 제안은 `take_account_suggestion`으로 꺼낸다).
     Suggest,
+    /// 그 워크플로우의 편집 화면.
+    Workflow(String),
 }
 
 impl Target {
     /// 화면 이벤트 `open-target`의 내용.
-    fn payload(&self) -> Value {
+    pub fn payload(&self) -> Value {
         match self {
             Target::Run(id) => json!({"kind": "run", "runId": id}),
             Target::History => json!({"kind": "history"}),
             Target::Suggest => json!({"kind": "suggest"}),
+            Target::Workflow(id) => json!({"kind": "workflow", "id": id}),
         }
     }
 }
@@ -290,6 +293,74 @@ pub fn on_run_notice(app: &AppHandle, n: &RunNotice) {
             }
         }
         Route::Drop => {}
+    }
+}
+
+/// 편집 화면에 이미 보이는 일(확인 카드·되돌리기 실패 배너)의 알림.
+/// 그 편집 화면이 떠 있고 창이 앞이면 None. 누르면 그 편집 화면.
+fn workflow_notice(
+    workflow_id: &str,
+    workflow_name: &str,
+    seen: bool,
+    body: &str,
+) -> Option<Notice> {
+    (!seen).then(|| Notice {
+        title: workflow_name.to_string(),
+        body: body.to_string(),
+        target: Target::Workflow(workflow_id.to_string()),
+    })
+}
+
+/// 완료 확인 대기. 그 편집 화면이 떠 있고 창이 앞이면 None(카드가 이미 보인다).
+pub fn finish_notice(
+    workflow_id: &str,
+    workflow_name: &str,
+    on_screen: bool,
+    focused: bool,
+    lang: Lang,
+) -> Option<Notice> {
+    let body = match lang {
+        Lang::Ko => "완료 확인을 기다리고 있어요. 눌러서 켜 주세요.",
+        Lang::En => "Ready to turn on. Click to confirm.",
+    };
+    workflow_notice(workflow_id, workflow_name, on_screen && focused, body)
+}
+
+/// 테스트 되돌리기 실패. 그 편집 화면이 떠 있고 창이 앞이면 None(캔버스 배너가 이미 보인다).
+/// 파일 경로는 넣지 않는다.
+pub fn undo_failed_notice(
+    workflow_id: &str,
+    workflow_name: &str,
+    on_screen: bool,
+    focused: bool,
+    lang: Lang,
+) -> Option<Notice> {
+    let body = match lang {
+        Lang::Ko => "테스트 후 파일을 되돌리지 못했어요",
+        Lang::En => "Couldn't put files back after the test",
+    };
+    workflow_notice(workflow_id, workflow_name, on_screen && focused, body)
+}
+
+/// 어느 화면인지는 화면이 알려 주고(`on_screen`), 창이 앞인지는 여기서 본다.
+pub fn on_finish_pending(app: &AppHandle, workflow_id: &str, workflow_name: &str, on_screen: bool) {
+    let lang = settings(app).language.into();
+    let front = on_screen && focused(app);
+    if let Some(n) = finish_notice(workflow_id, workflow_name, on_screen, front, lang) {
+        deliver(app, &n);
+    }
+}
+
+pub fn on_test_undo_failed(
+    app: &AppHandle,
+    workflow_id: &str,
+    workflow_name: &str,
+    on_screen: bool,
+) {
+    let lang = settings(app).language.into();
+    let front = on_screen && focused(app);
+    if let Some(n) = undo_failed_notice(workflow_id, workflow_name, on_screen, front, lang) {
+        deliver(app, &n);
     }
 }
 

@@ -104,6 +104,48 @@ test("ai_node_credential_dropdown_saves_id_or_omits_for_default", () => {
   useCredentials.setState({ view: null });
 });
 
+test("codex_provider_lists_codex_accounts", () => {
+  setLang("ko");
+  useCredentials.setState({
+    view: {
+      ...VIEW,
+      codexAccounts: [
+        { id: "system", label: "이 Mac의 로그인", isDefault: true, createdAt: "", email: null },
+        { id: "c0dec0de", label: "회사", isDefault: false, createdAt: "1", email: null },
+      ],
+    },
+  });
+  const node = aiNode({ provider: "cli:codex" });
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={() => {}} />);
+  expect(screen.getByRole("option", { name: "Codex (구독)" })).toBeTruthy();
+  expect(screen.getByTestId("field-provider").querySelector('[data-logo="openai"]')).not.toBeNull();
+  const cred = screen.getByLabelText(/키·계정/) as HTMLSelectElement;
+  expect([...cred.options].map((o) => o.value)).toEqual(["", "system", "c0dec0de"]);
+  useCredentials.setState({ view: null });
+});
+
+test("agy_provider_cannot_send_file_content", () => {
+  setLang("ko");
+  useCredentials.setState({ view: VIEW });
+  const onChange = vi.fn();
+  const node = aiNode({ provider: "cli:claude", sendContent: true });
+  const r = render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
+  fireEvent.change(screen.getByLabelText(/AI 공급원/), { target: { value: "cli:agy" } });
+  expect(onChange.mock.lastCall![0].config).toEqual({ provider: "cli:agy", prompt: "p" });
+  r.unmount();
+
+  // 이미 cli:agy면 체크 칸이 잠기고 안내가 보인다(저장본에 sendContent가 남아 있어도 켜진 것으로 보이지 않는다).
+  const agy = aiNode({ provider: "cli:agy", sendContent: true });
+  render(<ConfigPanel node={agy} workflow={{ nodes: [agy], edges: [] }} onChange={onChange} />);
+  expect(screen.getByRole("option", { name: "Antigravity (구독)" })).toBeTruthy();
+  expect(screen.getByTestId("field-provider").querySelector('[data-logo="antigravity"]')).not.toBeNull();
+  const box = screen.getByLabelText(/파일 내용도 보내기/) as HTMLInputElement;
+  expect([box.disabled, box.checked]).toEqual([true, false]);
+  expect(screen.getByText("Antigravity (구독)는 파일 내용을 보낼 수 없어요. 이름·확장자·크기만 가요.")).toBeTruthy();
+  expect((screen.getByLabelText(/키·계정/) as HTMLSelectElement).options.length).toBe(1);
+  useCredentials.setState({ view: null });
+});
+
 test("ai_node_shows_missing_credential_warning", () => {
   setLang("ko");
   useCredentials.setState({ view: VIEW });

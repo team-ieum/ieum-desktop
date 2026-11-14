@@ -34,6 +34,8 @@ pub struct NodeCtx<'a> {
 #[derive(Debug, Clone)]
 pub struct NodeError {
     pub message: String,
+    /// AI에게 보여도 되는 코드. 모양은 `<CODE>` 또는 `<CODE> <칸 key>`. 경로·파일 이름·사용자 값은 절대 넣지 않는다.
+    pub code: Option<String>,
 }
 
 #[async_trait]
@@ -71,6 +73,9 @@ pub struct NodeRecord {
     /// 러너가 알린 사용량(`run_metered`). 옛 기록에는 없다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Value>,
+    /// 실패한 노드의 `NodeError.code`. 옛 기록에는 없다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +185,7 @@ pub async fn run_workflow(
                 output: None,
                 error: None,
                 usage: None,
+                error_code: None,
             };
             (n.id.clone(), rec)
         })
@@ -272,6 +278,7 @@ pub async fn run_workflow(
                 .unwrap_or_else(|| {
                     let e = NodeError {
                         message: "노드 실행 중 내부 오류가 났습니다.".into(),
+                        code: None,
                     };
                     (Err(e), None)
                 })
@@ -282,6 +289,7 @@ pub async fn run_workflow(
             Err(e) => {
                 rec.status = NodeStatus::Failed;
                 rec.error = Some(e.message.clone());
+                rec.error_code = e.code;
                 send(ExecEvent::NodeFailed {
                     node_id: node.id.clone(),
                     message: e.message,

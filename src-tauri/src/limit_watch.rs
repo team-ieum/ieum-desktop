@@ -84,7 +84,9 @@ impl Suggestion {
 
 /// RFC 3339 → 밀리초. 못 읽으면 None.
 fn reset_ms(s: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.timestamp_millis())
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|t| t.timestamp_millis())
 }
 
 /// 한도에 닿은 판정 대상 창 — 여럿이면 가장 늦게 풀리는 것(오프셋이 달라도 시각으로 비교).
@@ -154,8 +156,10 @@ impl Seen {
         if self.contains(account, &k) {
             return false;
         }
-        self.0
-            .insert((account.to_string(), k.company, k.from_id, k.kind), k.reset_ms);
+        self.0.insert(
+            (account.to_string(), k.company, k.from_id, k.kind),
+            k.reset_ms,
+        );
         true
     }
 }
@@ -333,7 +337,11 @@ async fn run_once(app: AppHandle, seen: Arc<Mutex<Seen>>) -> Duration {
     let usage = app.state::<SubscriptionUsage>();
     let usage = &*usage;
     let want = |k: &LimitKey| {
-        s.notify_account_suggest && !seen.lock().unwrap_or_else(|e| e.into_inner()).contains(&account, k)
+        s.notify_account_suggest
+            && !seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&account, k)
     };
     let mut t = tick(view.as_ref(), lang, want, |kind, id| {
         let creds = creds.clone();

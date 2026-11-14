@@ -36,6 +36,9 @@ beforeAll(() => {
   vi.spyOn(api, "listCredentials").mockResolvedValue(creds([]));
   vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
   vi.spyOn(api, "onOpenTarget").mockResolvedValue(() => {});
+  vi.spyOn(api, "onWorkflowChanged").mockResolvedValue(() => {});
+  vi.spyOn(api, "onFinishPending").mockResolvedValue(() => {});
+  vi.spyOn(api, "onTestUndoFailed").mockResolvedValue(() => {});
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "currentAccount").mockResolvedValue(ACCOUNT);

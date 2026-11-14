@@ -114,3 +114,13 @@ test("recent_shows_only_five_with_status_text", () => {
   expect(screen.getAllByRole("button", { name: /^local / })).toHaveLength(5);
   expect(screen.getAllByText(/^(활성|일시정지|오류)$/)).toHaveLength(5);
 });
+
+test("recent_marks_workflows_waiting_for_confirmation", () => {
+  const waiting = [{ ...local("w1", "2026-11-13T00:00:00Z"), name: "정리", enabled: false, watch: "off" }] as WorkflowEntry[];
+  expect(recentItems(waiting, [])[0].pending).toBeFalsy();
+  const recent = recentItems(waiting, [], { w1: {} });
+  expect(recent[0].pending).toBe(true);
+  render(<Sidebar {...props} recent={recent} />);
+  expect(screen.getByText("확인 필요")).toBeTruthy();
+  expect(screen.queryByText("일시정지")).toBeNull(); // 상태 글자(`nav.dot.paused`) 자리를 대신한다
+});

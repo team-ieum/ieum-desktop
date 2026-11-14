@@ -68,10 +68,15 @@ export const nodeTitle = (event: string) => tDyn(`node.${event}.title`) ?? event
 
 const isAi = (event: string, kind: string) => kind === "AI" || event === "local.ai" || event.startsWith("ai.");
 
-/** AI 노드 알약 — Claude 구독이면 공급원 이름, API면 모델 이름. 고른 키·계정이 있으면 " · 이름표"(기본이면 생략). */
+/** AI 노드 알약 — 구독이면 공급원 이름, API면 모델 이름. 고른 키·계정이 있으면 " · 이름표"(기본이면 생략). */
 export function modelLabel(config: WfNode["config"], view?: CredentialsView | null): string {
+  const p = config.provider;
   const base =
-    config.provider === "cli:claude" ? t("editor.claudePlan") : typeof config.model === "string" && config.model ? config.model : t("editor.noModel");
+    typeof p === "string" && p.startsWith("cli:")
+      ? (tDyn(`choice.provider.${p}`) ?? p)
+      : typeof config.model === "string" && config.model
+        ? config.model
+        : t("editor.noModel");
   if (!view || typeof config.credential !== "string" || !config.credential) return base;
   const m = choicesFor(view, config.provider).find((x) => x.id === config.credential);
   if (m?.isDefault) return base;

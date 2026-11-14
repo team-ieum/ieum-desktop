@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use ieum_desktop_lib::limit_watch::Suggestion;
 use ieum_desktop_lib::notify::{
-    BATCH_WINDOW, Batch, Batcher, Lang, Notice, Prefs, Route, Target, lang_from_apple_languages,
-    route, suggest_notice, summarize,
+    BATCH_WINDOW, Batch, Batcher, Lang, Notice, Prefs, Route, Target, finish_notice,
+    lang_from_apple_languages, route, suggest_notice, summarize, undo_failed_notice,
 };
 use ieum_desktop_lib::store::RunTrigger;
 use ieum_desktop_lib::supervisor::{NoticeKind, RunNotice};
@@ -63,6 +63,21 @@ fn route_manual_start_sent_even_when_focused() {
         Lang::Ko,
     );
     assert_eq!(r, Route::Drop);
+}
+
+/// 채팅 빌더의 노드 테스트 실행은 알리지 않는다.
+#[test]
+fn route_test_runs_dropped() {
+    for kind in [
+        NoticeKind::Started,
+        finished(true, None),
+        finished(false, Some("옮기기")),
+    ] {
+        assert_eq!(
+            route(&notice(RunTrigger::Test, kind), &ALL, false, Lang::Ko),
+            Route::Drop
+        );
+    }
 }
 
 #[test]
@@ -242,4 +257,45 @@ fn suggest_notice_ko_en() {
         ("Claude limit reached", "Switch to 회사 (12% used)?")
     );
     assert!(!ko.body.contains('@') && !en.body.contains('@'));
+}
+
+#[test]
+fn finish_notice_skipped_only_when_card_is_visible() {
+    assert_eq!(finish_notice("w1", "정리", true, true, Lang::Ko), None);
+    let n = finish_notice("w1", "정리", false, true, Lang::Ko).unwrap(); // 앱이 앞이어도 다른 화면
+    assert_eq!(
+        (n.title.as_str(), n.body.as_str()),
+        ("정리", "완료 확인을 기다리고 있어요. 눌러서 켜 주세요.")
+    );
+    assert_eq!(n.target, Target::Workflow("w1".into()));
+    assert_eq!(
+        n.target.payload(),
+        serde_json::json!({"kind": "workflow", "id": "w1"})
+    );
+    assert!(finish_notice("w1", "정리", true, false, Lang::Ko).is_some()); // 그 화면이지만 창이 뒤·숨김
+    assert_eq!(
+        finish_notice("w1", "Sort", false, false, Lang::En)
+            .unwrap()
+            .body,
+        "Ready to turn on. Click to confirm."
+    );
+}
+
+#[test]
+fn undo_failed_notice_skipped_only_when_banner_is_visible() {
+    assert_eq!(undo_failed_notice("w1", "정리", true, true, Lang::Ko), None);
+    let n = undo_failed_notice("w1", "정리", false, true, Lang::Ko).unwrap(); // 앱이 앞이어도 다른 화면
+    assert_eq!(
+        (n.title.as_str(), n.body.as_str()),
+        ("정리", "테스트 후 파일을 되돌리지 못했어요")
+    );
+    assert_eq!(n.target, Target::Workflow("w1".into())); // 누르면 그 편집 화면
+    assert!(!format!("{n:?}").contains('/')); // 파일 경로 없음
+    assert!(undo_failed_notice("w1", "정리", true, false, Lang::Ko).is_some()); // 그 화면이지만 창이 뒤·숨김
+    assert_eq!(
+        undo_failed_notice("w1", "Sort", false, false, Lang::En)
+            .unwrap()
+            .body,
+        "Couldn't put files back after the test"
+    );
 }

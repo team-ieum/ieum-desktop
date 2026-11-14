@@ -49,7 +49,11 @@ async fn serve(route: impl Fn(&Req) -> (u16, String) + Send + Sync + 'static) ->
                 };
                 let (status, body) = route(&req);
                 seen.lock().unwrap().push(req);
-                let wait = if status == 429 { "retry-after: 30\r\n" } else { "" };
+                let wait = if status == 429 {
+                    "retry-after: 30\r\n"
+                } else {
+                    ""
+                };
                 let resp = format!(
                     "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n{wait}content-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
@@ -248,7 +252,14 @@ async fn sequence(statuses: &'static [u16]) -> (String, Arc<AtomicUsize>) {
     let (url, _) = serve(move |_| {
         let i = seen.fetch_add(1, Ordering::SeqCst);
         let status = statuses[i.min(statuses.len() - 1)];
-        (status, if status == 200 { sample().to_string() } else { "{}".into() })
+        (
+            status,
+            if status == 200 {
+                sample().to_string()
+            } else {
+                "{}".into()
+            },
+        )
     })
     .await;
     (url, n)

@@ -8,12 +8,15 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:build": "sh scripts/build-ieum-bin.sh && tauri build --config src-tauri/tauri.bundle.conf.json",
     "test": "vitest run"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.5",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.12.1",
     "lucide-react": "^1.71.0",
     "react": "^19.1.0",

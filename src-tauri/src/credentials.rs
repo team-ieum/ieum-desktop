@@ -210,6 +210,7 @@ fn with_system(c: &mut Credentials) {
 }
 
 /// 계정 하나의 키·계정 목록. 키 저장소는 범위 없는 vault(`anthropic.<계정 키>...` 전체 이름으로 접근).
+#[derive(Clone)]
 pub struct AccountCredentials {
     root: PathBuf,
     key16: String,
@@ -574,6 +575,20 @@ impl CredentialResolver for AccountCredentials {
                 .map_or(SYSTEM_ID.into(), |m| m.id),
         };
         self.cli_dir("claude", &id)
+    }
+
+    /// `claude_config_dir`와 같은 규칙 — codex 계정의 `CODEX_HOME`.
+    fn codex_home(&self, credential: Option<&str>) -> Result<Option<PathBuf>, String> {
+        let id = match credential {
+            Some(id) => id.to_string(),
+            None => self
+                .read_file()?
+                .codex_accounts
+                .into_iter()
+                .find(|m| m.is_default)
+                .map_or(SYSTEM_ID.into(), |m| m.id),
+        };
+        self.cli_dir("codex", &id)
     }
 }
 

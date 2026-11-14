@@ -825,3 +825,96 @@ async fn run_notice_failed_node_is_label_not_error() {
         k => panic!("{k:?}"),
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn save_expecting_does_not_revive_deleted_workflow() {
+    let env = env();
+    let id = save(&env, ai_only_wf(&env.dir("watch")), false);
+    let wf = env.store.get_workflow(&id).unwrap();
+    env.sup.delete_workflow(&id).unwrap();
+    let expected = wf.updated_at.clone();
+    assert!(env.sup.save_workflow_expecting(wf, &expected).is_err());
+    assert!(
+        !env.root
+            .join("data/workflows")
+            .join(format!("{id}.json"))
+            .exists()
+    );
+}
+
+/// 최종 리뷰 I-2: 노드 테스트 도중 앱이 끝나면 다음 시작 때 옮긴 파일을 되돌리고 결과를 기록에 남긴다.
+/// 못 되돌린 것이 있으면 `TestUndoFailed`. 테스트가 아닌 실행은 닫기만 한다.
+#[tokio::test(flavor = "multi_thread")]
+async fn unfinished_test_run_undone_on_next_start() {
+    let env = env();
+    let (inbox, out) = (env.dir("in"), env.dir("out"));
+    let id = save(&env, move_wf(&inbox, &out), false);
+    // 파일을 옮긴 실행 셋을 "도중에 앱이 꺼진 기록"(끝 시각 없음)으로 바꾼다.
+    let unfinished = |name: &'static str, trigger: RunTrigger| {
+        let (sup, store, id, file) = (
+            env.sup.clone(),
+            env.store.clone(),
+            id.clone(),
+            inbox.join(name),
+        );
+        async move {
+            fs::write(&file, "pdf").unwrap();
+            let run_id = sup.run_now(&id, &file).await.unwrap();
+            let mut run = store.get_run(&run_id).unwrap();
+            assert_eq!(run.file_ops.len(), 1);
+            run.finished_at = String::new();
+            run.trigger = Some(trigger);
+            store.save_run(&run).unwrap();
+            run_id
+        }
+    };
+    let tested = unfinished("a.pdf", RunTrigger::Test).await;
+    let lost = unfinished("b.pdf", RunTrigger::Test).await;
+    let manual = unfinished("c.pdf", RunTrigger::Manual).await;
+    // b는 옮긴 자리에서 사라져 되돌릴 수 없다.
+    fs::remove_file(out.join("sorted/b.pdf")).unwrap();
+    env.sup.stop();
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ev = events.clone();
+    let _sup2 = Supervisor::start(Deps {
+        store: env.store.clone(),
+        app_data: env.root.join("data"),
+        home: env.root.clone(),
+        trash_dir: env.root.join("trash"),
+        ai: Arc::new(AiRunner::empty()),
+        emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
+        timing: WatchTiming::default(),
+        recheck: Duration::from_secs(30),
+    })
+    .unwrap();
+
+    assert!(inbox.join("a.pdf").exists() && !out.join("sorted/a.pdf").exists());
+    let run = env.store.get_run(&tested).unwrap();
+    assert_eq!(run.run.status, RunStatus::Cancelled);
+    assert!(!run.finished_at.is_empty());
+    let undo = run.undo.unwrap();
+    assert_eq!((undo.restored.len(), undo.skipped.len()), (1, 0));
+
+    let undo = env.store.get_run(&lost).unwrap().undo.unwrap();
+    assert_eq!((undo.restored.len(), undo.skipped.len()), (0, 1));
+    let failed: Vec<_> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            AppEvent::TestUndoFailed {
+                workflow_id,
+                run_id,
+                at_start,
+            } => Some((workflow_id.clone(), run_id.clone(), at_start.clone())),
+            _ => None,
+        })
+        .collect();
+    // 재리뷰 I-1: 시작 때는 화면 리스너가 없다 — 이벤트가 워크플로우 이름을 실어 Rust가 바로 알림을 보낸다.
+    assert_eq!(failed, [(id.clone(), lost, Some("정리".to_string()))]);
+
+    // 테스트가 아닌 실행은 닫기만 한다 — 사람이 실행 기록에서 되돌린다.
+    assert!(env.store.get_run(&manual).unwrap().undo.is_none());
+    assert!(out.join("sorted/c.pdf").exists());
+}

@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, FixedOffset};
 use ieum_desktop_lib::pricing::{Pricing, estimate_usd};
-use ieum_desktop_lib::store::StoredRun;
+use ieum_desktop_lib::store::{ChatUsage, StoredRun};
 use ieum_desktop_lib::usage::summarize;
 use ieum_local::ai::AiUsage;
 use serde_json::{Value, json};
@@ -28,6 +28,18 @@ fn usage(source: &str, model: &str, input: u64, output: u64) -> AiUsage {
         cache_write_tokens: None,
         credential: None,
     }
+}
+
+/// 가격표에 있는 모델이어도 구독은 금액을 매기지 않는다.
+#[test]
+fn estimate_skips_codex_subscription() {
+    assert_eq!(
+        estimate_usd(
+            &usage("cli:codex", "gpt-5.6-luna", 1_000_000, 10),
+            ieum_desktop_lib::pricing::table()
+        ),
+        None
+    );
 }
 
 #[test]
@@ -117,6 +129,7 @@ fn summary_groups_by_source_workflow_day() {
     ];
     let s = summarize(
         &runs,
+        &[],
         at("2026-11-10T00:00:00+09:00"),
         at("2026-11-13T00:00:00+09:00"),
         &t,
@@ -164,6 +177,7 @@ fn old_run_without_usage_reads() {
     assert!(run.run.nodes["a"].usage.is_none());
     let s = summarize(
         &[run],
+        &[],
         at("2026-11-01T00:00:00Z"),
         at("2026-12-01T00:00:00Z"),
         &table(),
@@ -200,6 +214,33 @@ fn names() -> HashMap<String, String> {
     HashMap::from([("w1".to_string(), "요약".to_string())])
 }
 
+/// Antigravity 구독은 Google 묶음에 들고 금액은 매기지 않는다.
+#[test]
+fn usage_report_counts_agy_under_google() {
+    let runs = vec![run(
+        "w1",
+        "2026-11-12T01:00:00.000Z",
+        &[
+            usage("gemini", "gemini-x", 7, 3),
+            usage("cli:agy", "gemini-3.8-flash-low", 20, 4),
+        ],
+    )];
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
+    let v = serde_json::to_value(&r).unwrap();
+    let g = provider(&v, "google");
+    assert_eq!(
+        (g["calls"].clone(), g["input"].clone()),
+        (json!(2), json!(27))
+    );
+    assert_eq!(g["usd"], 0.0);
+}
+
 fn provider<'a>(v: &'a Value, id: &str) -> &'a Value {
     v["providers"]
         .as_array()
@@ -207,6 +248,30 @@ fn provider<'a>(v: &'a Value, id: &str) -> &'a Value {
         .iter()
         .find(|p| p["provider"] == id)
         .unwrap()
+}
+
+/// 테스트 실행은 실행 수에서 빼고, 실제로 쓴 토큰은 그대로 센다.
+#[test]
+fn test_runs_keep_tokens_but_not_run_count() {
+    let started = "2026-11-12T10:00:00.000Z";
+    let mut tested = run("w1", started, &[usage("anthropic", "claude-x", 10, 10)]);
+    tested.trigger = Some(ieum_desktop_lib::store::RunTrigger::Test);
+    tested.finished_at = "2026-11-12T10:00:30.000Z".into();
+    let runs = vec![
+        run("w1", started, &[usage("anthropic", "claude-x", 10, 10)]),
+        tested,
+    ];
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
+    let claude = &r.providers[0];
+    assert_eq!((claude.runs, claude.calls), (1, 2));
+    assert_eq!(r.overview.by_workflow[0].runs, 1);
+    assert_eq!(r.overview.total_tokens, 40);
 }
 
 #[test]
@@ -235,7 +300,13 @@ fn usage_report_groups_providers_and_days() {
         ),
         run("w1", "2026-11-12T01:00:00.000Z", &[]),
     ];
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let v = serde_json::to_value(&r).unwrap();
     assert_eq!(v["trackingSince"], "2026-10-01T00:00:00.000Z");
     assert_eq!(v["overview"]["totalTokens"], 2_000_175);
@@ -311,11 +382,20 @@ fn usage_report_counts_cache_in_tokens() {
         "2026-11-12T01:00:00.000Z",
         &[cached("anthropic", "claude-x", 100, 10, 300, 50)],
     )];
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let v = serde_json::to_value(&r).unwrap();
     assert_eq!(v["overview"]["totalTokens"], 460);
     let c = provider(&v, "claude");
-    assert_eq!((c["cacheRead"].clone(), c["cacheWrite"].clone()), (json!(300), json!(50)));
+    assert_eq!(
+        (c["cacheRead"].clone(), c["cacheWrite"].clone()),
+        (json!(300), json!(50))
+    );
     assert_eq!(c["recent"][0]["input"], 100);
 }
 
@@ -330,7 +410,13 @@ fn usage_report_recent_is_latest_10() {
             )
         })
         .collect();
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let v = serde_json::to_value(&r).unwrap();
     let recent = provider(&v, "claude")["recent"].as_array().unwrap().clone();
     assert_eq!(recent.len(), 10);
@@ -344,6 +430,7 @@ fn usage_report_recent_is_latest_10() {
 #[test]
 fn usage_report_empty_store() {
     let r = report(
+        &[],
         &[],
         &HashMap::new(),
         at("2026-11-13T09:00:00+09:00"),
@@ -383,10 +470,19 @@ fn usage_report_window_is_30_days() {
             &[usage("anthropic", "claude-x", 7, 0)],
         ),
     ];
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let v = serde_json::to_value(&r).unwrap();
     assert_eq!(v["overview"]["totalTokens"], 5);
-    assert_eq!(v["overview"]["byDay"][0], json!({"date": "2026-10-15", "tokens": 5, "usd": 5e-6}));
+    assert_eq!(
+        v["overview"]["byDay"][0],
+        json!({"date": "2026-10-15", "tokens": 5, "usd": 5e-6})
+    );
     assert_eq!(v["overview"]["byDay"][29]["date"], "2026-11-13");
 }
 
@@ -411,9 +507,199 @@ fn usage_report_10k_timing() {
     let start = std::time::Instant::now();
     let runs = store.all_runs().unwrap();
     let read = start.elapsed();
-    let r = report(&runs, &names(), at("2026-11-13T09:00:00+09:00"), &table());
+    let r = report(
+        &runs,
+        &[],
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
     let total = start.elapsed();
     assert_eq!(runs.len(), 10_000);
     assert!(r.tracking_since.is_some());
     println!("10k runs: all_runs {read:?}, all_runs+report {total:?}");
+}
+
+fn chat(wf: &str, at: &str, u: AiUsage) -> ChatUsage {
+    ChatUsage {
+        workflow_id: wf.into(),
+        at: at.into(),
+        usage: u,
+    }
+}
+
+/// 채팅 패널의 호출은 토큰·금액에만 더해지고 회사별·워크플로우별 실행 수는 그대로다.
+#[test]
+fn chat_usage_adds_tokens_but_not_runs() {
+    let runs = vec![run(
+        "w1",
+        "2026-11-12T01:00:00.000Z",
+        &[usage("anthropic", "claude-x", 1_000_000, 0)],
+    )];
+    let chats = vec![
+        chat(
+            "w1",
+            "2026-11-12T02:00:00.000Z",
+            usage("anthropic", "claude-x", 1_000_000, 0),
+        ),
+        chat(
+            "w2",
+            "2026-11-12T03:00:00.000Z",
+            usage("cli:claude", "sonnet", 100, 50),
+        ),
+    ];
+    let r = report(
+        &runs,
+        &chats,
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["overview"]["calls"], 3);
+    let claude = provider(&v, "claude");
+    assert_eq!((&claude["calls"], &claude["runs"]), (&json!(3), &json!(1)));
+    // 실행 1 + 채팅 1 (구독은 값 없음)
+    assert!((r.overview.usd - 2.0).abs() < 1e-9, "{}", r.overview.usd);
+    assert_eq!(r.overview.unpriced_calls, 1);
+    let w1 = claude["byWorkflow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["workflowId"] == "w1")
+        .unwrap();
+    assert_eq!((&w1["calls"], &w1["runs"]), (&json!(2), &json!(1)));
+    let w2 = claude["byWorkflow"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["workflowId"] == "w2")
+        .unwrap();
+    assert_eq!((&w2["calls"], &w2["runs"]), (&json!(1), &json!(0)));
+    // 최근 호출에도 보인다
+    assert_eq!(claude["recent"][0]["at"], "2026-11-12T03:00:00.000Z");
+}
+
+#[test]
+fn chat_usage_in_range_summary_and_tracking_since() {
+    let chats = vec![
+        chat(
+            "w1",
+            "2026-11-12T01:00:00.000Z",
+            usage("openai", "gpt-x", 500_000, 100_000),
+        ),
+        // 범위 밖
+        chat(
+            "w1",
+            "2026-11-01T00:00:00.000Z",
+            usage("openai", "gpt-x", 9, 9),
+        ),
+    ];
+    let s = summarize(
+        &[],
+        &chats,
+        at("2026-11-10T00:00:00+09:00"),
+        at("2026-11-13T00:00:00+09:00"),
+        &table(),
+    );
+    assert!((s.total_usd - 2.0).abs() < 1e-9, "{}", s.total_usd);
+    assert_eq!((s.total_input, s.total_output), (500_000, 100_000));
+    assert_eq!(s.by_workflow[0].workflow_id, "w1");
+    assert_eq!(s.by_day.len(), 1);
+    let r = report(
+        &[],
+        &chats,
+        &names(),
+        at("2026-11-13T09:00:00+09:00"),
+        &table(),
+    );
+    assert_eq!(
+        r.tracking_since.as_deref(),
+        Some("2026-11-01T00:00:00.000Z")
+    );
+    assert_eq!((r.providers[1].runs, r.providers[1].calls), (0, 2));
+}
+
+/// 최종 리뷰 I-3: 워크플로우를 지워도 그 채팅의 토큰·예상 금액은 합계·보고서에 남는다(실행 기록의 비용과 같게).
+#[test]
+fn chat_usage_survives_workflow_delete() {
+    use ieum_desktop_lib::store::{Store, StoredWorkflow};
+    use ieum_local::builder::{ChatMessage, Role, UsageEntry};
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let id = store
+        .save_workflow(StoredWorkflow {
+            id: String::new(),
+            name: "초안".into(),
+            enabled: false,
+            workflow: serde_json::from_value(json!({"nodes": [], "edges": []})).unwrap(),
+            updated_at: String::new(),
+        })
+        .unwrap()
+        .id;
+    store
+        .update_chat(&id, |c| {
+            c.messages.push(ChatMessage {
+                role: Role::User,
+                text: "비밀 대화".into(),
+                at: "2026-11-12T01:00:00.000Z".into(),
+            });
+            for (at, u) in [
+                (
+                    "2026-11-12T01:00:00.000Z",
+                    usage("anthropic", "claude-x", 1_000_000, 0),
+                ),
+                (
+                    "2026-11-12T02:00:00.000Z",
+                    usage("openai", "gpt-x", 500_000, 100_000),
+                ),
+            ] {
+                c.usage.push(UsageEntry {
+                    at: at.into(),
+                    usage: u,
+                });
+            }
+        })
+        .unwrap();
+    let totals = |store: &Store| {
+        let chats = store.all_chat_usage().unwrap();
+        let s = summarize(
+            &[],
+            &chats,
+            at("2026-11-10T00:00:00+09:00"),
+            at("2026-11-13T09:00:00+09:00"),
+            &table(),
+        );
+        let r = report(
+            &[],
+            &chats,
+            &HashMap::new(),
+            at("2026-11-13T09:00:00+09:00"),
+            &table(),
+        );
+        let r = serde_json::to_value(&r).unwrap();
+        (serde_json::to_value(&s).unwrap(), r["overview"].clone())
+    };
+    let before = totals(&store);
+    assert_eq!(before.1["calls"], 2);
+    store.delete_workflow(&id).unwrap();
+    assert_eq!(totals(&store), before);
+    // 대화는 남지 않는다.
+    assert!(!t.path().join("chats").join(format!("{id}.json")).exists());
+    let kept = fs_text(t.path());
+    assert!(!kept.contains("비밀 대화"), "{kept}");
+}
+
+/// 폴더 아래 모든 파일의 글.
+fn fs_text(dir: &std::path::Path) -> String {
+    let mut out = String::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            out.push_str(&fs_text(&p));
+        } else {
+            out.push_str(&std::fs::read_to_string(&p).unwrap_or_default());
+        }
+    }
+    out
 }

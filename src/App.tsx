@@ -1,5 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Suggestion, type WebWorkflowSummary } from "./api";
 import { AuthScreen } from "./auth/AuthScreen";
 import { t } from "./i18n";
@@ -18,6 +18,7 @@ import { NAV, type Page, type View } from "./shell/nav";
 import { recentItems, Sidebar, useSidebarCollapsed } from "./shell/Sidebar";
 import { accountsOf } from "./screens/settings/AiPane";
 import { useCredentials } from "./stores/credentials";
+import { usePendingFinish } from "./stores/pendingFinish";
 import { subscribeExecEvents } from "./stores/runs";
 import { useSettings } from "./stores/settings";
 import { useWeb } from "./stores/web";
@@ -65,6 +66,8 @@ function AppBody() {
   const local = useWorkflows((s) => s.list);
   const loadLocal = useWorkflows((s) => s.load);
   const [web, setWeb] = useState<WebWorkflowSummary[]>([]);
+  const pendingFinish = usePendingFinish((s) => s.pending);
+  const refreshPending = usePendingFinish((s) => s.refresh);
 
   useEffect(() => {
     // 설정·계정 응답 전엔 아무것도 그리지 않는다 — 관문·온보딩이 잠깐 깜빡이지 않게.
@@ -79,9 +82,35 @@ function AppBody() {
   const onboarding = useSettings((s) => s.settings?.onboardingDone === false);
   useEffect(() => {
     if (gated) return setWeb([]);
-    void loadLocal();
+    // 앱을 다시 켜도 "확인 필요" 표시가 남게, 처음 읽은 목록마다 확인 대기를 한 번 묻는다.
+    void loadLocal().then(() => useWorkflows.getState().list.forEach((w) => void refreshPending(w.id)));
     guard(api.webListWorkflows()).then(setWeb, () => setWeb([]));
-  }, [gated, guard, loadLocal]);
+  }, [gated, guard, loadLocal, refreshPending]);
+
+  // 빌더가 보내는 일: 완료 확인 대기·워크플로우 변경·테스트 되돌리기 실패.
+  // 시스템 알림은 화면이 묻고 Rust가 정한다 — 어느 화면인지는 여기만 알고, 창이 앞인지는 Rust만 믿을 수 있다.
+  // 편집기가 지금 보여 주는 워크플로우 id("" = 편집기가 없거나 아직 저장 전). 새 캔버스는 view.editor가 null인 채
+  // 선저장으로 id가 생기므로 view로는 알 수 없다.
+  const editorId = useRef("");
+  const onEditorId = useCallback((id: string) => void (editorId.current = id), []);
+  useEffect(() => {
+    if (gated) return;
+    const onScreen = (id: string) => editorId.current === id;
+    const subs = [
+      api.onFinishPending((p) => {
+        void refreshPending(p.id);
+        api.finishNotice(p.id, onScreen(p.id)).catch(() => {});
+      }),
+      api.onWorkflowChanged((p) => {
+        void loadLocal();
+        void refreshPending(p.id);
+      }),
+      api.onTestUndoFailed((p) => {
+        api.undoFailedNotice(p.id, onScreen(p.id)).catch(() => {});
+      }),
+    ];
+    return () => subs.forEach((s) => void s.then((f) => f(), () => {}));
+  }, [gated, loadLocal, refreshPending]);
 
   const toList = () => setView({ page: "local" });
   const openEditor = (id: string | null) => setView({ page: "local", editor: id });
@@ -121,11 +150,14 @@ function AppBody() {
     };
   }, []);
 
-  // 시스템 알림 클릭 → 그 실행 상세(대시보드와 같은 기록 화면) 또는 실행 기록.
+  // 시스템 알림 클릭 → 그 실행 상세(대시보드와 같은 기록 화면)·실행 기록·그 워크플로우의 편집 화면·계정 권하기 띠.
   useEffect(() => {
     const un = api.onOpenTarget((t) => {
       if (t.kind === "suggest") return takeSuggest();
-      const go = () => setView(t.kind === "run" ? { page: "history", run: t.runId } : { page: "history" });
+      // 이미 그 편집 화면이면 그대로 둔다 — 다시 마운트하면 터미널 세션 자리가 사라진다.
+      if (t.kind === "workflow" && editorId.current === t.id) return;
+      const go = () =>
+        setView(t.kind === "workflow" ? { page: "local", editor: t.id } : t.kind === "run" ? { page: "history", run: t.runId } : { page: "history" });
       if (dirty && askDiscard) setPending(() => go);
       else go();
     });
@@ -235,7 +267,7 @@ function AppBody() {
             onNewCanvas={newCanvas}
             onSearch={() => setSearching(true)}
             onCollapse={toggleSidebar}
-            recent={recentItems(local, web)}
+            recent={recentItems(local, web, pendingFinish)}
             onOpenRecent={(r) => leave(() => (r.kind === "local" ? openEditor(r.id) : setView({ page: "web", workflow: r.id })))}
             version={version}
           />
@@ -283,6 +315,7 @@ function AppBody() {
                   onBack={() => leave(toList)}
                   onOpenRuns={(id) => leave(() => openRuns(id))}
                   onDirty={setDirty}
+                  onIdChange={onEditorId}
                 />
               ) : "run" in view ? (
                 <RunView workflowId={view.run} onBack={toList} onEdit={openEditor} />

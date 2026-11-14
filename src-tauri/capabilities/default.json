@@ -57,6 +57,19 @@
     "allow-send-test-notification",
     "allow-open-data-folder",
     "allow-check-update-now",
+    "allow-get-chat",
+    "allow-pending-finish",
+    "allow-confirm-finish",
+    "allow-set-editing",
+    "allow-finish-notice",
+    "allow-undo-failed-notice",
+    "allow-term-spawn",
+    "allow-term-write",
+    "allow-term-resize",
+    "allow-term-kill",
+    "allow-term-tools",
+    "allow-chat-send",
+    "allow-chat-pick-folder",
     "dialog:allow-open"
   ]
 }

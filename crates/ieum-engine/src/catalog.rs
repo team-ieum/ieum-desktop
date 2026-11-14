@@ -15,19 +15,40 @@ pub enum NodeType {
 pub struct EventDef {
     pub event: String,
     pub node_type: NodeType,
+    /// 정의 JSON의 `title`·`description`(사람이 읽는 이름과 설명).
+    pub title: String,
+    pub description: String,
     pub output_keys: Option<BTreeSet<String>>,
     pub output_dynamic: bool,
     pub outputs_from: Option<String>,
     pub input_fields: Vec<InputField>,
 }
 
-/// 입력 칸 정의 중 정적 검증이 보는 부분.
+/// 칸의 선택지 하나.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Choice {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+}
+
+/// 입력 칸 정의 중 정적 검증·채팅 빌더가 보는 부분.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputField {
     pub key: String,
     #[serde(default)]
     pub title: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub choices: Vec<Choice>,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub default: Option<serde_json::Value>,
     #[serde(default)]
     pub path: Option<String>,
     /// `false`면 참조식을 넣을 수 없다. 없으면 허용.
@@ -67,6 +88,10 @@ pub struct Catalog {
 struct RawEvent {
     #[serde(rename = "node_type")]
     node_type: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    description: String,
     #[serde(default)]
     output_fields: Option<Vec<RawField>>,
     #[serde(default)]
@@ -164,6 +189,8 @@ impl Catalog {
                 EventDef {
                     event: event.clone(),
                     node_type,
+                    title: raw.title,
+                    description: raw.description,
                     output_keys,
                     output_dynamic: raw.output_dynamic,
                     outputs_from: raw.outputs_from,
@@ -176,6 +203,13 @@ impl Catalog {
 
     pub fn get(&self, event: &str) -> Option<&EventDef> {
         self.events.get(event)
+    }
+
+    /// 모든 event — 트리거 먼저, 그다음 event 이름순.
+    pub fn events(&self) -> Vec<&EventDef> {
+        let mut all: Vec<&EventDef> = self.events.values().collect();
+        all.sort_by_key(|e| (e.node_type != NodeType::Trigger, &e.event));
+        all
     }
 
     /// `catalog/events/branch/if.json` + `crates/ieum-local/defs/*.json`(파일 이름 = event).

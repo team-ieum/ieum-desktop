@@ -49,6 +49,23 @@ const COMMANDS: &[&str] = &[
     "send_test_notification",
     "open_data_folder",
     "check_update_now",
+    // ── 캔버스 채팅: 토대 ──
+    "get_chat",
+    "pending_finish",
+    "confirm_finish",
+    // ── 캔버스 채팅 B(통로·동기화) — 여기 아래에 추가 ──
+    "set_editing",
+    "finish_notice",
+    "undo_failed_notice",
+    // ── 캔버스 채팅 C(터미널 term_*) — 여기 아래에 추가 ──
+    "term_spawn",
+    "term_write",
+    "term_resize",
+    "term_kill",
+    "term_tools",
+    // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
+    "chat_send",
+    "chat_pick_folder",
 ];
 
 fn main() {
