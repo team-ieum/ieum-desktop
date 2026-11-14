@@ -82,7 +82,7 @@ test("status_bar_shows_subscription_percent_and_reset", async () => {
   const sub = mockAll();
   await mount();
   // 가장 빡빡한 창(34%) 기준, 연결된 구독만.
-  const chip = screen.getByTitle("Claude 34% 사용 · 13시간 21분 뒤 초기화");
+  const chip = screen.getByTitle("Claude · 세션 34% 사용 · 13시간 21분 뒤 초기화");
   expect(within(chip).getByText("34%")).toBeTruthy();
   expect(within(chip).getByText("13시간 21분")).toBeTruthy();
   expect(screen.queryByTitle(/Codex|Antigravity/)).toBeNull();
@@ -176,4 +176,24 @@ test("popover_links_to_usage_and_accounts", async () => {
   await act(async () => fireEvent.click(pop.getByRole("button", { name: /^Claude/ })));
   await act(async () => fireEvent.click(within(screen.getByRole("region", { name: "Claude" })).getByRole("button", { name: "계정 관리…" })));
   expect(onSettings).toHaveBeenCalledTimes(2);
+});
+
+test("status_bar_hidden_window_defers_first_load", async () => {
+  let state: DocumentVisibilityState = "hidden";
+  const vis = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => state);
+  try {
+    const sub = mockAll();
+    await mount();
+    // 창이 안 보이면 구독·자격 목록을 처음부터 읽지 않는다.
+    expect(sub).not.toHaveBeenCalled();
+    expect(api.antigravityPlanUsage).not.toHaveBeenCalled();
+    expect(api.listCredentials).not.toHaveBeenCalled();
+    state = "visible";
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(api.listCredentials).toHaveBeenCalledTimes(1);
+    expect(sub).toHaveBeenCalled();
+    expect(api.antigravityPlanUsage).toHaveBeenCalled();
+  } finally {
+    vis.mockRestore();
+  }
 });

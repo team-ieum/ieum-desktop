@@ -16,6 +16,8 @@ import { SearchDialog } from "./shell/SearchDialog";
 import { StatusBar } from "./shell/StatusBar";
 import { NAV, type Page, type View } from "./shell/nav";
 import { recentItems, Sidebar, useSidebarCollapsed } from "./shell/Sidebar";
+import { accountsOf } from "./screens/settings/AiPane";
+import { useCredentials } from "./stores/credentials";
 import { subscribeExecEvents } from "./stores/runs";
 import { useSettings } from "./stores/settings";
 import { useWeb } from "./stores/web";
@@ -77,17 +79,20 @@ export default function App() {
   // 기본 계정 한도 도달 → 다른 계정 권하기 띠. Rust는 보낸 제안을 대기 칸에도 넣으므로
   // 마운트·창이 다시 앞에 올 때·알림 클릭 때 꺼내 오고, 이벤트로 띄울 때도 대기 칸을 비운다.
   // "나중에"는 띠만 닫는다 — 같은 제안을 다시 띄우지 않는 건 Rust가 기억한다.
-  const [suggest, setSuggest] = useState<Suggestion | null>(null);
-  const takeSuggest = () =>
-    void api.takeAccountSuggestion().then(
-      (s) => s && setSuggest(s),
-      () => {},
-    );
+  // 회사별로 하나씩 줄 세워 앞의 것부터 보인다. 같은 회사 제안이 다시 오면 그 자리를 바꾼다.
+  const [suggests, setSuggests] = useState<Suggestion[]>([]);
+  const creds = useCredentials((c) => c.view);
+  const addSuggests = (list: Suggestion[]) =>
+    setSuggests((q) => {
+      const next = q.map((x) => list.find((s) => s.company === x.company) ?? x);
+      return [...next, ...list.filter((s) => !q.some((x) => x.company === s.company))];
+    });
+  const takeSuggest = () => void api.takeAccountSuggestion().then(addSuggests, () => {});
   useEffect(() => {
     const un = api
       .onAccountSuggest((s) => {
-        setSuggest(s);
-        api.takeAccountSuggestion().catch(() => {});
+        addSuggests([s]);
+        takeSuggest();
       })
       .catch(() => () => {});
     takeSuggest();
@@ -171,7 +176,9 @@ export default function App() {
   );
 
   // 본문 열 맨 위(머리줄 아래) — 창 맨 위에 두면 신호등과 겹치고 끌어 옮길 수 없다.
-  const suggestBanner = suggest && <SuggestBanner s={suggest} onClose={() => setSuggest(null)} />;
+  // 지금 자격 목록에 없는 계정(이음 계정이 바뀌었거나 지운 계정)을 권하는 제안은 띄우지 않는다.
+  const suggest =suggests.find((s) => accountsOf(creds, s.company).some((m) => m.id === s.toId)) ?? null;
+  const suggestBanner = <SuggestBanner s={suggest} onClose={() => setSuggests((q) => q.filter((x) => x !== suggest))} />;
 
   // 설정은 셸 사이드바 대신 설정 전용 사이드바(창 신호등 자리 포함). 머리줄은 본문 위.
   if (view.page === "settings")

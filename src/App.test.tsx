@@ -8,6 +8,9 @@ import { useWeb } from "./stores/web";
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.resolve("0.2.0") }));
 
 const ACCOUNT = { email: "me@ieum.dev", serverUrl: "https://green.kiacms.co.kr" };
+const acct = (id: string) => ({ id, label: id, isDefault: false, createdAt: "", email: null });
+// 권하기 띠는 지금 자격 목록에 있는 계정(toId)만 띄운다.
+const CREDS = { apiKeys: { anthropic: [], openai: [], gemini: [] }, claudeAccounts: [acct("abcd")], codexAccounts: [acct("efgh")], keychainError: null };
 
 beforeAll(() => {
   globalThis.ResizeObserver = class {
@@ -23,7 +26,7 @@ beforeAll(() => {
   vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
   vi.spyOn(api, "onOpenTarget").mockResolvedValue(() => {});
   vi.spyOn(api, "onAccountSuggest").mockResolvedValue(() => {});
-  vi.spyOn(api, "takeAccountSuggestion").mockResolvedValue(null);
+  vi.spyOn(api, "takeAccountSuggestion").mockResolvedValue([]);
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   vi.spyOn(api, "validateWorkflow").mockResolvedValue([]);
@@ -32,7 +35,7 @@ beforeAll(() => {
   vi.spyOn(api, "dashboardSummary").mockRejectedValue({ code: "NETWORK" });
   vi.spyOn(api, "dashboardExecutions").mockRejectedValue({ code: "NETWORK" });
   vi.spyOn(api, "detectProviders").mockResolvedValue({ clis: [], apiKeys: [] });
-  vi.spyOn(api, "listCredentials").mockResolvedValue({ apiKeys: { anthropic: [], openai: [], gemini: [] }, claudeAccounts: [], codexAccounts: [], keychainError: null });
+  vi.spyOn(api, "listCredentials").mockResolvedValue(CREDS);
 });
 afterEach(() => {
   cleanup();
@@ -242,7 +245,7 @@ test("suggest_banner_from_event", async () => {
 });
 
 test("pending_suggestion_shows_on_mount", async () => {
-  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce(SUGGEST);
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST]);
   await act(async () => {
     render(<App />);
   });
@@ -254,9 +257,71 @@ test("suggest_banner_on_focus", async () => {
     render(<App />);
   });
   expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
-  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce(SUGGEST);
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST]);
   await act(async () => window.dispatchEvent(new Event("focus")));
   expect(screen.getByText(/바꿔서 쓸까요/)).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "나중에" })));
   expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+});
+
+const CODEX_SUGGEST = { ...SUGGEST, company: "codex" as const, toId: "efgh", toLabel: "개인", windowKind: "weekly" };
+
+test("suggestions_shown_one_after_another", async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST, CODEX_SUGGEST]);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.getByText(/회사\(12% 사용\)/)).toBeTruthy();
+  expect(screen.queryByText(/개인\(12% 사용\)/)).toBeNull();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "나중에" })));
+  expect(screen.queryByText(/회사\(12% 사용\)/)).toBeNull();
+  expect(screen.getByText(/개인\(12% 사용\)/)).toBeTruthy();
+  // 띠가 닫히면 포커스는 본문으로.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "나중에" })));
+  expect(document.activeElement).toBe(document.querySelector("main"));
+  // 상태 영역은 비어도 남아 있다(내용만 바뀐다).
+  expect(document.querySelector("main [role=status]")?.textContent).toBe("");
+});
+
+test("suggestion_for_unknown_account_not_shown", async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([{ ...SUGGEST, toId: "gone" }]);
+  await act(async () => {
+    render(<App />);
+  });
+  expect(screen.queryByText(/바꿔서 쓸까요/)).toBeNull();
+});
+
+const openSwitch = async () => {
+  vi.mocked(api.takeAccountSuggestion).mockResolvedValueOnce([SUGGEST]);
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "바꾸기" })));
+  return screen.getByRole("dialog");
+};
+
+test("switch_dialog_failure_keeps_focus_and_esc_closes", async () => {
+  let fail!: (e: unknown) => void;
+  vi.spyOn(api, "setDefaultCredential").mockReturnValueOnce(new Promise((_, rej) => (fail = rej)));
+  const dialog = await openSwitch();
+  const confirm = within(dialog).getByRole("button", { name: "바꾸기" });
+  await act(async () => fireEvent.click(confirm));
+  // 바꾸는 중에도 포커스를 잃지 않게 disabled 대신 aria-disabled.
+  expect(confirm.hasAttribute("disabled")).toBe(false);
+  expect(confirm.getAttribute("aria-disabled")).toBe("true");
+  await act(async () => fail("boom"));
+  expect(within(dialog).getByRole("alert")).toBeTruthy();
+  expect(document.activeElement).toBe(confirm);
+  await act(async () => fireEvent.keyDown(document.activeElement!, { key: "Escape" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("switch_dialog_tab_cycles_inside", async () => {
+  const dialog = await openSwitch();
+  const [cancel, confirm] = within(dialog).getAllByRole("button");
+  confirm.focus();
+  fireEvent.keyDown(confirm, { key: "Tab" });
+  expect(document.activeElement).toBe(cancel);
+  fireEvent.keyDown(cancel, { key: "Tab", shiftKey: true });
+  expect(document.activeElement).toBe(confirm);
 });

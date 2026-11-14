@@ -1,7 +1,7 @@
 //! 구독 한도 판정: 기본 계정이 한도에 닿았는지, 어느 계정을 권할지, 다음 조회까지 얼마나 쉴지.
 //! 그리고 그 판정을 돌리는 백그라운드 감시 루프.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -61,15 +61,24 @@ pub struct Suggestion {
     pub resets_at: String,
 }
 
+/// 제안 키 — 기본 계정 쪽 값만(누구를 권하는지와 무관).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LimitKey {
+    pub company: &'static str,
+    pub from_id: String,
+    pub kind: &'static str,
+    /// 초기화 시각(ms). 못 읽으면 0.
+    pub reset_ms: i64,
+}
+
 impl Suggestion {
-    pub fn key(&self) -> (String, String, String, String) {
-        (
-            self.company.to_string(),
-            self.from_id.clone(),
-            self.window_kind.to_string(),
-            // 분 단위로 — 서버가 조회마다 소수점 초를 다르게 줘도 같은 창으로 본다.
-            reset_ms(&self.resets_at).map_or_else(|| self.resets_at.clone(), |ms| (ms / 60_000).to_string()),
-        )
+    pub fn key(&self) -> LimitKey {
+        LimitKey {
+            company: self.company,
+            from_id: self.from_id.clone(),
+            kind: self.window_kind,
+            reset_ms: reset_ms(&self.resets_at).unwrap_or(0),
+        }
     }
 }
 
@@ -78,19 +87,34 @@ fn reset_ms(s: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(s).ok().map(|t| t.timestamp_millis())
 }
 
+/// 한도에 닿은 판정 대상 창 — 여럿이면 가장 늦게 풀리는 것(오프셋이 달라도 시각으로 비교).
+fn full_window(p: &PlanUsage) -> Option<&PlanWindow> {
+    if p.state != "ok" {
+        return None;
+    }
+    gating_windows(p)
+        .filter(|w| w.used_pct >= 100.0)
+        .max_by_key(|w| reset_ms(&w.resets_at))
+}
+
+/// 기본 계정만으로 만든 제안 키. 한도에 닿은 창이 없으면 None.
+pub fn limit_key(company: &'static str, default: &Candidate) -> Option<LimitKey> {
+    let w = full_window(&default.plan)?;
+    Some(LimitKey {
+        company,
+        from_id: default.id.clone(),
+        kind: w.kind,
+        reset_ms: reset_ms(&w.resets_at).unwrap_or(0),
+    })
+}
+
 /// 기본 계정이 한도에 닿았고 여유 있는 다른 계정이 있으면, 판정 대상 최댓값이 가장 낮은 계정을 권한다.
 pub fn suggest(
     company: &'static str,
     default: &Candidate,
     others: &[Candidate],
 ) -> Option<Suggestion> {
-    if default.plan.state != "ok" {
-        return None;
-    }
-    // 한도에 닿은 창이 여럿이면 가장 늦게 풀리는 것(오프셋이 달라도 시각으로 비교).
-    let full = gating_windows(&default.plan)
-        .filter(|w| w.used_pct >= 100.0)
-        .max_by_key(|w| reset_ms(&w.resets_at))?;
+    let full = full_window(&default.plan)?;
     let (to, to_used_pct) = others
         .iter()
         .filter(|c| c.id != default.id)
@@ -109,14 +133,28 @@ pub fn suggest(
     })
 }
 
-/// 이미 보인(또는 "나중에"로 넘긴) 제안 키. 메모리에만 둔다.
+/// 이미 보인(또는 "나중에"로 넘긴) 제안: (회사, 기본 계정, 창) → 마지막 초기화 시각(ms). 메모리에만 둔다.
 #[derive(Default)]
-pub struct Seen(HashSet<(String, String, String, String)>);
+pub struct Seen(HashMap<(&'static str, String, &'static str), i64>);
+
+/// 서버가 조회마다 초기화 시각을 조금씩 다르게 줘도(분 경계를 넘어도) 이 안이면 같은 창.
+const SAME_WINDOW_MS: i64 = 60_000;
 
 impl Seen {
+    pub fn contains(&self, k: &LimitKey) -> bool {
+        self.0
+            .get(&(k.company, k.from_id.clone(), k.kind))
+            .is_some_and(|&r| (r - k.reset_ms).abs() <= SAME_WINDOW_MS)
+    }
+
     /// 처음 보는 제안이면 기억하고 true.
     pub fn first_time(&mut self, s: &Suggestion) -> bool {
-        self.0.insert(s.key())
+        let k = s.key();
+        if self.contains(&k) {
+            return false;
+        }
+        self.0.insert((k.company, k.from_id, k.kind), k.reset_ms);
+        true
     }
 }
 
@@ -138,8 +176,28 @@ pub fn route_suggestion(enabled: bool, focused: bool) -> Delivery {
 
 /// 보낸 제안(띠·시스템 알림 둘 다) — 화면이 `take_account_suggestion`으로 꺼낸다.
 /// 띠 이벤트가 화면 리스너보다 먼저 와도, 마운트·포커스·알림 클릭 때 여기서 다시 가져간다.
+/// 회사별로 하나씩, 그때의 이음 계정 키와 함께 둔다.
 #[derive(Default)]
-pub struct PendingSuggest(pub Mutex<Option<Suggestion>>);
+pub struct PendingSuggest(Mutex<BTreeMap<&'static str, (String, Suggestion)>>);
+
+impl PendingSuggest {
+    pub fn put(&self, account: &str, s: Suggestion) {
+        self.lock().insert(s.company, (account.to_string(), s));
+    }
+
+    /// 전부 꺼내고 비운다. `account`(지금 이음 계정 키)와 다른 계정 때 쌓인 것은 버린다.
+    pub fn take(&self, account: Option<&str>) -> Vec<Suggestion> {
+        std::mem::take(&mut *self.lock())
+            .into_values()
+            .filter(|(a, _)| Some(a.as_str()) == account)
+            .map(|(_, s)| s)
+            .collect()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<&'static str, (String, Suggestion)>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 /// 감시 한 회차의 결과.
 pub struct Tick {
@@ -158,8 +216,10 @@ fn account_label(m: &CliAccountMeta, lang: Lang) -> String {
 }
 
 /// 감시 한 회차. `view` = None(로그아웃)이면 조회하지 않는다. `fetch(회사, 계정 id)`는 조용한 조회.
-pub async fn tick<F, Fut>(view: Option<&CredentialsView>, lang: Lang, fetch: F) -> Tick
+/// 기본 계정이 한도에 닿아도 `want(제안 키)`가 false면(이미 보임·알림 꺼짐) 다른 계정은 묻지 않는다.
+pub async fn tick<W, F, Fut>(view: Option<&CredentialsView>, lang: Lang, want: W, fetch: F) -> Tick
 where
+    W: Fn(&LimitKey) -> bool,
     F: Fn(&'static str, String) -> Fut,
     Fut: Future<Output = Option<PlanUsage>>,
 {
@@ -186,7 +246,7 @@ where
             plan,
         };
         let mut others = Vec::new();
-        if needs_others(&default.plan) {
+        if limit_key(company, &default).is_some_and(|k| want(&k)) {
             for m in list.iter().filter(|m| !m.is_default) {
                 if let Some(plan) = fetch(company, m.id.clone()).await {
                     others.push(Candidate {
@@ -234,24 +294,29 @@ pub fn spawn(app: AppHandle) {
 pub fn deliver_once(
     seen: &mut Seen,
     pending: &PendingSuggest,
+    account: &str,
     s: &Suggestion,
     enabled: bool,
     focused: bool,
 ) -> Delivery {
-    if seen.0.contains(&s.key()) {
+    if seen.contains(&s.key()) {
         return Delivery::Drop;
     }
     let d = route_suggestion(enabled, focused);
     if d != Delivery::Drop {
         seen.first_time(s);
-        *pending.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(s.clone());
+        pending.put(account, s.clone());
     }
     d
 }
 
 async fn run_once(app: AppHandle, seen: Arc<Mutex<Seen>>) -> Duration {
     let app = &app;
-    let Ok(creds) = app.state::<Active>().credentials().await else {
+    let active = app.state::<Active>();
+    let Some(account) = active.account_key().await else {
+        return IDLE;
+    };
+    let Ok(creds) = active.credentials().await else {
         return IDLE;
     };
     let creds = Arc::new(creds);
@@ -265,7 +330,10 @@ async fn run_once(app: AppHandle, seen: Arc<Mutex<Seen>>) -> Duration {
     let lang: Lang = s.language.into();
     let usage = app.state::<SubscriptionUsage>();
     let usage = &*usage;
-    let mut t = tick(view.as_ref(), lang, |kind, id| {
+    let want = |k: &LimitKey| {
+        s.notify_account_suggest && !seen.lock().unwrap_or_else(|e| e.into_inner()).contains(k)
+    };
+    let mut t = tick(view.as_ref(), lang, want, |kind, id| {
         let creds = creds.clone();
         async move {
             let dir = creds.cli_dir(kind, &id).ok()?;
@@ -284,6 +352,7 @@ async fn run_once(app: AppHandle, seen: Arc<Mutex<Seen>>) -> Duration {
         let d = deliver_once(
             &mut seen.lock().unwrap_or_else(|e| e.into_inner()),
             &app.state::<PendingSuggest>(),
+            &account,
             &sug,
             s.notify_account_suggest,
             focused,

@@ -427,8 +427,8 @@ export const api = {
   /** 앱이 앞에 있을 때 권하기(띠). */
   onAccountSuggest: (cb: (s: Suggestion) => void): Promise<UnlistenFn> =>
     listen<Suggestion>("account-suggest", (e) => cb(e.payload)),
-  /** 시스템 알림으로 보낸 대기 중 제안을 꺼낸다(한 번 꺼내면 비워짐). */
-  takeAccountSuggestion: () => invoke<Suggestion | null>("take_account_suggestion"),
+  /** 대기 중인 제안(회사별 하나)을 전부 꺼낸다(꺼내면 비워짐). 다른 이음 계정 때 쌓인 것은 Rust가 버린다. */
+  takeAccountSuggestion: () => invoke<Suggestion[]>("take_account_suggestion"),
   onWebExecEvent: (cb: (p: WebExecPayload) => void): Promise<UnlistenFn> =>
     listen<WebExecPayload>("web-exec-event", (e) => cb(e.payload)),
   /** 폴더·파일 고르기(tauri-plugin-dialog, 권한 `dialog:allow-open`). 취소하면 null. */

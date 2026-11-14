@@ -4,9 +4,9 @@ import { api, type UsageSummary } from "../api";
 import { ProviderLogo } from "../assets/providers";
 import { t } from "../i18n";
 import { useCredentials } from "../stores/credentials";
-import { useDefaultPlans } from "../stores/plans";
+import { useDefaultPlans, whenVisible } from "../stores/plans";
 import { formatReset, formatUsd } from "../usage/format";
-import { hot, resetText, usedOf, usedText } from "../usage/parts";
+import { hot, resetText, usedOf, usedText, windowName } from "../usage/parts";
 import { connectedSubs, UsagePopover } from "./UsagePopover";
 
 const REFRESH_MS = 60_000;
@@ -22,8 +22,8 @@ export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSett
   const opener = useRef<HTMLButtonElement>(null);
   const loadToday = () => api.usageSummary("today").then(setToday, () => setToday(null));
   useEffect(() => {
-    useCredentials.getState().load().catch(() => {});
     void loadToday();
+    return whenVisible(() => void useCredentials.getState().load().catch(() => {}));
   }, []);
 
   // 구독은 useDefaultPlans가 처음 읽고, 이후엔 백그라운드 감시(plans-updated)가 채운다. 여기선 오늘 API 금액만 — 창이 안 보이면 멈추고, 다시 보이면 바로 읽는다.
@@ -81,7 +81,7 @@ export function StatusBar({ onUsage, onSettings }: { onUsage: () => void; onSett
           ? subs.map(({ sub: s, w }) => {
               const pct = usedOf(w);
               return (
-                <span key={s.id} title={`${s.name} ${usedText(pct)} · ${resetText(w, now)}`} className="inline-flex items-center gap-1">
+                <span key={s.id} title={`${s.name} · ${windowName(w)} ${usedText(pct)} · ${resetText(w, now)}`} className="inline-flex items-center gap-1">
                   <ProviderLogo id={s.logo} size={14} />
                   <span className={`font-semibold ${hot(pct)}`}>{pct}%</span>
                   <span className="text-main-deep-blue/70">{formatReset(w.resetsAt, now)}</span>

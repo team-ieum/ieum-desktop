@@ -511,6 +511,23 @@ async fn quiet_get_none_after_missing() {
 }
 
 #[tokio::test]
+async fn quiet_get_forgets_expired_token() {
+    // 첫 get은 200, 그 뒤 서버가 401(토큰 만료).
+    let (url, n) = sequence(&[200, 401]).await;
+    let (src, reads) = counting(|| TokenRead::Found(TOKEN.into()));
+    let c = PlanUsageClient::with_url(&url, src, Duration::ZERO).unwrap();
+    assert_eq!(c.get().await.state, "ok");
+    c.get_quiet().await;
+    assert_eq!(n.load(Ordering::SeqCst), 2);
+    // 기억한 토큰을 버렸다 — 더는 묻지 않는다.
+    assert!(c.get_quiet().await.is_none());
+    assert_eq!(n.load(Ordering::SeqCst), 2);
+    // 일반 get은 키체인을 다시 읽는다.
+    c.get().await;
+    assert_eq!(reads.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn subscription_quiet_get_claude_after_read() {
     let (url, _) = serve(|_| (200, sample().to_string())).await;
     let (token, seen) = per_dir(None);
