@@ -5,7 +5,7 @@ import symbol from "../assets/symbol.png";
 import { locale, t } from "../i18n";
 import { NAV, type Page } from "./nav";
 
-export type RecentItem = { kind: "local" | "web"; id: string; name: string; at: string; dot: "active" | "paused" | "error" };
+export type RecentItem = { kind: "local" | "web"; id: string; name: string; at: string; dot: "active" | "paused" | "error"; /** 완료 확인을 기다리는 중(내 PC). */ pending?: boolean };
 
 const time = (iso: string) => {
   const n = Date.parse(iso);
@@ -13,7 +13,7 @@ const time = (iso: string) => {
 };
 
 /** 최근 작업 5개 — 내 PC·웹 이음을 수정 시각 내림차순으로 섞는다. */
-export function recentItems(local: WorkflowEntry[], web: WebWorkflowSummary[]): RecentItem[] {
+export function recentItems(local: WorkflowEntry[], web: WebWorkflowSummary[], pending: Record<string, unknown> = {}): RecentItem[] {
   return [
     ...local.map((w): RecentItem => ({
       kind: "local",
@@ -21,6 +21,7 @@ export function recentItems(local: WorkflowEntry[], web: WebWorkflowSummary[]): 
       name: w.name,
       at: w.updatedAt,
       dot: w.watch === "watch_error" ? "error" : w.enabled ? "active" : "paused",
+      pending: w.id in pending,
     })),
     ...web.map((w): RecentItem => ({ kind: "web", id: w.id, name: w.name, at: w.updatedAt ?? "", dot: w.active ? "active" : "paused" })),
   ]
@@ -165,8 +166,8 @@ export function Sidebar({
                 <span className="mt-0.5 flex items-center gap-1 text-[11px] text-main-gray">
                   <span>{r.kind === "local" ? t("nav.local") : t("nav.web")}</span>
                   <span aria-hidden="true">·</span>
-                  <span className={`size-1.5 shrink-0 rounded-full ${DOT[r.dot]}`} />
-                  <span>{t(`nav.dot.${r.dot}`)}</span>
+                  <span className={`size-1.5 shrink-0 rounded-full ${r.pending ? "bg-main-blue" : DOT[r.dot]}`} />
+                  {r.pending ? <span className="font-semibold text-main-blue">{t("finish.mark")}</span> : <span>{t(`nav.dot.${r.dot}`)}</span>}
                 </span>
               </span>
               <span className="shrink-0 pt-0.5 text-[11px] text-main-gray/70">{ago(r.at)}</span>

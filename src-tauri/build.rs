@@ -53,6 +53,9 @@ const COMMANDS: &[&str] = &[
     "pending_finish",
     "confirm_finish",
     // ── 캔버스 채팅 B(통로·동기화) — 여기 아래에 추가 ──
+    "set_editing",
+    "finish_notice",
+    "undo_failed_notice",
     // ── 캔버스 채팅 C(터미널 term_*) — 여기 아래에 추가 ──
     // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
 ];

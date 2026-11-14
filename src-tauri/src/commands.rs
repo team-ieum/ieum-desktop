@@ -20,7 +20,7 @@ use crate::plan_usage::PlanUsage;
 use crate::pricing;
 use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
 use crate::sub_usage::{AntigravityUsageClient, SubscriptionUsage};
-use crate::supervisor::WorkflowEntry;
+use crate::supervisor::{Supervisor, WorkflowEntry};
 use crate::usage::{self, UsageReport, UsageSummary};
 use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
 use crate::web::executions::{Emit, Page, WebExecution, WebNodeLog};
@@ -56,7 +56,17 @@ pub async fn save_workflow(
     active: State<'_, Active>,
     wf: StoredWorkflow,
 ) -> Result<StoredWorkflow, String> {
-    active.sup().await?.save_workflow(wf)
+    save_from_canvas(&active.sup().await?, wf)
+}
+
+/// 캔버스 저장. 화면이 읽은 `wf.updated_at`이 저장본과 다르면 `STALE` — 그사이 빌더가 고친 것을 덮지 않는다.
+/// id가 빈 새 워크플로우만 검사 없이 저장한다.
+pub fn save_from_canvas(sup: &Supervisor, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
+    if wf.id.is_empty() {
+        return sup.save_workflow(wf);
+    }
+    let expected = wf.updated_at.clone();
+    sup.save_workflow_expecting(wf, &expected)
 }
 
 #[tauri::command]
@@ -695,4 +705,41 @@ pub async fn confirm_finish(
         .await?
         .confirm_finish(&workflow_id, accept)
         .await)
+}
+
+/// 편집기의 미저장 편집 표시 — 켜져 있는 동안 빌더의 고치는 동작은 `USER_EDITING`으로 거절된다(사람의 편집 우선).
+#[tauri::command]
+pub async fn set_editing(
+    active: State<'_, Active>,
+    workflow_id: String,
+    editing: bool,
+) -> Result<(), String> {
+    active.sup().await?.set_editing(&workflow_id, editing);
+    Ok(())
+}
+
+/// 완료 확인 대기 알림 — 화면이 `finish-pending`을 받으면 부른다. 그 편집 화면이 떠 있고 창이 앞이면 보내지 않는다.
+#[tauri::command]
+pub async fn finish_notice(
+    app: AppHandle,
+    active: State<'_, Active>,
+    workflow_id: String,
+    on_screen: bool,
+) -> Result<(), String> {
+    let name = active.sup().await?.store().get_workflow(&workflow_id)?.name;
+    crate::notify::on_finish_pending(&app, &workflow_id, &name, on_screen);
+    Ok(())
+}
+
+/// 테스트 되돌리기 실패 알림 — 화면이 `test-undo-failed`를 받으면 부른다. 판정은 `finish_notice`와 같다.
+#[tauri::command]
+pub async fn undo_failed_notice(
+    app: AppHandle,
+    active: State<'_, Active>,
+    workflow_id: String,
+    on_screen: bool,
+) -> Result<(), String> {
+    let name = active.sup().await?.store().get_workflow(&workflow_id)?.name;
+    crate::notify::on_test_undo_failed(&app, &workflow_id, &name, on_screen);
+    Ok(())
 }
