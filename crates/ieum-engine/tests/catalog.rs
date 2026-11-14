@@ -118,3 +118,25 @@ fn workflow_roundtrip_keeps_unknown_keys() {
     // Value 비교는 키 순서를 안 보므로 문자열로 순서까지 확인.
     assert_eq!(serde_json::to_string(&wf).unwrap(), expected.to_string());
 }
+
+#[test]
+fn events_listed_trigger_first_with_titles() {
+    let c = Catalog::embedded().unwrap();
+    let ids: Vec<&str> = c.events().iter().map(|e| e.event.as_str()).collect();
+    assert_eq!(
+        ids,
+        [
+            "local.folder_new_file",
+            "branch.if",
+            "local.ai",
+            "local.file_move",
+            "local.file_rename",
+            "local.file_trash"
+        ]
+    );
+    assert_eq!(c.events()[0].title, "폴더에 새 파일");
+    assert_eq!(
+        c.get("local.file_trash").unwrap().description,
+        "파일을 휴지통으로 옮겨요. 영구 삭제하지 않아요."
+    );
+}

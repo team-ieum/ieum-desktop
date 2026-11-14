@@ -68,6 +68,48 @@ fn store_roundtrip_and_atomic_write() {
 }
 
 #[test]
+fn old_settings_get_onboarding_and_notify_defaults() {
+    let t = tempfile::tempdir().unwrap();
+    fs::write(
+        t.path().join("settings.json"),
+        r#"{"language":"system","autostart":true,"firstRunDone":true,"serverUrl":"https://green.kiacms.co.kr"}"#,
+    )
+    .unwrap();
+    let s = Store::new(t.path().to_path_buf()).get_settings().unwrap();
+    assert!(!s.onboarding_done);
+    assert!(s.notify_manual_start && s.notify_manual_end && s.notify_watch_end);
+    assert!(s.autostart);
+    let d = Settings::default();
+    assert!(d.notify_manual_start && d.notify_manual_end && d.notify_watch_end);
+    let v = serde_json::to_value(&d).unwrap();
+    for k in [
+        "onboardingDone",
+        "notifyManualStart",
+        "notifyManualEnd",
+        "notifyWatchEnd",
+    ] {
+        assert!(v.get(k).is_some(), "{k}");
+    }
+}
+
+#[test]
+fn old_run_without_trigger_reads_none() {
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let id = "00000000-0000-4000-8000-000000000001";
+    fs::create_dir_all(t.path().join("runs")).unwrap();
+    let old = json!({
+        "run": {"runId": id, "status": "succeeded", "validationErrors": [], "rejectReason": null, "nodes": {}},
+        "workflowId": "w", "startedAt": "2026-01-01T00:00:00Z", "finishedAt": "2026-01-01T00:00:01Z",
+        "fileOps": [], "allowedRoots": [], "undo": null
+    });
+    fs::write(t.path().join(format!("runs/{id}.json")), old.to_string()).unwrap();
+
+    assert_eq!(store.list_runs(None).unwrap()[0].trigger, None);
+    assert_eq!(store.get_run(id).unwrap().trigger, None);
+}
+
+#[test]
 fn ids_must_be_uuid() {
     let t = tempfile::tempdir().unwrap();
     let data = t.path().join("data");
@@ -85,4 +127,104 @@ fn ids_must_be_uuid() {
     }
     assert!(t.path().join("x.json").exists());
     assert!(!t.path().join("workflows").exists());
+}
+
+#[test]
+fn account_suggest_defaults_on() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert!(s.notify_account_suggest);
+    assert!(Settings::default().notify_account_suggest);
+}
+
+#[test]
+fn chat_file_default_update_and_deleted_with_workflow() {
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let id = store.save_workflow(stored("")).unwrap().id;
+    assert!(store.get_chat(&id).unwrap().messages.is_empty()); // 없으면 빈 값
+    let after = store
+        .update_chat(&id, |c| c.state.outline = vec!["새 파일".into()])
+        .unwrap();
+    assert_eq!(after.state.outline, ["새 파일"]);
+    assert!(t.path().join("chats").join(format!("{id}.json")).exists());
+    assert_eq!(store.get_chat(&id).unwrap().state.outline, ["새 파일"]);
+    assert!(store.get_chat("../x").is_err()); // id는 UUID만
+    store.delete_workflow(&id).unwrap();
+    assert!(!t.path().join("chats").join(format!("{id}.json")).exists()); // 같이 지운다
+    assert!(!t.path().join("chat-usage").exists()); // 쓴 사용량이 없으면 남길 것도 없다
+    // 채팅 파일이 없는 워크플로우도 지워진다.
+    let id2 = store.save_workflow(stored("")).unwrap().id;
+    store.delete_workflow(&id2).unwrap();
+}
+
+#[test]
+fn chat_write_after_workflow_delete_is_rejected() {
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let id = store.save_workflow(stored("")).unwrap().id;
+    store.delete_workflow(&id).unwrap();
+    // 삭제 뒤 도착한 쓰기가 고아 채팅 파일을 남기지 않는다.
+    assert!(
+        store
+            .update_chat(&id, |c| c.state.outline.push("a".into()))
+            .is_err()
+    );
+    assert!(store.save_chat(&id, &Default::default()).is_err());
+    assert!(!t.path().join("chats").join(format!("{id}.json")).exists());
+}
+
+#[test]
+fn all_chat_usage_reads_every_chat_file() {
+    use ieum_local::ai::AiUsage;
+    use ieum_local::builder::UsageEntry;
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    assert!(store.all_chat_usage().unwrap().is_empty()); // chats 폴더가 없어도 된다
+    let id = store.save_workflow(stored("")).unwrap().id;
+    let u = AiUsage {
+        source: "anthropic".into(),
+        model: Some("m".into()),
+        input_tokens: 5,
+        output_tokens: 2,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
+        credential: Some("k1".into()),
+    };
+    store
+        .update_chat(&id, |c| {
+            c.usage.push(UsageEntry {
+                at: "2026-11-13T00:00:00.000Z".into(),
+                usage: u.clone(),
+            })
+        })
+        .unwrap();
+    fs::write(
+        t.path()
+            .join("chats/33333333-3333-4333-8333-333333333333.json"),
+        "깨진 파일",
+    )
+    .unwrap();
+    let all = store.all_chat_usage().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(
+        (
+            all[0].workflow_id.as_str(),
+            all[0].at.as_str(),
+            &all[0].usage
+        ),
+        (id.as_str(), "2026-11-13T00:00:00.000Z", &u)
+    );
+    // 워크플로우를 지우면 대화는 지워지고 사용량은 남는다(통계에 계속 합산).
+    store.delete_workflow(&id).unwrap();
+    assert!(!t.path().join("chats").join(format!("{id}.json")).exists());
+    let all = store.all_chat_usage().unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(
+        (
+            all[0].workflow_id.as_str(),
+            all[0].at.as_str(),
+            &all[0].usage
+        ),
+        (id.as_str(), "2026-11-13T00:00:00.000Z", &u)
+    );
 }

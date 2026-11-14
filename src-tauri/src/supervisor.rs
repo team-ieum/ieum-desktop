@@ -1,7 +1,7 @@
 //! 실행 감독: 켜진 폴더 트리거 워크플로우마다 감시 하나, 워크플로우별 실행 줄(한 번에 하나), 실행 기록·되돌리기.
 //! Tauri 없이 돈다 — 저장소·휴지통·AI 러너·이벤트 송신을 `Deps`로 주입한다.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -9,10 +9,11 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use ieum_engine::{
-    BuiltinRunners, Catalog, ExecEvent, NodeRunner, RunResult, RunStatus, Runners, ValidationError,
-    Workflow, run_workflow, validate,
+    BuiltinRunners, Catalog, ExecEvent, NodeRunner, NodeStatus, RunResult, RunStatus, Runners,
+    ValidationError, Workflow, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
+use ieum_local::builder::TestRun;
 use ieum_local::{
     AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, Journal,
     NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo, user_folders,
@@ -24,7 +25,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::store::{Store, StoredRun, StoredWorkflow, now};
+use crate::store::{RunTrigger, Store, StoredRun, StoredWorkflow, now};
 
 /// 워크플로우 하나의 대기 실행 상한. 넘으면 가장 오래된 것부터 버린다.
 pub const QUEUE_CAP: usize = 100;
@@ -44,12 +45,57 @@ pub enum AppEvent {
     },
     /// 화면 이벤트 `queue-dropped` — 줄이 넘쳐 버린 실행(트리거 파일 경로).
     QueueDropped { workflow_id: String, path: String },
+    /// 시스템 알림 재료(화면 이벤트 아님) — 실행 시작·끝.
+    RunNotice(RunNotice),
+    /// 화면 이벤트 `workflow-changed` — 채팅 빌더가 저장본을 고쳤다.
+    WorkflowChanged {
+        workflow_id: String,
+        updated_at: String,
+    },
+    /// 화면 이벤트 `finish-pending` — 완료 조건 통과, 사람의 [켜기]를 기다린다.
+    FinishPending {
+        workflow_id: String,
+        workflow_name: String,
+    },
+    /// 화면 이벤트 `test-undo-failed` — 테스트가 옮긴 파일 일부를 되돌리지 못했다.
+    /// `at_start` = 앱 시작 때 되돌리다 실패했으면 그 워크플로우 이름(지워졌으면 빈 글). 그때는 화면이
+    /// 아직 듣지 않으므로 받는 쪽이 화면에 넘기지 않고 바로 시스템 알림을 보낸다.
+    TestUndoFailed {
+        workflow_id: String,
+        run_id: String,
+        at_start: Option<String>,
+    },
+}
+
+/// `save_workflow_expecting`이 기대한 `updated_at`과 저장본이 다를 때의 오류 문자열.
+pub const STALE: &str = "STALE";
+
+#[derive(Debug, Clone)]
+pub struct RunNotice {
+    pub workflow_id: String,
+    pub workflow_name: String,
+    pub run_id: String,
+    pub trigger: RunTrigger,
+    pub kind: NoticeKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoticeKind {
+    Started,
+    /// `failed_node` = 실패한 첫 노드의 label(없으면 id). 오류 문자열은 싣지 않는다.
+    Finished {
+        ok: bool,
+        secs: u64,
+        failed_node: Option<String>,
+    },
 }
 
 pub type Emit = Arc<dyn Fn(AppEvent) + Send + Sync>;
 
 pub struct Deps {
     pub store: Store,
+    /// 앱 데이터 폴더 전체 — 사용자 폴더 정책의 금지 폴더(계정 폴더만이 아니라).
+    pub app_data: PathBuf,
     /// 사용자 폴더 정책의 홈(운영 = 실제 홈).
     pub home: PathBuf,
     pub trash_dir: PathBuf,
@@ -94,6 +140,8 @@ struct Job {
     /// 감시가 보낸 일이면 그 감시 폴더. 시험 실행(`run_now`)은 None.
     folder: Option<PathBuf>,
     reply: Option<Reply>,
+    /// 채팅 빌더의 노드 테스트면 저장본 대신 돌릴 그래프(대상까지 자른 것).
+    test: Option<Workflow>,
 }
 
 #[derive(Default)]
@@ -110,6 +158,12 @@ struct Inner {
     watches: Mutex<HashMap<String, Watch>>,
     lanes: Mutex<HashMap<String, Lane>>,
     undo_lock: Mutex<()>,
+    /// 워크플로우 저장을 차례로 — `updated_at` 비교와 쓰기 사이에 다른 저장이 끼지 않게.
+    save_lock: Mutex<()>,
+    /// 편집기에 저장 안 된 편집이 있는 워크플로우 id(메모리만 — 로그아웃·앱 종료로 비워진다).
+    editing: Mutex<HashSet<String>>,
+    /// `stop()` 뒤 취소됨 — 새 감시·실행을 받지 않고 재확인 루프가 끝난다.
+    stopped: CancellationToken,
 }
 
 #[derive(Clone)]
@@ -144,12 +198,15 @@ fn trigger_output(f: &NewFile) -> Map<String, Value> {
 impl Supervisor {
     /// tokio 런타임 안에서 부른다. 시작 시 폴더의 기존 파일은 보지 않는다.
     pub fn start(deps: Deps) -> Result<Self, String> {
+        Self::start_with(deps, true)
+    }
+
+    /// `close_unfinished` = 끝 시각 없는 기록을 중단됨으로 닫는다. 이 프로세스에서 그 저장소를
+    /// 처음 열 때만 참 — 다시 열 때는 앞선 감독의 실행이 아직 돌며 그 기록을 쓰고 있을 수 있다.
+    pub fn start_with(deps: Deps, close_unfinished: bool) -> Result<Self, String> {
         let catalog = Catalog::embedded().map_err(|e| format!("노드 정의를 읽지 못했어요: {e}"))?;
         let rt = Handle::try_current().map_err(|e| e.to_string())?;
         let every = deps.recheck;
-        if let Err(e) = deps.store.close_unfinished_runs() {
-            eprintln!("[ieum] 끝나지 않은 실행 기록을 닫지 못했어요: {e}");
-        }
         let sup = Supervisor(Arc::new(Inner {
             deps,
             catalog,
@@ -158,12 +215,22 @@ impl Supervisor {
             watches: Mutex::default(),
             lanes: Mutex::default(),
             undo_lock: Mutex::default(),
+            save_lock: Mutex::default(),
+            editing: Mutex::default(),
+            stopped: CancellationToken::new(),
         }));
+        // 감시(`sync`)보다 먼저 — 되돌려진 파일이 새 파일로 잡히지 않는다.
+        if close_unfinished {
+            sup.close_unfinished();
+        }
         sup.sync();
-        let weak = Arc::downgrade(&sup.0);
+        let (weak, stopped) = (Arc::downgrade(&sup.0), sup.0.stopped.clone());
         sup.0.rt.spawn(async move {
             loop {
-                tokio::time::sleep(every).await;
+                tokio::select! {
+                    () = stopped.cancelled() => break,
+                    () = tokio::time::sleep(every) => {}
+                }
                 match weak.upgrade() {
                     Some(inner) => Supervisor(inner).recheck(),
                     None => break,
@@ -171,6 +238,57 @@ impl Supervisor {
             }
         });
         Ok(sup)
+    }
+
+    /// 끝 시각 없는 기록(실행 도중 앱이 꺼짐)을 닫는다. 그중 노드 테스트는 먼저 되돌려 결과를 기록에 남긴다 —
+    /// 테스트가 파일을 옮긴 채로 남기지 않는다. 못 되돌린 것이 있으면 기록을 닫은 뒤 `TestUndoFailed`(`at_start`).
+    fn close_unfinished(&self) {
+        let mut failed = Vec::new();
+        match self.store().all_runs() {
+            Ok(runs) => {
+                let _one_at_a_time = lock(&self.0.undo_lock);
+                let tests = runs.into_iter().filter(|r| {
+                    r.finished_at.is_empty()
+                        && r.trigger == Some(RunTrigger::Test)
+                        && r.undo.is_none()
+                });
+                for mut run in tests {
+                    let report = self.undo_ops(&run);
+                    if !report.skipped.is_empty() {
+                        failed.push((run.workflow_id.clone(), run.run.run_id.clone()));
+                    }
+                    run.undo = Some(report);
+                    if let Err(e) = self.store().save_run(&run) {
+                        eprintln!("[ieum] 테스트 되돌리기 결과를 쓰지 못했어요: {e}");
+                    }
+                }
+            }
+            Err(e) => eprintln!("[ieum] 실행 기록을 읽지 못했어요: {e}"),
+        }
+        if let Err(e) = self.store().close_unfinished_runs() {
+            eprintln!("[ieum] 끝나지 않은 실행 기록을 닫지 못했어요: {e}");
+        }
+        for (workflow_id, run_id) in failed {
+            let name = self.store().get_workflow(&workflow_id).map(|w| w.name);
+            (self.0.deps.emit)(AppEvent::TestUndoFailed {
+                at_start: Some(name.unwrap_or_default()),
+                workflow_id,
+                run_id,
+            });
+        }
+    }
+
+    /// 감시를 모두 풀고 대기 실행을 버린다. 진행 중인 실행은 끝까지 돌아 기록을 남긴다.
+    /// 사본(`Clone`)이 남아 drop되지 않을 수 있어 명시적으로 부른다. 되돌릴 수 없다.
+    pub fn stop(&self) {
+        self.0.stopped.cancel();
+        lock(&self.0.watches).clear();
+        let ids: Vec<String> = lock(&self.0.lanes).keys().cloned().collect();
+        self.drop_queued(&ids);
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.0.stopped.is_cancelled()
     }
 
     pub fn store(&self) -> &Store {
@@ -211,7 +329,7 @@ impl Supervisor {
 
     /// 사용자 폴더 정책(`validate_user_folder`) — 홈·앱 데이터 폴더는 주입값.
     fn check_folder(&self, folder: &Path) -> Result<(), String> {
-        validate_user_folder(folder, &self.0.deps.home, self.store().root())
+        validate_user_folder(folder, &self.0.deps.home, &self.0.deps.app_data)
     }
 
     fn check_folders(&self, wf: &Workflow) -> Result<(), String> {
@@ -232,7 +350,8 @@ impl Supervisor {
         Ok(())
     }
 
-    pub fn save_workflow(&self, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
+    /// `save_lock`을 잡은 채 부른다.
+    fn save_checked(&self, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
         self.check_folders(&wf.workflow)?;
         self.check_providers(&wf.workflow)?;
         let saved = self.store().save_workflow(wf)?;
@@ -240,7 +359,50 @@ impl Supervisor {
         Ok(saved)
     }
 
+    pub fn save_workflow(&self, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
+        let _g = lock(&self.0.save_lock);
+        self.save_checked(wf)
+    }
+
+    /// 저장본의 `updated_at`이 `expected_updated_at`과 다르면 `Err(STALE)` — 그사이 다른 쪽이 고쳤다.
+    pub fn save_workflow_expecting(
+        &self,
+        wf: StoredWorkflow,
+        expected_updated_at: &str,
+    ) -> Result<StoredWorkflow, String> {
+        let _g = lock(&self.0.save_lock);
+        if self.store().get_workflow(&wf.id)?.updated_at != expected_updated_at {
+            return Err(STALE.into());
+        }
+        self.save_checked(wf)
+    }
+
+    pub fn emit(&self, e: AppEvent) {
+        (self.0.deps.emit)(e);
+    }
+
+    /// 사용자 폴더 정책 — 채팅 빌더의 `pick-folder`가 고른 폴더를 미리 본다.
+    pub fn check_user_folder(&self, folder: &Path) -> Result<(), String> {
+        self.check_folder(folder)
+    }
+
+    /// 편집기의 미저장 편집 표시.
+    pub fn set_editing(&self, workflow_id: &str, editing: bool) {
+        let mut set = lock(&self.0.editing);
+        if editing {
+            set.insert(workflow_id.to_string());
+        } else {
+            set.remove(workflow_id);
+        }
+    }
+
+    pub fn user_editing(&self, workflow_id: &str) -> bool {
+        lock(&self.0.editing).contains(workflow_id)
+    }
+
+    /// 저장과 같은 잠금 안에서 지운다 — `save_workflow_expecting`의 확인과 쓰기 사이에 끼면 지운 것이 되살아난다.
     pub fn delete_workflow(&self, id: &str) -> Result<(), String> {
+        let _g = lock(&self.0.save_lock);
         self.store().delete_workflow(id)?;
         self.sync();
         Ok(())
@@ -250,6 +412,10 @@ impl Supervisor {
     /// 오류 상태면 바로 다시 건다. 꺼지거나·지워지거나·폴더가 바뀐 워크플로우의 대기 실행은 버린다.
     pub fn sync(&self) {
         let mut watches = lock(&self.0.watches);
+        // stop()은 취소 뒤 이 잠금을 잡고 비우므로, 잠금 안에서 보면 멈춘 뒤 감시를 새로 걸지 않는다.
+        if self.is_stopped() {
+            return;
+        }
         // 목록을 잠금 안에서 읽어 동시 저장이 낡은 목록으로 감시를 지우지 않게.
         let list = match self.store().list_workflows() {
             Ok(l) => l,
@@ -380,12 +546,19 @@ impl Supervisor {
                 trigger,
                 folder: Some(folder.to_path_buf()),
                 reply: None,
+                test: None,
             },
         );
     }
 
     fn push(&self, workflow_id: &str, job: Job) {
         let mut lanes = lock(&self.0.lanes);
+        if self.is_stopped() {
+            if let Some(reply) = job.reply {
+                let _ = reply.send(Err("계정이 바뀌거나 로그아웃되어 취소됐어요.".into()));
+            }
+            return;
+        }
         let lane = lanes.entry(workflow_id.to_string()).or_default();
         lane.jobs.push_back(job);
         while lane.jobs.len() > QUEUE_CAP {
@@ -421,7 +594,9 @@ impl Supervisor {
                     }
                 }
             };
-            let result = self.run_one(workflow_id, job.folder, job.trigger).await;
+            let result = self
+                .run_one(workflow_id, job.folder, job.trigger, job.test)
+                .await;
             if let Err(e) = &result {
                 eprintln!("[ieum] 실행하지 못했어요: 워크플로우 {workflow_id}: {e}");
             }
@@ -437,8 +612,18 @@ impl Supervisor {
         workflow_id: &str,
         folder: Option<PathBuf>,
         trigger: Map<String, Value>,
+        test: Option<Workflow>,
     ) -> Result<String, String> {
-        let wf = self.store().get_workflow(workflow_id)?;
+        let mut wf = self.store().get_workflow(workflow_id)?;
+        let run_trigger = match (&test, &folder) {
+            (Some(_), _) => RunTrigger::Test,
+            (None, Some(_)) => RunTrigger::Watch,
+            (None, None) => RunTrigger::Manual,
+        };
+        // 노드 테스트는 저장본 대신 대상까지 자른 그래프를 돌린다.
+        if let Some(test) = test {
+            wf.workflow = test;
+        }
         // 감시가 보낸 뒤 꺼졌거나 폴더가 바뀐 워크플로우의 늦은 트리거는 버린다.
         if let Some(f) = folder
             && trigger_folder(&wf) != Some(f)
@@ -492,14 +677,26 @@ impl Supervisor {
             file_ops: journal.ops(),
             allowed_roots: roots.paths().to_vec(),
             undo: None,
+            trigger: Some(run_trigger),
         };
         let (tx, mut rx) = mpsc::unbounded_channel();
         let emit = self.0.deps.emit.clone();
+        let clock = std::time::Instant::now();
+        let notice = |run_id: &str, kind| {
+            emit(AppEvent::RunNotice(RunNotice {
+                workflow_id: workflow_id.to_string(),
+                workflow_name: wf.name.clone(),
+                run_id: run_id.to_string(),
+                trigger: run_trigger,
+                kind,
+            }))
+        };
         let forward = async {
             let (mut run_id, mut saved_ops, mut finished) = (String::new(), 0, None);
             while let Some(event) = rx.recv().await {
                 if let ExecEvent::RunStarted { run_id: r } = &event {
                     run_id = r.clone();
+                    notice(r, NoticeKind::Started);
                 }
                 // 파일 작업이 생기면 끝나지 않은 기록(끝 시각 없음)으로 바로 쓴다 — 도중에 앱이 꺼져도 되돌릴 수 있게.
                 if journal.ops().len() > saved_ops {
@@ -541,13 +738,46 @@ impl Supervisor {
             ),
             forward
         );
-        let stored = stored(run, now());
+        let mut stored = stored(run, now());
+        // 노드 테스트는 여기서(실행 줄 안에서) 바로 되돌린다 — 요청한 쪽이 사라졌거나 기록 저장이
+        // 실패해도 파일이 옮겨진 채 남지 않고, 줄 선 다음 실행은 되돌려진 상태에서 시작한다.
+        if run_trigger == RunTrigger::Test {
+            let _one_at_a_time = lock(&self.0.undo_lock);
+            stored.undo = Some(self.undo_ops(&stored));
+        }
         let saved = self.store().save_run(&stored);
+        // 못 되돌린 경로는 화면이 기록에서 읽는다 — 기록을 쓴 뒤에 알린다.
+        if stored.undo.as_ref().is_some_and(|u| !u.skipped.is_empty()) {
+            emit(AppEvent::TestUndoFailed {
+                workflow_id: workflow_id.to_string(),
+                run_id: stored.run.run_id.clone(),
+                at_start: None,
+            });
+        }
         if let Some(event) = finished {
             emit(AppEvent::Exec {
                 workflow_id: workflow_id.to_string(),
                 event,
             });
+            let run = &stored.run;
+            let failed_node = wf
+                .workflow
+                .nodes
+                .iter()
+                .find(|n| {
+                    run.nodes
+                        .get(&n.id)
+                        .is_some_and(|r| r.status == NodeStatus::Failed)
+                })
+                .map(|n| n.label.clone().unwrap_or_else(|| n.id.clone()));
+            notice(
+                &run.run_id,
+                NoticeKind::Finished {
+                    ok: run.status == RunStatus::Succeeded,
+                    secs: clock.elapsed().as_secs(),
+                    failed_node,
+                },
+            );
         }
         saved?;
         Ok(stored.run.run_id)
@@ -557,7 +787,57 @@ impl Supervisor {
     /// 파일은 그 워크플로우의 허용 폴더 안 일반 파일(심볼릭 링크 아님)이어야 한다.
     pub async fn run_now(&self, workflow_id: &str, file: &Path) -> Result<String, String> {
         let wf = self.store().get_workflow(workflow_id)?;
-        self.check_folders(&wf.workflow)?;
+        let trigger = self.file_trigger(&wf.workflow, file)?;
+        self.queue(workflow_id, trigger, None).await
+    }
+
+    /// 실행 줄에 넣고 끝나길 기다린다. 끝나면 run_id.
+    async fn queue(
+        &self,
+        workflow_id: &str,
+        trigger: Map<String, Value>,
+        test: Option<Workflow>,
+    ) -> Result<String, String> {
+        let (tx, rx) = oneshot::channel();
+        self.push(
+            workflow_id,
+            Job {
+                trigger,
+                folder: None,
+                reply: Some(tx),
+                test,
+            },
+        );
+        rx.await.map_err(|_| "실행이 취소됐어요.".to_string())?
+    }
+
+    /// `wf`를 `sample` 파일로 실행 줄에서 한 번 돌리고(기록 trigger = Test) 바로 되돌린다.
+    /// 되돌리기는 파일 작업이 없어도 항상 한다. 못 되돌린 것이 있으면 화면에 알린다(`TestUndoFailed`).
+    pub async fn run_test(
+        &self,
+        workflow_id: &str,
+        wf: Workflow,
+        sample: &Path,
+    ) -> Result<TestRun, String> {
+        let trigger = self.file_trigger(&wf, sample)?;
+        // 되돌리기는 실행 줄(`run_one`)이 한다 — 이 future가 버려져도 끝까지 간다.
+        let run_id = self.queue(workflow_id, trigger, Some(wf)).await?;
+        let stored = self.store().get_run(&run_id)?;
+        Ok(TestRun {
+            run_id,
+            status: stored.run.status,
+            nodes: stored.run.nodes,
+            undo: stored.undo.unwrap_or_default(),
+        })
+    }
+
+    pub fn ai(&self) -> &AiRunner {
+        &self.0.deps.ai
+    }
+
+    /// `file`로 만든 트리거 출력. 파일은 `wf`의 허용 폴더 안 일반 파일(심볼릭 링크 아님)이어야 한다.
+    fn file_trigger(&self, wf: &Workflow, file: &Path) -> Result<Map<String, Value>, String> {
+        self.check_folders(wf)?;
         let meta = fs::symlink_metadata(file).map_err(|e| format!("{}: {e}", file.display()))?;
         if !meta.file_type().is_file() {
             return Err(format!(
@@ -568,7 +848,7 @@ impl Supervisor {
         let real = file
             .canonicalize()
             .map_err(|e| format!("{}: {e}", file.display()))?;
-        if !roots_for_workflow(&wf.workflow).contains(&real) {
+        if !roots_for_workflow(wf).contains(&real) {
             return Err(format!(
                 "이 워크플로우가 다루는 폴더 밖 파일이에요: {}",
                 real.display()
@@ -578,22 +858,12 @@ impl Supervisor {
             s.map(|s| s.to_string_lossy().into_owned())
                 .unwrap_or_default()
         };
-        let trigger = trigger_output(&NewFile {
+        Ok(trigger_output(&NewFile {
             name: lossy(real.file_name()),
             extension: lossy(real.extension()),
             path: real.clone(),
             size: meta.len(),
-        });
-        let (tx, rx) = oneshot::channel();
-        self.push(
-            workflow_id,
-            Job {
-                trigger,
-                folder: None,
-                reply: Some(tx),
-            },
-        );
-        rx.await.map_err(|_| "실행이 취소됐어요.".to_string())?
+        }))
     }
 
     /// 기록의 `allowed_roots`·휴지통·앱 전역 `RecentWrites`로 되돌린다. 이미 되돌렸으면 에러.
@@ -607,6 +877,14 @@ impl Supervisor {
         if run.finished_at.is_empty() {
             return Err("아직 끝나지 않은 실행이에요.".into());
         }
+        let report = self.undo_ops(&run);
+        run.undo = Some(report.clone());
+        self.store().save_run(&run)?;
+        Ok(report)
+    }
+
+    /// 기록의 파일 작업을 되돌린다(기록은 쓰지 않는다). `undo_lock`을 잡은 채 부른다.
+    fn undo_ops(&self, run: &StoredRun) -> UndoReport {
         // 기록이 심어졌어도 정책 밖 폴더에서는 움직이지 않는다.
         let roots = AllowedRoots::new(
             run.allowed_roots
@@ -614,14 +892,11 @@ impl Supervisor {
                 .filter(|r| self.check_folder(r).is_ok())
                 .cloned(),
         );
-        let report = undo(
+        undo(
             &run.file_ops,
             &roots,
             &self.0.deps.trash_dir,
             &self.0.recent,
-        );
-        run.undo = Some(report.clone());
-        self.store().save_run(&run)?;
-        Ok(report)
+        )
     }
 }

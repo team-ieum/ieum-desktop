@@ -6,12 +6,15 @@
 		sans-serif;
 	--font-family-pretendard: var(--font-pretendard);
 
+	--typography-display3_bold: 700 2.25rem / 1.2 var(--font-family-pretendard); /* 36/120 */
+
 	--typography-heading3_bold: 700 1.5rem / 1.2 var(--font-family-pretendard); /* 24/120 */
 	--typography-heading3_semibold: 600 1.5rem / 1.2 var(--font-family-pretendard); /* 24/120 */
 
 	--typography-title1_bold: 700 1.375rem / 1.4 var(--font-family-pretendard); /* 22/140 */
 	--typography-title2_bold: 700 1.25rem / 1.4 var(--font-family-pretendard); /* 20/140 */
 	--typography-title2_semibold: 600 1.25rem / 1.4 var(--font-family-pretendard); /* 20/140 */
+	--typography-title2_medium: 500 1.25rem / 1.4 var(--font-family-pretendard); /* 20/140 */
 	--typography-title3_bold: 700 1.125rem / 1.4 var(--font-family-pretendard); /* 18/140 */
 	--typography-title3_semibold: 600 1.125rem / 1.4 var(--font-family-pretendard); /* 18/140 */
 
@@ -21,6 +24,7 @@
 	--typography-body1_regular: 400 1rem / 1.5 var(--font-family-pretendard); /* 16/150 */
 	--typography-body2_bold: 700 0.875rem / 1.5 var(--font-family-pretendard); /* 14/150 */
 	--typography-body2_semibold: 600 0.875rem / 1.5 var(--font-family-pretendard); /* 14/150 */
+	--typography-body2_medium: 500 0.875rem / 1.5 var(--font-family-pretendard); /* 14/150 — 웹엔 없음, body1·body3_medium과 같은 규칙 */
 	--typography-body2_regular: 400 0.875rem / 1.5 var(--font-family-pretendard); /* 14/150 */
 	--typography-body3_semibold: 600 0.8125rem / 1.5 var(--font-family-pretendard); /* 13/150 */
 	--typography-body3_medium: 500 0.8125rem / 1.5 var(--font-family-pretendard); /* 13/150 */
@@ -41,6 +45,10 @@
 }
 
 /* Typography utilities — use as `typo-title3_bold`, etc. */
+@utility typo-display3_bold {
+	font: var(--typography-display3_bold);
+}
+
 @utility typo-heading3_bold {
 	font: var(--typography-heading3_bold);
 }
@@ -56,6 +64,9 @@
 }
 @utility typo-title2_semibold {
 	font: var(--typography-title2_semibold);
+}
+@utility typo-title2_medium {
+	font: var(--typography-title2_medium);
 }
 @utility typo-title3_bold {
 	font: var(--typography-title3_bold);
@@ -81,6 +92,9 @@
 }
 @utility typo-body2_semibold {
 	font: var(--typography-body2_semibold);
+}
+@utility typo-body2_medium {
+	font: var(--typography-body2_medium);
 }
 @utility typo-body2_regular {
 	font: var(--typography-body2_regular);

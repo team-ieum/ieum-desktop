@@ -1,156 +1,336 @@
-import { Globe, History as HistoryIcon, Settings as SettingsIcon, Workflow as WorkflowIcon, X, type LucideIcon } from "lucide-react";
-import { useEffect, useState } from "react";
-import { t, type Key } from "./i18n";
+import { getVersion } from "@tauri-apps/api/app";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type Suggestion, type WebWorkflowSummary } from "./api";
+import { AuthScreen } from "./auth/AuthScreen";
+import { t } from "./i18n";
+import { Onboarding } from "./onboarding/Onboarding";
 import { BUTTON, Editor, PRIMARY } from "./screens/Editor";
+import { Dashboard } from "./screens/Dashboard";
 import { History } from "./screens/History";
 import { RunView } from "./screens/RunView";
-import { Settings } from "./screens/Settings";
+import { SettingsShell } from "./screens/settings/SettingsShell";
 import { Web } from "./screens/Web";
 import { WorkflowList } from "./screens/WorkflowList";
+import { Header } from "./shell/Header";
+import { SearchDialog } from "./shell/SearchDialog";
+import { StatusBar } from "./shell/StatusBar";
+import { UpdateToast } from "./shell/UpdateToast";
+import { NAV, type Page, type View } from "./shell/nav";
+import { recentItems, Sidebar, useSidebarCollapsed } from "./shell/Sidebar";
+import { accountsOf } from "./screens/settings/AiPane";
+import { useCredentials } from "./stores/credentials";
+import { usePendingFinish } from "./stores/pendingFinish";
 import { subscribeExecEvents } from "./stores/runs";
 import { useSettings } from "./stores/settings";
 import { useWeb } from "./stores/web";
+import { useWorkflows } from "./stores/workflows";
+import { SuggestBanner } from "./usage/SuggestBanner";
 
-type Tab = "workflows" | "history" | "web" | "settings";
-/** 웹 이음은 로그인했을 때만 보인다. */
-const TABS: { id: Tab; label: Key; icon: LucideIcon }[] = [
-  { id: "workflows", label: "nav.workflows", icon: WorkflowIcon },
-  { id: "history", label: "nav.history", icon: HistoryIcon },
-  { id: "web", label: "nav.web", icon: Globe },
-  { id: "settings", label: "nav.settings", icon: SettingsIcon },
-];
-
-// 첫 실행 안내 배너 — 닫으면 다시 안 보인다(Rust 설정의 firstRunDone은 화면이 뜨기 전에 켜져 못 쓴다).
-const BANNER_KEY = "ieum.autostartBannerClosed";
-const bannerClosed = () => {
-  try {
-    return localStorage.getItem(BANNER_KEY) === "1";
-  } catch {
-    return false;
-  }
-};
-const closeBanner = () => {
-  try {
-    localStorage.setItem(BANNER_KEY, "1");
-  } catch {
-    // 저장소를 못 쓰면 이번 실행에서만 닫힌다.
-  }
-};
-
-type WorkflowView = { kind: "list" } | { kind: "editor"; id: string | null } | { kind: "run"; id: string };
-
+/** 창이 한 번이라도 보이기 전(로그인 시 숨은 채 자동 시작)엔 아무것도 그리지 않는다
+ *  — 화면마다 막지 않고 여기 한 곳에서, 키체인 허용 창이 뜰 수 있는 첫 조회를 미룬다. */
 export default function App() {
+  const [shown, setShown] = useState(() => document.visibilityState === "visible");
+  useEffect(() => {
+    if (shown) return;
+    const on = () => {
+      if (document.visibilityState === "visible") setShown(true);
+    };
+    document.addEventListener("visibilitychange", on);
+    return () => document.removeEventListener("visibilitychange", on);
+  }, [shown]);
+  return shown ? <AppBody /> : null;
+}
+
+function AppBody() {
   const lang = useSettings((s) => s.lang);
   const loadSettings = useSettings((s) => s.load);
-  const [tab, setTab] = useState<Tab>("workflows");
-  const [view, setView] = useState<WorkflowView>({ kind: "list" });
+  const [view, setView] = useState<View>({ page: "dashboard" });
+  const [back, setBack] = useState<View>({ page: "dashboard" });
   const account = useWeb((s) => s.account);
+  // 로그아웃하면 다음 로그인은 대시보드에서 시작한다.
+  const [lastAccount, setLastAccount] = useState(account);
+  // 계정 권하기 띠 대기열(아래 설명).
+  const [suggests, setSuggests] = useState<Suggestion[]>([]);
+  if (account !== lastAccount) {
+    setLastAccount(account);
+    if (!account) setView({ page: "dashboard" });
+    // 다른 이음 계정(또는 로그아웃) — 이전 계정 때 받은 제안은 버린다.
+    if (account?.email !== lastAccount?.email || account?.serverUrl !== lastAccount?.serverUrl) setSuggests([]);
+  }
   const loadAccount = useWeb((s) => s.load);
-  const autostart = useSettings((s) => s.settings?.autostart ?? false);
-  const [banner, setBanner] = useState(() => !bannerClosed());
+  const expired = useWeb((s) => s.expired);
+  const relogin = useWeb((s) => s.relogin);
+  const setRelogin = useWeb((s) => s.setRelogin);
+  const guard = useWeb((s) => s.guard);
+  const [ready, setReady] = useState(false);
+  const [version, setVersion] = useState("");
+  const local = useWorkflows((s) => s.list);
+  const loadLocal = useWorkflows((s) => s.load);
+  const [web, setWeb] = useState<WebWorkflowSummary[]>([]);
+  const pendingFinish = usePendingFinish((s) => s.pending);
+  const refreshPending = usePendingFinish((s) => s.refresh);
 
   useEffect(() => {
-    void loadSettings();
-    void loadAccount();
+    // 설정·계정 응답 전엔 아무것도 그리지 않는다 — 관문·온보딩이 잠깐 깜빡이지 않게.
+    void Promise.allSettled([loadSettings(), loadAccount()]).then(() => setReady(true));
     subscribeExecEvents();
+    getVersion().then(setVersion, () => {});
   }, [loadSettings, loadAccount]);
 
-  // 로그아웃·로그인 만료(`AUTH_EXPIRED`)면 설정의 계정 칸(로그인 화면)으로.
+  // 관문을 지나면(로그인한 계정의) 최근 작업을 읽는다. 웹 몫은 못 불러오면 내 PC만.
+  // 만료돼도 앱은 그대로 쓴다 — 관문은 [다시 로그인]을 눌렀을 때만(설정 이음 계정·대시보드).
+  const gated = account === null || (expired && relogin);
+  const onboarding = useSettings((s) => s.settings?.onboardingDone === false);
   useEffect(() => {
-    if (!account && tab === "web") setTab("settings");
-  }, [account, tab]);
+    if (gated) return setWeb([]);
+    // 앱을 다시 켜도 "확인 필요" 표시가 남게, 처음 읽은 목록마다 확인 대기를 한 번 묻는다.
+    void loadLocal().then(() => useWorkflows.getState().list.forEach((w) => void refreshPending(w.id)));
+    guard(api.webListWorkflows()).then(setWeb, () => setWeb([]));
+  }, [gated, guard, loadLocal, refreshPending]);
 
-  const toList = () => setView({ kind: "list" });
-  const openEditor = (id: string | null) => setView({ kind: "editor", id });
-  const openRuns = (id: string) => setView({ kind: "run", id });
+  // 빌더가 보내는 일: 완료 확인 대기·워크플로우 변경·테스트 되돌리기 실패.
+  // 시스템 알림은 화면이 묻고 Rust가 정한다 — 어느 화면인지는 여기만 알고, 창이 앞인지는 Rust만 믿을 수 있다.
+  // 편집기가 지금 보여 주는 워크플로우 id("" = 편집기가 없거나 아직 저장 전). 새 캔버스는 view.editor가 null인 채
+  // 선저장으로 id가 생기므로 view로는 알 수 없다.
+  const editorId = useRef("");
+  const onEditorId = useCallback((id: string) => void (editorId.current = id), []);
+  useEffect(() => {
+    if (gated) return;
+    const onScreen = (id: string) => editorId.current === id;
+    const subs = [
+      api.onFinishPending((p) => {
+        void refreshPending(p.id);
+        api.finishNotice(p.id, onScreen(p.id)).catch(() => {});
+      }),
+      api.onWorkflowChanged((p) => {
+        void loadLocal();
+        void refreshPending(p.id);
+      }),
+      api.onTestUndoFailed((p) => {
+        api.undoFailedNotice(p.id, onScreen(p.id)).catch(() => {});
+      }),
+    ];
+    return () => subs.forEach((s) => void s.then((f) => f(), () => {}));
+  }, [gated, loadLocal, refreshPending]);
+
+  const toList = () => setView({ page: "local" });
+  const openEditor = (id: string | null) => setView({ page: "local", editor: id });
+  const openRuns = (id: string) => setView({ page: "local", run: id });
 
   // 편집기에 저장 안 한 변경이 있으면 떠나기 전에 앱 안에서 묻는다.
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState<(() => void) | null>(null);
-  const leave = (go: () => void) => (dirty ? setPending(() => go) : go());
+  // 설정 확인 창에서 끄면 묻지 않고 버리고 나간다.
+  const askDiscard = useSettings((s) => s.settings?.confirmDiscardUnsaved !== false);
+  const leave = (go: () => void) => (dirty && askDiscard ? setPending(() => go) : go());
+  const newCanvas = () => leave(() => openEditor(null));
+
+  // 기본 계정 한도 도달 → 다른 계정 권하기 띠. Rust는 보낸 제안을 대기 칸에도 넣으므로
+  // 마운트·창이 다시 앞에 올 때·알림 클릭 때 꺼내 오고, 이벤트로 띄울 때도 대기 칸을 비운다.
+  // "나중에"는 띠만 닫는다 — 같은 제안을 다시 띄우지 않는 건 Rust가 기억한다.
+  // 회사별로 하나씩 줄 세워 앞의 것부터 보인다. 같은 회사 제안이 다시 오면 그 자리를 바꾼다.
+  const creds = useCredentials((c) => c.view);
+  const addSuggests = (list: Suggestion[]) =>
+    setSuggests((q) => {
+      const next = q.map((x) => list.find((s) => s.company === x.company) ?? x);
+      return [...next, ...list.filter((s) => !q.some((x) => x.company === s.company))];
+    });
+  const takeSuggest = () => void api.takeAccountSuggestion().then(addSuggests, () => {});
+  useEffect(() => {
+    const un = api
+      .onAccountSuggest((s) => {
+        addSuggests([s]);
+        takeSuggest();
+      })
+      .catch(() => () => {});
+    takeSuggest();
+    window.addEventListener("focus", takeSuggest);
+    return () => {
+      void un.then((f) => f());
+      window.removeEventListener("focus", takeSuggest);
+    };
+  }, []);
+
+  // 시스템 알림 클릭 → 그 실행 상세(대시보드와 같은 기록 화면)·실행 기록·그 워크플로우의 편집 화면·계정 권하기 띠.
+  useEffect(() => {
+    const un = api.onOpenTarget((t) => {
+      if (t.kind === "suggest") return takeSuggest();
+      // 이미 그 편집 화면이면 그대로 둔다 — 다시 마운트하면 터미널 세션 자리가 사라진다.
+      if (t.kind === "workflow" && editorId.current === t.id) return;
+      const go = () =>
+        setView(t.kind === "workflow" ? { page: "local", editor: t.id } : t.kind === "run" ? { page: "history", run: t.runId } : { page: "history" });
+      if (dirty && askDiscard) setPending(() => go);
+      else go();
+    });
+    return () => void un.then((f) => f(), () => {});
+  }, [dirty, askDiscard]);
+
+  const [collapsed, toggleSidebar] = useSidebarCollapsed();
+  const [searching, setSearching] = useState(false);
+
+  // ⌘N = 새 캔버스, ⌘K = 찾기
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (gated || onboarding || !(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "n" || k === "k") e.preventDefault();
+      if (k === "n") newCanvas();
+      if (k === "k") setSearching(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  const navigate = (page: Page) =>
+    leave(() => {
+      if (page === "settings") setBack(view);
+      setView({ page });
+    });
+
+  // 상태 줄 팝오버 → 설정 AI 제공자. 설정 안에서 누르면 돌아갈 곳은 그대로.
+  const openAiSettings = () =>
+    leave(() => {
+      if (view.page !== "settings") setBack(view);
+      setView({ page: "settings", section: "ai" });
+    });
+  // 상태 줄 팝오버 → 설정 › 통계 및 사용량.
+  const openUsage = () =>
+    leave(() => {
+      if (view.page !== "settings") setBack(view);
+      setView({ page: "settings", section: "usage" });
+    });
+
+  if (!ready) return null;
+
+  // 관문: 로그인 전이거나 만료 뒤 다시 로그인할 때(이메일을 채우고 취소로 돌아갈 수 있다).
+  if (gated)
+    return (
+      <div key={lang} className="h-full">
+        <AuthScreen key={account?.email ?? ""} initialEmail={account?.email} onCancel={account ? () => setRelogin(false) : undefined} />
+      </div>
+    );
+
+  // 관문 다음 첫 실행 온보딩 — 기기 단위(계정과 무관). [시작하기] 저장 뒤 설정을 다시 읽으면 닫힌다.
+  if (onboarding)
+    return (
+      <div key={lang} className="h-full">
+        <Onboarding onDone={() => void loadSettings()} />
+      </div>
+    );
+
+  const searchDialog = (
+    <SearchDialog
+      open={searching}
+      onClose={() => setSearching(false)}
+      onPick={(p) => leave(() => (p.kind === "local" ? openEditor(p.id) : setView({ page: "web", workflow: p.id })))}
+    />
+  );
+
+  // 본문 열 맨 위(머리줄 아래) — 창 맨 위에 두면 신호등과 겹치고 끌어 옮길 수 없다.
+  // 지금 자격 목록에 없는 계정(이음 계정이 바뀌었거나 지운 계정)을 권하는 제안은 띄우지 않는다.
+  const suggest =suggests.find((s) => accountsOf(creds, s.company).some((m) => m.id === s.toId)) ?? null;
+  const suggestBanner = <SuggestBanner s={suggest} onClose={() => setSuggests((q) => q.filter((x) => x !== suggest))} />;
+
+  // 설정은 셸 사이드바 대신 설정 전용 사이드바(창 신호등 자리 포함). 머리줄은 본문 위.
+  if (view.page === "settings")
+    return (
+      <div key={lang} className="flex h-full flex-col">
+        <SettingsShell
+          key={"section" in view ? view.section : ""}
+          onBack={() => setView(back)}
+          version={version}
+          initial={"section" in view ? view.section : undefined}
+          header={
+            <>
+              <Header
+                crumb={t("nav.settings")}
+                email={account?.email ?? null}
+                onSearch={() => setSearching(true)}
+                onOpenRun={(run) => setView({ page: "history", run })}
+              />
+              {suggestBanner}
+            </>
+          }
+        />
+        <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
+        {searchDialog}
+        <UpdateToast />
+      </div>
+    );
 
   return (
     // 언어가 바뀌면 화면 전체를 다시 그린다.
-    <div key={lang} className="flex h-full">
-      <nav className="flex w-52 shrink-0 flex-col gap-1 border-r border-neutral-200 bg-white p-3">
-        <span className="px-3 pb-4 pt-2 typo-title2_bold text-main-blue">{t("app.name")}</span>
-        {TABS.filter(({ id }) => id !== "web" || account).map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() =>
-              leave(() => {
-                setTab(id);
-                if (id === "workflows") toList();
-              })
-            }
-            className={`flex items-center gap-2 rounded-brand-sm px-3 py-2 text-left typo-body2_semibold ${
-              tab === id ? "bg-main-light-blue text-main-deep-blue" : "text-neutral-600 hover:bg-neutral-100"
-            }`}
-            aria-current={tab === id ? "page" : undefined}
-          >
-            <Icon size={18} aria-hidden="true" />
-            {t(label)}
-          </button>
-        ))}
-      </nav>
-      <main className="flex min-w-0 flex-1 flex-col">
-        {banner && autostart && (
-          <div role="status" className="flex items-center gap-3 border-b border-main-light-blue bg-main-light-blue px-4 py-2 typo-body3_semibold text-main-deep-blue">
-            <span className="min-w-0 flex-1">{t("banner.autostart")}</span>
-            <button
-              type="button"
-              className="rounded-brand-sm p-1 hover:bg-white/60"
-              aria-label={t("banner.close")}
-              onClick={() => {
-                closeBanner();
-                setBanner(false);
-              }}
-            >
-              <X size={16} aria-hidden="true" />
-            </button>
-          </div>
+    <div key={lang} className="flex h-full flex-col">
+      <div className="flex min-h-0 flex-1">
+        {!collapsed && (
+          <Sidebar
+            current={view.page}
+            onNavigate={navigate}
+            onNewCanvas={newCanvas}
+            onSearch={() => setSearching(true)}
+            onCollapse={toggleSidebar}
+            recent={recentItems(local, web, pendingFinish)}
+            onOpenRecent={(r) => leave(() => (r.kind === "local" ? openEditor(r.id) : setView({ page: "web", workflow: r.id })))}
+            version={version}
+          />
         )}
-        {pending && (
-          <div role="alert" className="flex items-center gap-3 border-b border-danger-300 bg-danger-100 px-4 py-2 typo-body3_semibold text-danger-700">
-            <span className="min-w-0 flex-1">{t("common.unsavedLeave")}</span>
-            <button type="button" className={BUTTON} onClick={() => setPending(null)}>
-              {t("common.cancel")}
-            </button>
-            <button
-              type="button"
-              className={PRIMARY}
-              onClick={() => {
-                setPending(null);
-                pending();
-              }}
-            >
-              {t("common.discard")}
-            </button>
-          </div>
-        )}
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {tab === "settings" ? (
-            <Settings />
-          ) : tab === "web" ? (
-            <Web />
-          ) : tab === "history" ? (
-            <History />
-          ) : view.kind === "editor" ? (
-            <Editor
-              key={view.id ?? "new"}
-              id={view.id}
-              onBack={() => leave(toList)}
-              onOpenRuns={(id) => leave(() => openRuns(id))}
-              onDirty={setDirty}
-            />
-          ) : view.kind === "run" ? (
-            <RunView workflowId={view.id} onBack={toList} onEdit={openEditor} />
-          ) : (
-            <WorkflowList onOpen={openEditor} onOpenRuns={openRuns} />
-          )}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Header
+            crumb={t(NAV.find((n) => n.page === view.page)!.label)}
+            email={account?.email ?? null}
+            onSearch={() => setSearching(true)}
+            onOpenRun={(run) => leave(() => setView({ page: "history", run }))}
+            inset={collapsed}
+            onExpand={collapsed ? toggleSidebar : undefined}
+          />
+          <main className="flex min-h-0 flex-1 flex-col bg-neutral-50 text-neutral-800">
+            {suggestBanner}
+            {pending && (
+              <div role="alert" className="flex items-center gap-3 border-b border-danger-300 bg-danger-100 px-4 py-2 typo-body3_semibold text-danger-700">
+                <span className="min-w-0 flex-1">{t("common.unsavedLeave")}</span>
+                <button type="button" className={BUTTON} onClick={() => setPending(null)}>
+                  {t("common.cancel")}
+                </button>
+                <button
+                  type="button"
+                  className={PRIMARY}
+                  onClick={() => {
+                    setPending(null);
+                    pending();
+                  }}
+                >
+                  {t("common.discard")}
+                </button>
+              </div>
+            )}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {view.page === "dashboard" ? (
+                <Dashboard onOpenRun={(run) => setView({ page: "history", run })} onUsage={openUsage} onAccounts={openAiSettings} />
+              ) : view.page === "web" ? (
+                <Web workflow={"workflow" in view ? view.workflow : undefined} onOpen={(id) => setView(id ? { page: "web", workflow: id } : { page: "web" })} />
+              ) : view.page === "history" ? (
+                <History key={"run" in view ? view.run : ""} initialRun={"run" in view ? view.run : null} />
+              ) : "editor" in view ? (
+                <Editor
+                  key={view.editor ?? "new"}
+                  id={view.editor}
+                  onBack={() => leave(toList)}
+                  onOpenRuns={(id) => leave(() => openRuns(id))}
+                  onDirty={setDirty}
+                  onIdChange={onEditorId}
+                />
+              ) : "run" in view ? (
+                <RunView workflowId={view.run} onBack={toList} onEdit={openEditor} />
+              ) : (
+                <WorkflowList onOpen={openEditor} />
+              )}
+            </div>
+          </main>
         </div>
-      </main>
+      </div>
+      <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
+      {searchDialog}
+      <UpdateToast />
     </div>
   );
 }

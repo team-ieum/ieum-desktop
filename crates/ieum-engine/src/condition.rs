@@ -114,7 +114,10 @@ struct Setup<'a> {
 }
 
 fn fail<T>(message: String) -> Result<T, NodeError> {
-    Err(NodeError { message })
+    Err(NodeError {
+        message,
+        code: None,
+    })
 }
 
 /// 설정 오류는 `Err`(노드 실패), 값을 못 읽은 조건은 거짓 + 경고.

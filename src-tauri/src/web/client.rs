@@ -1,4 +1,5 @@
-//! BE 클라이언트. 리다이렉트 끔·응답 1MB·15초 상한. GET 외 메서드는 로그인·갱신·로그아웃뿐.
+//! BE 클라이언트. 리다이렉트 끔·응답 1MB·15초 상한. GET 외 메서드는 로그인·갱신·로그아웃과
+//! 가입(인증번호 발송·확인·가입, `post_public`)뿐.
 //! 에러에는 토큰·비밀번호는 물론 서버가 보낸 메시지도 넣지 않는다(받은 값을 되돌려 줄 수 있어서).
 
 use std::fmt;
@@ -24,10 +25,20 @@ pub const STREAM_CONNECT: Duration = Duration::from_secs(10);
 /// 401이어도 이음 세션 만료가 아니라 외부 연동(OAuth) 만료인 BE `ErrorCode` — 세션을 지우지 않는다.
 const EXTERNAL_401: &[&str] = &["CREDENTIAL_EXPIRED", "AUTHENTICATION_REQUIRED"];
 
+/// 인증번호가 틀렸거나 쓸 수 없는 BE `ErrorCode`(400) → `CodeInvalid`.
+/// 같은 계열의 `VERIFICATION_RESEND_TOO_SOON`·`VERIFICATION_BLOCKED`는 429라 `AuthLocked`.
+const CODE_ERRORS: &[&str] = &[
+    "VERIFICATION_CODE_INVALID",
+    "VERIFICATION_CODE_EXPIRED",
+    "VERIFICATION_ATTEMPTS_EXCEEDED",
+    "EMAIL_NOT_VERIFIED",
+];
+
 /// 동시에 여러 요청이 401을 받아도 갱신은 한 번만(갱신 토큰이 회전돼도 서로 지우지 않게).
 static REFRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// 화면용 에러 코드 `AUTH_FAILED`·`AUTH_LOCKED`·`AUTH_EXPIRED`·`EXTERNAL_EXPIRED`·`NETWORK`·`SERVER`.
+/// 화면용 에러 코드 `AUTH_FAILED`·`AUTH_LOCKED`·`AUTH_EXPIRED`·`EXTERNAL_EXPIRED`·`NETWORK`·`SERVER`,
+/// 가입용 `EMAIL_TAKEN`·`CODE_INVALID`·`BAD_INPUT`.
 /// 직렬화 = `{code, message?}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "code", content = "message", rename_all = "SCREAMING_SNAKE_CASE")]
@@ -39,6 +50,11 @@ pub enum WebError {
     ExternalExpired,
     Network(String),
     Server(String),
+    EmailTaken,
+    /// 인증번호가 틀렸거나 만료·횟수 초과, 또는 인증 전 가입.
+    CodeInvalid,
+    /// 그 밖의 입력 거절(4xx).
+    BadInput,
 }
 
 impl WebError {
@@ -50,6 +66,9 @@ impl WebError {
             WebError::ExternalExpired => "EXTERNAL_EXPIRED",
             WebError::Network(_) => "NETWORK",
             WebError::Server(_) => "SERVER",
+            WebError::EmailTaken => "EMAIL_TAKEN",
+            WebError::CodeInvalid => "CODE_INVALID",
+            WebError::BadInput => "BAD_INPUT",
         }
     }
 }
@@ -67,6 +86,9 @@ impl fmt::Display for WebError {
             }
             WebError::Network(m) => write!(f, "서버에 연결하지 못했어요: {m}"),
             WebError::Server(m) => write!(f, "서버 오류: {m}"),
+            WebError::EmailTaken => f.write_str("이미 가입된 이메일이에요."),
+            WebError::CodeInvalid => f.write_str("인증번호가 맞지 않거나 만료됐어요."),
+            WebError::BadInput => f.write_str("입력한 내용을 다시 확인해 주세요."),
         }
     }
 }
@@ -135,18 +157,20 @@ async fn data<T: DeserializeOwned>(r: Response) -> Result<T, WebError> {
         .ok_or_else(|| WebError::Server("응답에 data가 없어요.".into()))
 }
 
-/// 401 응답이 외부 연동 만료(`EXTERNAL_401`)인가. BE 래퍼의 `code`만 본다.
-async fn external_401(r: Response) -> bool {
+/// 실패 응답 BE 래퍼의 `code`(`message`는 보지 않는다).
+async fn be_code(r: Response) -> Option<String> {
     #[derive(Deserialize)]
     struct Code {
         code: Option<String>,
     }
-    let Ok(body) = read_body(r).await else {
-        return false;
-    };
-    serde_json::from_slice::<Code>(&body)
-        .ok()
-        .and_then(|c| c.code)
+    let body = read_body(r).await.ok()?;
+    serde_json::from_slice::<Code>(&body).ok()?.code
+}
+
+/// 401 응답이 외부 연동 만료(`EXTERNAL_401`)인가.
+async fn external_401(r: Response) -> bool {
+    be_code(r)
+        .await
         .is_some_and(|c| EXTERNAL_401.contains(&c.as_str()))
 }
 
@@ -243,6 +267,29 @@ impl BeClient {
                 .await;
         }
         end_session(self.keys.as_ref(), &self.base).map_err(WebError::Server)
+    }
+
+    /// 인증 헤더 없는 POST(가입용). 2xx면 본문을 보지 않는다.
+    /// 429 → `AuthLocked`, 5xx 등 → `Server`, 4xx는 BE `code`로 `EmailTaken`·`CodeInvalid`·`BadInput`.
+    pub(crate) async fn post_public(&self, path: &str, body: Value) -> Result<(), WebError> {
+        let r = self
+            .send(&self.http, Method::POST, path, None, Some(body))
+            .await?;
+        let status = r.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            return Err(WebError::AuthLocked);
+        }
+        if !status.is_client_error() {
+            return Err(WebError::Server(format!("HTTP {}", status.as_u16())));
+        }
+        Err(match be_code(r).await.as_deref() {
+            Some("EMAIL_ALREADY_EXISTS") => WebError::EmailTaken,
+            Some(c) if CODE_ERRORS.contains(&c) => WebError::CodeInvalid,
+            _ => WebError::BadInput,
+        })
     }
 
     /// `path`는 `/`로 시작(`/api/v1/...`). 401 규칙은 `authed`.

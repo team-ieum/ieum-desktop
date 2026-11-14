@@ -4,8 +4,11 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use ieum_engine::{RunResult, RunStatus, Workflow};
+use ieum_local::ai::AiUsage;
+use ieum_local::builder::{ChatFile, UsageEntry};
 use ieum_local::{FileOp, UndoReport};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -36,6 +39,27 @@ pub struct StoredRun {
     /// 그 실행의 `roots_for_workflow` 결과(실제 경로).
     pub allowed_roots: Vec<PathBuf>,
     pub undo: Option<UndoReport>,
+    /// 옛 기록에는 없다.
+    #[serde(default)]
+    pub trigger: Option<RunTrigger>,
+}
+
+/// 채팅 패널의 AI 호출 한 건(채팅 파일의 `usage` 항목 + 어느 워크플로우의 채팅인지).
+#[derive(Debug, Clone)]
+pub struct ChatUsage {
+    pub workflow_id: String,
+    pub at: String,
+    pub usage: AiUsage,
+}
+
+/// 폴더 감시로 돌았는지, 지금 실행(수동)인지, 채팅 빌더의 노드 테스트인지.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RunTrigger {
+    Watch,
+    Manual,
+    /// 끝나면 바로 되돌린다. 대시보드 실행 건수·알림에서 뺀다.
+    Test,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,6 +72,7 @@ pub struct RunSummary {
     pub finished_at: String,
     pub file_ops: usize,
     pub undone: bool,
+    pub trigger: Option<RunTrigger>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,9 +89,25 @@ pub enum Language {
 pub struct Settings {
     pub language: Language,
     pub autostart: bool,
+    /// 옛 설정 호환용으로만 남긴다(안 씀).
     pub first_run_done: bool,
+    /// 온보딩을 끝냈는가(기기 단위). 옛 설정엔 없어 false.
+    pub onboarding_done: bool,
+    /// 내 PC 실행 시스템 알림 토글. 옛 설정엔 없어 `Default`의 true.
+    pub notify_manual_start: bool,
+    pub notify_manual_end: bool,
+    pub notify_watch_end: bool,
+    /// 구독 한도 도달 시 다른 계정 권하기(띠·시스템 알림). 옛 설정엔 없어 `Default`의 true.
+    pub notify_account_suggest: bool,
     /// 이음 BE 주소. 바꾸면 세션을 지운다(`web::save_settings`).
     pub server_url: String,
+    /// 로그인된(마지막 활성) 계정. 없으면 로그인 관문.
+    pub current_account: Option<crate::account::AccountId>,
+    /// 알림을 마지막으로 연 시각(RFC3339). 빈 문자열 = 한 번도 안 열어 봄.
+    pub notifications_seen_at: String,
+    /// 확인 창 토글. 옛 설정엔 없어 `Default`의 true.
+    pub confirm_delete_workflow: bool,
+    pub confirm_discard_unsaved: bool,
 }
 
 pub const DEFAULT_SERVER_URL: &str = "https://green.kiacms.co.kr";
@@ -77,7 +118,16 @@ impl Default for Settings {
             language: Language::default(),
             autostart: false,
             first_run_done: false,
+            onboarding_done: false,
+            notify_manual_start: true,
+            notify_manual_end: true,
+            notify_watch_end: true,
+            notify_account_suggest: true,
             server_url: DEFAULT_SERVER_URL.into(),
+            current_account: None,
+            notifications_seen_at: String::new(),
+            confirm_delete_workflow: true,
+            confirm_discard_unsaved: true,
         }
     }
 }
@@ -98,8 +148,11 @@ fn check_id(id: &str) -> Result<(), String> {
     }
 }
 
+/// 채팅 상태 파일 읽기·쓰기를 한 프로세스 안에서 차례로.
+static CHAT_LOCK: Mutex<()> = Mutex::new(());
+
 /// 임시 파일에 쓰고 rename — 쓰다 죽어도 이전 파일이 남는다.
-fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
     let dir = path.parent().ok_or("저장 경로가 잘못됐어요.")?;
     fs::create_dir_all(dir).map_err(err)?;
@@ -119,6 +172,11 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
 
 /// 폴더 안 `<uuid>.json`들을 읽는다. 없는 폴더는 빈 목록, 깨진 파일은 건너뛴다.
 fn read_all<T: DeserializeOwned>(dir: &Path) -> Result<Vec<T>, String> {
+    Ok(read_named(dir)?.into_iter().map(|(_, v)| v).collect())
+}
+
+/// `read_all`과 같되 파일 이름의 id도 같이 준다.
+fn read_named<T: DeserializeOwned>(dir: &Path) -> Result<Vec<(String, T)>, String> {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -126,16 +184,14 @@ fn read_all<T: DeserializeOwned>(dir: &Path) -> Result<Vec<T>, String> {
     };
     Ok(entries
         .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.extension().is_some_and(|x| x == "json")
-                && p.file_stem()
-                    .and_then(|s| s.to_str())
-                    .is_some_and(|s| check_id(s).is_ok())
-        })
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .filter_map(|p| {
-            read_json(&p)
+            let id = p.file_stem()?.to_str()?.to_string();
+            check_id(&id).ok()?;
+            let value = read_json(&p)
                 .inspect_err(|e| eprintln!("[ieum] 기록을 읽지 못해 건너뜀: {e}"))
-                .ok()
+                .ok()?;
+            Some((id, value))
         })
         .collect())
 }
@@ -165,6 +221,74 @@ impl Store {
         Ok(self.root.join("runs").join(format!("{id}.json")))
     }
 
+    fn chat_path(&self, id: &str) -> Result<PathBuf, String> {
+        check_id(id)?;
+        Ok(self.root.join("chats").join(format!("{id}.json")))
+    }
+
+    /// 채팅 상태 파일(`chats/<워크플로우 id>.json`). 없으면 빈 값.
+    pub fn get_chat(&self, workflow_id: &str) -> Result<ChatFile, String> {
+        let path = self.chat_path(workflow_id)?;
+        if !path.exists() {
+            return Ok(ChatFile::default());
+        }
+        read_json(&path)
+    }
+
+    /// `CHAT_LOCK`을 잡은 채 부른다. 지워진 워크플로우에 늦게 도착한 쓰기가 고아 채팅 파일을 남기지 않게
+    /// (`delete_workflow`는 워크플로우 파일을 먼저 지우고 이 잠금 안에서 채팅 파일을 지운다).
+    fn chat_owner_exists(&self, workflow_id: &str) -> Result<(), String> {
+        if self.workflow_path(workflow_id)?.exists() {
+            Ok(())
+        } else {
+            Err(format!("없는 워크플로우예요: {workflow_id}"))
+        }
+    }
+
+    pub fn save_chat(&self, workflow_id: &str, chat: &ChatFile) -> Result<(), String> {
+        let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        self.chat_owner_exists(workflow_id)?;
+        write_atomic(&self.chat_path(workflow_id)?, chat)
+    }
+
+    /// 읽기-고치기-쓰기 한 번. 여러 곳(빌더·채팅 패널)이 같은 파일을 고치므로 늘 이걸로 고친다.
+    pub fn update_chat(
+        &self,
+        workflow_id: &str,
+        f: impl FnOnce(&mut ChatFile),
+    ) -> Result<ChatFile, String> {
+        let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        self.chat_owner_exists(workflow_id)?;
+        let mut chat = self.get_chat(workflow_id)?;
+        f(&mut chat);
+        write_atomic(&self.chat_path(workflow_id)?, &chat)?;
+        Ok(chat)
+    }
+
+    /// 지운 워크플로우의 채팅 사용량(`chat-usage/<워크플로우 id>.json`) — 대화 없이 사용량 목록만.
+    fn kept_usage_path(&self, id: &str) -> Result<PathBuf, String> {
+        check_id(id)?;
+        Ok(self.root.join("chat-usage").join(format!("{id}.json")))
+    }
+
+    /// 모든 채팅 사용량: 채팅 파일(`chats/`)과 지운 워크플로우가 남긴 것(`chat-usage/`).
+    /// 폴더가 없으면 빈 목록, 깨진 파일은 건너뛴다.
+    pub fn all_chat_usage(&self) -> Result<Vec<ChatUsage>, String> {
+        let chats: Vec<(String, ChatFile)> = read_named(&self.root.join("chats"))?;
+        let kept: Vec<(String, Vec<UsageEntry>)> = read_named(&self.root.join("chat-usage"))?;
+        let chats = chats.into_iter().map(|(id, chat)| (id, chat.usage));
+        Ok(chats
+            .chain(kept)
+            .flat_map(|(workflow_id, usage)| {
+                usage.into_iter().map(move |e| ChatUsage {
+                    workflow_id: workflow_id.clone(),
+                    at: e.at,
+                    usage: e.usage,
+                })
+            })
+            .collect())
+    }
+
     pub fn list_workflows(&self) -> Result<Vec<StoredWorkflow>, String> {
         let mut list: Vec<StoredWorkflow> = read_all(&self.root.join("workflows"))?;
         list.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
@@ -185,13 +309,28 @@ impl Store {
         Ok(wf)
     }
 
-    /// 워크플로우 정의 파일만 지운다(사용자 파일 아님).
+    /// 워크플로우 정의 파일과 그 채팅 상태 파일만 지운다(사용자 파일 아님).
+    /// 채팅의 사용량은 `chat-usage/`로 옮겨 남긴다 — 실행 기록처럼 지운 뒤에도 통계에 합산된다.
     pub fn delete_workflow(&self, id: &str) -> Result<(), String> {
         let path = self.workflow_path(id)?;
         if !path.starts_with(self.root.join("workflows")) {
             return Err("앱 데이터 폴더 밖이에요.".into());
         }
-        fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
+        fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let chat = self.chat_path(id)?;
+        let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 못 옮기면 채팅 파일을 그대로 둔다(거기서 계속 합산된다). 깨진 채팅 파일은 건질 것이 없다.
+        if let Ok(ChatFile { usage, .. }) = read_json(&chat)
+            && !usage.is_empty()
+        {
+            write_atomic(&self.kept_usage_path(id)?, &usage)?;
+        }
+        match fs::remove_file(&chat) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(format!("{}: {e}", chat.display()))
+            }
+            _ => Ok(()),
+        }
     }
 
     pub fn save_run(&self, run: &StoredRun) -> Result<(), String> {
@@ -213,10 +352,15 @@ impl Store {
         Ok(())
     }
 
+    /// 모든 실행 기록(순서 없음). 깨진 파일은 건너뛴다.
+    pub fn all_runs(&self) -> Result<Vec<StoredRun>, String> {
+        read_all(&self.root.join("runs"))
+    }
+
     /// 최근 실행부터.
     // ponytail: 매번 기록 파일을 전부 읽는다 — 기록이 수천 개가 되면 요약 색인 파일
     pub fn list_runs(&self, workflow_id: Option<&str>) -> Result<Vec<RunSummary>, String> {
-        let runs: Vec<StoredRun> = read_all(&self.root.join("runs"))?;
+        let runs = self.all_runs()?;
         let mut list: Vec<RunSummary> = runs
             .into_iter()
             .filter(|r| workflow_id.is_none_or(|w| r.workflow_id == w))
@@ -228,6 +372,7 @@ impl Store {
                 finished_at: r.finished_at,
                 file_ops: r.file_ops.len(),
                 undone: r.undo.is_some(),
+                trigger: r.trigger,
             })
             .collect();
         list.sort_by(|a, b| b.started_at.cmp(&a.started_at));
