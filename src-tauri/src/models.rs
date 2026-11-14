@@ -199,8 +199,11 @@ fn codex_models() -> Result<ModelList, String> {
     }
 }
 
+/// 다른 agy 실행과 같이 자동 업데이트를 끈다 — 목록 읽기가 업데이트로 늦어지지 않게.
+pub const AGY_MODELS_LINE: &str = "AGY_CLI_DISABLE_AUTO_UPDATE=true agy models";
+
 fn agy_models() -> Result<Vec<ModelChoice>, String> {
-    let out = shell_output("agy models", LIST_TIMEOUT).ok_or("agy 모델 목록을 읽지 못했어요")?;
+    let out = shell_output(AGY_MODELS_LINE, LIST_TIMEOUT).ok_or("agy 모델 목록을 읽지 못했어요")?;
     Ok(parse_agy(&out))
 }
 

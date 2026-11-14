@@ -1,10 +1,11 @@
 import { expect, test } from "vitest";
 import { formatDuration, formatSuccessRate, hourlySeries } from "./format";
 
-test("format_success_rate_accepts_fraction_and_percent", () => {
-  expect(formatSuccessRate(0.978)).toBe("97.8%");
+// 비율은 BE와 로컬 모두 0~100 — 1%를 100%로 짐작해 키우지 않는다.
+test("format_success_rate_takes_percent", () => {
   expect(formatSuccessRate(97.8)).toBe("97.8%");
-  expect(formatSuccessRate(1)).toBe("100.0%");
+  expect(formatSuccessRate(100)).toBe("100.0%");
+  expect(formatSuccessRate(1)).toBe("1.0%");
 });
 
 test("format_duration_units", () => {

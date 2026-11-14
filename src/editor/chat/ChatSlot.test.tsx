@@ -337,3 +337,24 @@ test("test_card_shows_values_from_run_record_not_from_turn", async () => {
   expect(within(card).getByText("/in/a.pdf")).toBeTruthy();
   expect(send).toHaveBeenCalledTimes(1); // 카드의 값은 다시 보내지 않는다
 });
+
+test("fallback_choice_does_not_send_the_old_providers_model", async () => {
+  // 저장한 OpenAI 키가 지워져 Claude로 대체 — 옛 OpenAI 모델을 Claude에 보내지 않는다.
+  useCredentials.setState({ view: { ...VIEW, apiKeys: { anthropic: [], openai: [], gemini: [] } } });
+  localStorage.setItem(AI_KEY, JSON.stringify({ value: "api:openai|k1", model: "gpt-6.1-sol", effort: "high" }));
+  await open();
+  await type("안녕");
+  await enter();
+  expect(send).toHaveBeenCalledWith("w1", "안녕", { provider: "cli:claude", credential: "system", model: null, effort: null });
+});
+
+test("saved_cli_choice_is_not_overwritten_before_clis_are_detected", async () => {
+  useCredentials.setState({ view: { ...VIEW, apiKeys: { anthropic: [], openai: [key("o1", true)], gemini: [] }, claudeAccounts: [] } });
+  vi.mocked(api.detectProviders).mockReturnValue(new Promise(() => {}));
+  const saved = JSON.stringify({ value: "cli:codex|a", model: "", effort: "" });
+  localStorage.setItem(AI_KEY, saved);
+  await open();
+  await act(async () => {}); // 모델 목록까지 끝난 뒤
+  expect(api.listModels).toHaveBeenCalled();
+  expect(localStorage.getItem(AI_KEY)).toBe(saved);
+});

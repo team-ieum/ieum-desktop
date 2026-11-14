@@ -9,7 +9,7 @@ import { Dashboard } from "./Dashboard";
 
 const now = new Date();
 const SUMMARY: WebDashboardSummary = {
-  metrics: { todayRuns: 4, percentageChange: 0, averageDurationSeconds: 3.8, successRate: 0.975 },
+  metrics: { todayRuns: 4, percentageChange: 0, averageDurationSeconds: 3.8, successRate: 97.5 },
   hourlyCounts: {},
   workflowStats: { total: 2, active: 2, inactive: 0, errored: 0, running: 0 },
 };

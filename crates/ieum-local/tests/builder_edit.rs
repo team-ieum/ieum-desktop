@@ -421,3 +421,16 @@ async fn save_failures_map_to_codes_without_leaking_text() {
     assert_eq!(r.code, Some(Code::SaveRejected));
     assert!(!r.to_line().contains("비밀"));
 }
+
+#[tokio::test]
+async fn outline_with_same_name_keeps_workflow_on() {
+    let h = MemHost::with(W, json!({"nodes": [trig()], "edges": []}));
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(
+        &b,
+        json!({"op": "outline", "args": {"name": " 정리 ", "steps": ["새 파일"]}}),
+    )
+    .await;
+    assert!(r.ok, "{r:?}");
+    assert!(h.doc(W).enabled && h.saves() == 0); // 지금 이름과 같으면 바꾸는 게 아니다
+}

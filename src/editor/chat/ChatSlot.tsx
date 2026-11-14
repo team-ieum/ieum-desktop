@@ -93,9 +93,9 @@ export function ChatSlot({
   nodeNames?: Record<string, string>;
 }) {
   const view = useCredentials((s) => s.view);
-  // 앱이 켜 두었고 설치된 구독 CLI — Codex·Antigravity 선택지를 여는 조건.
-  const [clis, setClis] = useState<string[]>([]);
-  const choices = aiChoices(view, clis);
+  // 앱이 켜 두었고 설치된 구독 CLI — Codex·Antigravity 선택지를 여는 조건. null = 아직 감지 전.
+  const [clis, setClis] = useState<string[] | null>(null);
+  const choices = aiChoices(view, clis ?? []);
   const [items, setItems] = useState<Item[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -105,13 +105,17 @@ export function ChatSlot({
   const box = useRef<HTMLTextAreaElement>(null);
   const loaded = useRef(false);
 
-  const choice = choices.find((c) => c.value === ai.value) ?? choices[0];
+  const matched = choices.find((c) => c.value === ai.value);
+  const choice = matched ?? choices[0];
+  // 저장한 선택지가 없어 대체했으면 저장한 모델·수준은 다른 공급원 것이다 — 쓰지 않는다.
+  const model = matched ? ai.model : "";
+  const aiEffort = matched ? ai.effort : "";
   const got = useModels(choice?.provider);
   const { models, failed } = got;
   // 예전 Antigravity 값(`…-high`)은 모델·수준으로 나눠 보여 준다.
-  const shown = shownModel(choice?.provider, ai.model, ai.effort);
+  const shown = shownModel(choice?.provider, model, aiEffort);
   const effort = effortLevels(choice?.provider, got, shown.model);
-  const missingModel = needsModel(choice?.provider) && !ai.model.trim();
+  const missingModel = needsModel(choice?.provider) && !model.trim();
   const ready = !!choice && !busy && !missingModel;
 
   useEffect(() => {
@@ -130,7 +134,8 @@ export function ChatSlot({
       .then(() => api.detectProviders())
       .then(
         (p) => setClis(p.clis.map((c) => c.id)),
-        () => {},
+        // 감지 실패면 구독 CLI 없이 — null로 두면 첫 모델 자동 고르기가 영영 안 돈다.
+        () => setClis([]),
       );
   }, [visible, workflowId]);
 
@@ -169,9 +174,10 @@ export function ChatSlot({
   };
 
   // OpenAI는 기본 모델이 없다 — 비어 있으면 목록 첫 모델을 골라 둔다.
+  // CLI 감지 전에는 고르지 않는다 — 저장한 Codex·Antigravity 선택을 대체 선택지로 덮어쓰게 된다.
   useEffect(() => {
-    if (choice && missingModel && models?.length) pickAi({ value: choice.value, model: models[0].id, effort: "" });
-  }, [choice?.value, missingModel, models]);
+    if (clis !== null && choice && missingModel && models?.length) pickAi({ value: choice.value, model: models[0].id, effort: "" });
+  }, [clis, choice?.value, missingModel, models]);
 
   const send = async (message: string) => {
     const said = message.trim();
@@ -183,8 +189,8 @@ export function ChatSlot({
       const turn = await api.chatSend(workflowId, said, {
         provider: choice.provider,
         credential: choice.credential || null,
-        model: ai.model.trim() || null,
-        effort: ai.effort || null,
+        model: model.trim() || null,
+        effort: aiEffort || null,
       });
       setItems((now) => [
         ...now,

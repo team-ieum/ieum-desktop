@@ -442,3 +442,21 @@ async fn ai_default_follows_order_and_ready_needs_a_key() {
         "api:anthropic"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ai_default_skips_cli_without_a_default_account() {
+    // Claude CLI는 깔렸지만 이 Mac 로그인을 숨겨 계정이 하나도 없다 — 연결된 Anthropic 키로 넘어간다.
+    let env = env_with_providers(&["cli:claude", "api:anthropic"]);
+    env.creds.set_system_hidden("claude", true).unwrap();
+    let anth = env
+        .creds
+        .add_api_key("anthropic", "개인", "sk-ant-000000005678")
+        .unwrap();
+    let host = AppHost::new(env.sup.clone(), env.creds.clone(), no_pick())
+        .with_clis(Arc::new(|| vec!["cli:claude".into()]));
+    let d = host.ai_default().await.unwrap();
+    assert_eq!(
+        (d.provider.as_str(), d.credential.as_deref()),
+        ("api:anthropic", Some(anth.id.as_str()))
+    );
+}

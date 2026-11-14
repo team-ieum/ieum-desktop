@@ -185,8 +185,8 @@ async fn confirm_rejects_after_change() {
             .insert("destination".into(), "다른곳".into());
     });
     assert!(b.pending(W).is_none());
-    assert!(h.load_chat(W).unwrap().state.pending_finish.is_none());
     assert_eq!(b.confirm_finish(W, true).await.code, Some(Code::NotReady));
+    assert!(h.load_chat(W).unwrap().state.pending_finish.is_none()); // 낡은 대기는 confirm이 지운다
     assert!(!h.doc(W).enabled);
 }
 
@@ -243,4 +243,27 @@ async fn guide_is_fixed_text() {
     ] {
         assert!(GUIDE.contains(must), "{must}");
     }
+}
+
+/// pending()의 두 읽기 사이에 빌더가 고치고(D2) 다시 finish(P2)해도 P2를 지우지 않는다.
+#[tokio::test]
+async fn pending_does_not_clear_a_newer_pending() {
+    let Env { h, b, .. } = &setup();
+    h.on_load(|h| {
+        h.put_doc(W, |d| {
+            d.workflow.nodes[2]
+                .config
+                .insert("destination".into(), "다른곳".into());
+        });
+        let p2 = PendingFinish {
+            hash: workflow_hash(&h.doc(W).workflow),
+            folder: String::new(),
+            actions: Vec::new(),
+            ai: Vec::new(),
+        };
+        h.update_chat(W, &mut |c| c.state.pending_finish = Some(p2.clone()))
+            .unwrap();
+    });
+    assert!(b.pending(W).is_none()); // 읽은 저장본(D1)과는 다르다
+    assert!(b.pending(W).is_some()); // P2는 그대로
 }

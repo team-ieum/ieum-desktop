@@ -1,6 +1,8 @@
 //! 모델 드롭다운 목록 — 가격표·codex·agy 출력 읽기, 모델별 추론 수준.
 
-use ieum_desktop_lib::models::{ModelChoice, list, parse_agy, parse_codex, priced};
+use ieum_desktop_lib::models::{
+    AGY_MODELS_LINE, ModelChoice, list, parse_agy, parse_codex, priced,
+};
 
 fn ids(v: &[ModelChoice]) -> Vec<&str> {
     v.iter().map(|m| m.id.as_str()).collect()
@@ -161,4 +163,10 @@ fn agy_groups_effort_suffixes_and_skips_the_banner() {
             },
         ]
     );
+}
+
+#[test]
+fn agy_models_line_turns_off_auto_update() {
+    // 다른 agy 경로와 같다 — 목록 읽기가 자동 업데이트를 부르지 않게.
+    assert!(AGY_MODELS_LINE.contains("AGY_CLI_DISABLE_AUTO_UPDATE=true"));
 }

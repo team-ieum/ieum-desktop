@@ -84,3 +84,18 @@ test("card_keeps_showing_reason_when_turn_on_is_refused", async () => {
   expect(screen.getByRole("alert").textContent).toContain("워크플로우가 방금 바뀌었음");
   expect(render(<FinishCard workflowId="" version="" />).container.querySelector("[role=dialog]")).toBeNull();
 });
+
+test("refusal_reason_stays_even_when_pending_is_cleared", async () => {
+  // 켜기를 거절해도 백엔드는 대기를 지운다 — 카드가 사라져도 이유는 보여야 한다.
+  const pend = vi.spyOn(api, "pendingFinish").mockResolvedValue(P);
+  vi.spyOn(api, "confirmFinish").mockImplementation(async () => {
+    pend.mockResolvedValue(null);
+    return { ok: false, code: "NOT_READY", message: "아직 켤 수 없음" };
+  });
+  const r = await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "켜기" })));
+  expect(screen.getByRole("alert").textContent).toContain("아직 켤 수 없음");
+  // 워크플로우가 바뀌면 지난 이유는 지운다.
+  await act(async () => r.rerender(<FinishCard workflowId="w1" version="v2" />));
+  expect(screen.queryByRole("alert")).toBeNull();
+});

@@ -158,14 +158,11 @@ impl Builder {
         Ok(json!({"status": "awaiting_user"}))
     }
 
-    /// 저장본과 hash가 같은 확인 대기. 달라졌으면 지우고 None.
+    /// 저장본과 hash가 같은 확인 대기. 달라졌으면 None — 지우지는 않는다(읽기만).
+    /// 잠금 없이 불리는 `pending()`이 두 읽기 사이에 생긴 새 대기를 지우지 않게. 낡은 대기는 commit·confirm이 지운다.
     pub(super) fn pending_of(&self, id: &str, doc: &Doc) -> Option<PendingFinish> {
         let pending = self.host.load_chat(id).ok()?.state.pending_finish?;
-        if pending.hash == workflow_hash(&doc.workflow) {
-            return Some(pending);
-        }
-        self.update_chat(id, |s| s.pending_finish = None).ok();
-        None
+        (pending.hash == workflow_hash(&doc.workflow)).then_some(pending)
     }
 
     /// 사람의 [켜기]/[아직]. 잠금은 호출자(`confirm_finish`)가 잡는다.

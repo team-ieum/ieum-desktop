@@ -316,21 +316,35 @@ impl Store {
         if !path.starts_with(self.root.join("workflows")) {
             return Err("앱 데이터 폴더 밖이에요.".into());
         }
-        fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        // 워크플로우 파일은 맨 끝에 지운다 — 앞에서 실패하면 그대로 남아 다시 지울 수 있다.
         let chat = self.chat_path(id)?;
+        let kept = self.kept_usage_path(id)?;
         let _g = CHAT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // 못 옮기면 채팅 파일을 그대로 둔다(거기서 계속 합산된다). 깨진 채팅 파일은 건질 것이 없다.
+        // 앞선 삭제가 끝에서 실패해 남은 사본이 있으면 이어 붙인다(덮으면 그 사용량이 사라진다).
+        let before: Option<Vec<_>> = read_json(&kept).ok();
+        let mut moved = false;
         if let Ok(ChatFile { usage, .. }) = read_json(&chat)
             && !usage.is_empty()
         {
-            write_atomic(&self.kept_usage_path(id)?, &usage)?;
+            let mut all = before.clone().unwrap_or_default();
+            all.extend(usage);
+            write_atomic(&kept, &all)?;
+            moved = true;
         }
-        match fs::remove_file(&chat) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                Err(format!("{}: {e}", chat.display()))
+        if let Err(e) = fs::remove_file(&chat)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            // 채팅 파일이 남으면 사본을 이전 상태로 되돌린다 — 둘 다 남으면 사용량을 두 번 센다.
+            if moved {
+                let _ = match &before {
+                    Some(prev) => write_atomic(&kept, prev),
+                    None => fs::remove_file(&kept).map_err(|e| e.to_string()),
+                };
             }
-            _ => Ok(()),
+            return Err(format!("{}: {e}", chat.display()));
         }
+        fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
     pub fn save_run(&self, run: &StoredRun) -> Result<(), String> {

@@ -1,9 +1,6 @@
 // 웹 WEB/utils/dashboard/mapWorkflowDashboardSummary.ts 이식.
 import { locale } from "../i18n";
 
-/** BE 비율은 0~1일 때도, 0~100일 때도 있다. */
-export const toPercent = (v: number) => (Math.abs(v) <= 1 ? v * 100 : v);
-
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "—";
   if (seconds < 1) return `${Math.round(seconds * 1000)}ms`;
@@ -13,7 +10,8 @@ export function formatDuration(seconds: number): string {
   return r > 0 ? `${m}m ${r}s` : `${m}m`;
 }
 
-export const formatSuccessRate = (rate: number) => (Number.isFinite(rate) ? `${toPercent(rate).toFixed(1)}%` : "—");
+/** `rate`는 0~100(BE·로컬 같은 단위). */
+export const formatSuccessRate = (rate: number) => (Number.isFinite(rate) ? `${rate.toFixed(1)}%` : "—");
 
 /** 00~23 24칸, 없는 시간은 0. 키는 "9"·"09" 둘 다 받는다. */
 export const hourlySeries = (counts: Record<string, number>) =>

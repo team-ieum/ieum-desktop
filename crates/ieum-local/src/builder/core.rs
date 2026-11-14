@@ -75,7 +75,7 @@ impl Builder {
         }
     }
 
-    /// 저장본과 hash가 같은 확인 대기만 돌려준다. 다르면 지우고 None.
+    /// 저장본과 hash가 같은 확인 대기만 돌려준다. 다르면 None(지우지 않는다).
     pub fn pending(&self, workflow_id: &str) -> Option<PendingFinish> {
         let doc = self.host.load(workflow_id).ok()?;
         self.pending_of(workflow_id, &doc)
@@ -93,10 +93,10 @@ impl Builder {
             Op::Events {} => return Ok(edit::events(&self.catalog)),
             Op::Outline { name, steps } => {
                 self.update_chat(id, |c| c.outline = steps.clone())?;
-                // 이름을 안 바꾸면 저장본은 건드리지 않는다(끄지도 않는다).
-                match name.filter(|n| !n.trim().is_empty()) {
-                    Some(name) => doc.name = name.trim().to_string(),
-                    None => return Ok(Value::Null),
+                // 이름을 안 바꾸면(없거나 지금과 같으면) 저장본은 건드리지 않는다(끄지도 않는다).
+                match name.map(|n| n.trim().to_string()) {
+                    Some(name) if !name.is_empty() && name != doc.name => doc.name = name,
+                    _ => return Ok(Value::Null),
                 }
             }
             Op::Add {

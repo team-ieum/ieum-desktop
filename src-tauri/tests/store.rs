@@ -228,3 +228,81 @@ fn all_chat_usage_reads_every_chat_file() {
         (id.as_str(), "2026-11-13T00:00:00.000Z", &u)
     );
 }
+
+/// 지우다 실패하면 워크플로우가 남아 다시 지울 수 있고, 사용량은 두 번 세지 않는다.
+#[test]
+fn delete_workflow_failure_keeps_workflow_and_counts_usage_once() {
+    use ieum_local::ai::AiUsage;
+    use ieum_local::builder::UsageEntry;
+    use std::os::unix::fs::PermissionsExt;
+    // 막을 폴더: 채팅 파일을 못 지우는 경우, 사용량을 못 옮기는 경우.
+    for blocked in ["chats", "chat-usage"] {
+        let t = tempfile::tempdir().unwrap();
+        let store = Store::new(t.path().to_path_buf());
+        let id = store.save_workflow(stored("")).unwrap().id;
+        let u = AiUsage {
+            source: "anthropic".into(),
+            model: None,
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            credential: None,
+        };
+        store
+            .update_chat(&id, |c| {
+                c.usage.push(UsageEntry {
+                    at: "2026-11-13T00:00:00.000Z".into(),
+                    usage: u.clone(),
+                })
+            })
+            .unwrap();
+        let dir = t.path().join(blocked);
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+        let r = store.delete_workflow(&id);
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(r.is_err(), "{blocked}");
+        assert!(store.get_workflow(&id).is_ok(), "{blocked}");
+        assert_eq!(store.all_chat_usage().unwrap().len(), 1, "{blocked}");
+        store.delete_workflow(&id).unwrap(); // 다시 지울 수 있다
+        assert_eq!(store.all_chat_usage().unwrap().len(), 1, "{blocked}");
+    }
+}
+
+/// 앞선 삭제가 마지막 단계에서 실패해 남은 사용량 사본이 있으면, 다시 지울 때 덮지 않고 이어 붙인다.
+#[test]
+fn delete_workflow_appends_to_a_leftover_usage_copy() {
+    use ieum_local::ai::AiUsage;
+    use ieum_local::builder::UsageEntry;
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    let id = store.save_workflow(stored("")).unwrap().id;
+    let entry = |at: &str| UsageEntry {
+        at: at.into(),
+        usage: AiUsage {
+            source: "anthropic".into(),
+            model: None,
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            credential: None,
+        },
+    };
+    // 남은 사본(첫 삭제 때 옮겨 둔 것).
+    let kept = t.path().join("chat-usage");
+    fs::create_dir_all(&kept).unwrap();
+    fs::write(
+        kept.join(format!("{id}.json")),
+        serde_json::to_string(&vec![entry("2026-11-13T00:00:00.000Z")]).unwrap(),
+    )
+    .unwrap();
+    // 그 뒤 채팅을 더 했다.
+    store
+        .update_chat(&id, |c| c.usage.push(entry("2026-11-14T00:00:00.000Z")))
+        .unwrap();
+    assert_eq!(store.all_chat_usage().unwrap().len(), 2);
+    store.delete_workflow(&id).unwrap();
+    assert_eq!(store.all_chat_usage().unwrap().len(), 2);
+}

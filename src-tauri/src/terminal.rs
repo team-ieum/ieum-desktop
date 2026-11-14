@@ -560,18 +560,11 @@ pub struct TermCli {
 }
 
 /// 앱 기본 계정의 CLI 설정 폴더. 이 Mac의 로그인이거나 못 구하면 None(agy는 계정 폴더가 없다). 파일을 읽는다.
-fn account_dir(creds: &AccountCredentials, tool: Tool) -> Option<PathBuf> {
+pub fn account_dir(creds: &AccountCredentials, tool: Tool) -> Option<PathBuf> {
     match tool {
         Tool::Claude => creds.claude_config_dir(None).ok().flatten(),
-        Tool::Codex => {
-            let id = creds
-                .list()
-                .codex_accounts
-                .into_iter()
-                .find(|m| m.is_default)?
-                .id;
-            creds.cli_dir("codex", &id).ok().flatten()
-        }
+        // `list()`는 API 키(키체인)까지 읽는다 — 파일만 읽는 쪽으로.
+        Tool::Codex => creds.codex_home(None).ok().flatten(),
         Tool::Agy => None,
     }
 }

@@ -27,7 +27,7 @@ test("local_side_counts_today_only", () => {
   ];
   const s = localSide(runs, [], {}, NOW);
   expect(s.todayRuns).toBe(3);
-  expect(s.successRate).toBeCloseTo(2 / 3);
+  expect(s.successRate).toBeCloseTo(200 / 3);
   expect(s.changePct).toBe(50);
   expect(s.avgSeconds).toBe(3);
   expect(s.hourly).toEqual({ "09": 2, "13": 1 });
@@ -63,7 +63,7 @@ test("local_side_ignores_test_runs", () => {
   ];
   const s = localSide(runs, [wf("w1", true)], {}, NOW);
   expect(s.todayRuns).toBe(1);
-  expect(s.successRate).toBe(1);
+  expect(s.successRate).toBe(100);
   expect(Object.values(s.hourly).reduce((a, b) => a + b, 0)).toBe(1);
   expect(s.stats.errored).toBe(0);
 });
@@ -106,11 +106,13 @@ test("merge_web_offline_is_local_only", () => {
 
 test("web_side_pads_hours_and_percent", () => {
   const s = webSide({
-    metrics: { todayRuns: 4, percentageChange: 0.25, averageDurationSeconds: 3.8, successRate: 0.975 },
+    // BE 단위 그대로 0~100 — 0.5%는 0.5%다.
+    metrics: { todayRuns: 4, percentageChange: 0.5, averageDurationSeconds: 3.8, successRate: 97.5 },
     hourlyCounts: { "9": 2 },
     workflowStats: { total: 3, active: 2, inactive: 1, errored: 0, running: 0 },
   });
   expect(s.hourly).toEqual({ "09": 2 });
-  expect(s.changePct).toBe(25);
+  expect(s.changePct).toBe(0.5);
+  expect(s.successRate).toBe(97.5);
   expect(s.stats.active).toBe(2);
 });

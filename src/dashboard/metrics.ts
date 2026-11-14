@@ -1,6 +1,5 @@
 import type { RunSummary, WebDashboardSummary, WorkflowEntry } from "../api";
 import type { Live } from "../stores/runs";
-import { toPercent } from "./format";
 
 export type Source = "all" | "local" | "web";
 
@@ -50,7 +49,8 @@ export function localSide(runs: RunSummary[], workflows: WorkflowEntry[], live: 
     avgSeconds: ok.length
       ? ok.reduce((s, r) => s + (Date.parse(r.finishedAt) - Date.parse(r.startedAt)) / 1000, 0) / ok.length
       : null,
-    successRate: finished.length ? ok.length / finished.length : null,
+    // BE와 같은 0~100.
+    successRate: finished.length ? (ok.length / finished.length) * 100 : null,
     hourly,
     stats: {
       active,
@@ -66,7 +66,7 @@ export function webSide(s: WebDashboardSummary): Side {
   const { active, inactive, errored, running } = s.workflowStats;
   return {
     todayRuns,
-    changePct: toPercent(percentageChange),
+    changePct: percentageChange, // BE가 이미 0~100
     avgSeconds: averageDurationSeconds,
     successRate,
     hourly: Object.fromEntries(Object.entries(s.hourlyCounts).map(([h, c]) => [pad(h), c])),

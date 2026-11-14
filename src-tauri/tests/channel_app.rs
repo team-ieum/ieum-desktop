@@ -11,7 +11,9 @@ use ieum_desktop_lib::account::AccountId;
 use ieum_desktop_lib::active::{Active, BaseDeps};
 use ieum_desktop_lib::builder_host::{PickFolder, no_pick};
 use ieum_desktop_lib::channel::{Channel, Handler, apply_op, open_gate};
-use ieum_desktop_lib::commands::{delete_workflow_and_sessions, end_all_sessions};
+use ieum_desktop_lib::commands::{
+    delete_workflow_and_sessions, end_all_sessions, end_sessions_if_switched,
+};
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::AppEvent;
 use ieum_desktop_lib::terminal::{self, Gate, Terms, Tool};
@@ -407,4 +409,34 @@ async fn gate_from_channel_gives_env_and_revokes_when_session_ends() {
         ask(&again.socket, &status(&token)).await.code,
         Some(Code::Unauthorized)
     );
+}
+
+/// 만료 뒤 관문에서 다른 계정으로 로그인하면 옛 계정의 터미널이 남지 않는다. 같은 계정이면 그대로.
+#[tokio::test(flavor = "multi_thread")]
+async fn switching_account_on_login_ends_old_sessions() {
+    let (env, t) = (env(), short());
+    env.active.activate(acc("a@x.com")).await.unwrap();
+    let sup = env.active.sup().await.unwrap();
+    let id = sup
+        .save_workflow(stored(ai_only_wf(&env.dir("in"))))
+        .unwrap()
+        .id;
+    let ch = Channel::new(
+        handler(env.active.clone(), no_pick()),
+        t.path().to_path_buf(),
+    );
+    let (gate, terms) = (gate_of(&ch, &env.active), Terms::default());
+    launch(&env, &terms, &gate, &id).await;
+
+    // 같은 계정 재로그인 — 세션 유지.
+    let before = env.active.account_key().await;
+    env.active.activate(acc("a@x.com")).await.unwrap();
+    end_sessions_if_switched(before, &env.active, &ch, &terms).await;
+    assert!(terms.running(&id).is_some());
+
+    // 다른 계정 — 옛 세션 종료.
+    let before = env.active.account_key().await;
+    env.active.activate(acc("b@x.com")).await.unwrap();
+    end_sessions_if_switched(before, &env.active, &ch, &terms).await;
+    assert!(terms.running(&id).is_none());
 }

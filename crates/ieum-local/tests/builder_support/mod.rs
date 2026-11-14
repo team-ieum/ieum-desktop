@@ -21,6 +21,8 @@ pub struct MemHost {
     pub picks: Mutex<VecDeque<Option<PathBuf>>>,
     /// 고르기를 기다리는 사이의 캔버스 편집 흉내 — `pick_folder`가 돌아가기 전에 부른다.
     pub on_pick: Mutex<Option<OnPick>>,
+    /// `load`가 읽은 직후 한 번 — 읽기 사이에 끼어든 빌더 편집 흉내.
+    pub on_load: Mutex<Option<OnPick>>,
     /// `check_folder`·`save`가 거부하는 폴더.
     pub bad_folders: Mutex<Vec<PathBuf>>,
     pub ai: Mutex<Option<AiDefault>>,
@@ -94,6 +96,10 @@ impl MemHost {
         *self.on_pick.lock().unwrap() = Some(Box::new(f));
     }
 
+    pub fn on_load(&self, f: impl FnMut(&MemHost) + Send + 'static) {
+        *self.on_load.lock().unwrap() = Some(Box::new(f));
+    }
+
     pub fn bad_folder(&self, path: impl Into<PathBuf>) {
         self.bad_folders.lock().unwrap().push(path.into());
     }
@@ -135,8 +141,12 @@ impl MemHost {
 #[async_trait]
 impl Host for MemHost {
     fn load(&self, workflow_id: &str) -> Result<Doc, String> {
-        let docs = self.docs.lock().unwrap();
-        docs.get(workflow_id).cloned().ok_or("없음".into())
+        let doc = self.docs.lock().unwrap().get(workflow_id).cloned();
+        let hook = self.on_load.lock().unwrap().take();
+        if let Some(mut f) = hook {
+            f(self);
+        }
+        doc.ok_or("없음".into())
     }
 
     fn save(&self, workflow_id: &str, mut doc: Doc) -> Result<Doc, SaveError> {

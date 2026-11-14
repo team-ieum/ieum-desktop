@@ -5,10 +5,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use ieum_desktop_lib::credentials::AccountCredentials;
 use ieum_desktop_lib::terminal::{
-    FIRST_PROMPT, Gate, GateEnv, Launch, SCROLLBACK, Sink, Spawn, Terms, Tool, launch_line,
-    no_gate, prepare, start, usable,
+    FIRST_PROMPT, Gate, GateEnv, Launch, SCROLLBACK, Sink, Spawn, Terms, Tool, account_dir,
+    launch_line, no_gate, prepare, start, usable,
 };
+use ieum_local::ai::KeyStore;
+use ieum_local::ai::keys::KeyError;
 
 const Q: &str =
     "'IEUM 워크플로우를 만든다. 먼저 `ieum workflow guide`를 실행해 안내를 읽고 따르라.'";
@@ -651,4 +654,41 @@ fn old_work_folders_removed_only_when_empty() {
     std::fs::remove_file(used.join("keep.txt")).unwrap();
     clean_old_work(t.path());
     assert!(!old.exists());
+}
+
+/// `get`만 세는 키 저장소 — 키체인(허용 창)을 건드렸는지 본다.
+#[derive(Default)]
+struct CountingKeys(AtomicUsize);
+
+impl KeyStore for CountingKeys {
+    fn get(&self, _account: &str) -> Result<Option<String>, KeyError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(None)
+    }
+    fn set(&self, _account: &str, _key: &str) -> Result<(), KeyError> {
+        Ok(())
+    }
+    fn delete(&self, _account: &str) -> Result<(), KeyError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn codex_account_dir_reads_files_only() {
+    let t = tempfile::tempdir().unwrap();
+    let keys = Arc::new(CountingKeys::default());
+    let c = AccountCredentials::new(t.path().to_path_buf(), "aaaaaaaaaaaaaaaa", keys.clone());
+    let b = c.begin_cli_account("codex", "회사").unwrap();
+    let dir = c.pending_dir("codex", &b.id).unwrap();
+    // [확인]을 거친 것처럼 대기 계정을 기본 계정으로 옮긴다.
+    let file = t.path().join("credentials.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    let mut m = v["pendingCodexAccounts"][0].take();
+    m["isDefault"] = true.into();
+    v["pendingCodexAccounts"] = serde_json::json!([]);
+    v["codexAccounts"] = serde_json::json!([m]);
+    std::fs::write(&file, v.to_string()).unwrap();
+    keys.0.store(0, Ordering::SeqCst);
+    assert_eq!(account_dir(&c, Tool::Codex), Some(dir));
+    assert_eq!(keys.0.load(Ordering::SeqCst), 0); // 키체인은 안 읽는다
 }

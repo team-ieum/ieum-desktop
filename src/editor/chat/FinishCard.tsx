@@ -14,9 +14,19 @@ export function FinishCard({ workflowId, version }: { workflowId: string; versio
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
+    setError("");
     void refresh(workflowId);
   }, [workflowId, version, refresh]);
-  if (!found) return null;
+  // 켜기를 거절하면 백엔드가 대기를 지워 카드가 사라진다 — 거절 이유는 남긴다(다시 완료하면 새 카드).
+  if (!found)
+    return error ? (
+      <p
+        role="alert"
+        className="absolute bottom-4 left-1/2 z-30 w-[420px] -translate-x-1/2 rounded-2xl border border-neutral-200 bg-white p-5 typo-caption1_semibold text-danger-700 shadow-[0_14px_40px_rgba(43,72,86,0.18)]"
+      >
+        {error}
+      </p>
+    ) : null;
 
   const answer = async (accept: boolean) => {
     setBusy(true);

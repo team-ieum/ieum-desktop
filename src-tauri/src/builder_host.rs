@@ -104,9 +104,14 @@ fn pick_ai_default(
                 let accounts = match id {
                     "cli:claude" => listed.claude_accounts.as_slice(),
                     "cli:codex" => listed.codex_accounts.as_slice(),
-                    _ => &[],
+                    _ => &[], // Antigravity는 계정 목록이 없다 — 이 Mac 로그인 하나.
                 };
-                accounts.iter().find(|a| a.is_default).map(|a| a.id.clone())
+                let default = accounts.iter().find(|a| a.is_default).map(|a| a.id.clone());
+                // 기본 계정이 없으면(이 Mac 로그인 숨김 등) 실행 때 AI_NOT_CONNECTED — 다음 공급원으로.
+                if default.is_none() && matches!(id, "cli:claude" | "cli:codex") {
+                    continue;
+                }
+                default
             }
         };
         return Some(AiDefault {

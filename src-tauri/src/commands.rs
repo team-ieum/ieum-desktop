@@ -670,10 +670,29 @@ pub async fn account_of(active: &Active) -> Option<AccountId> {
 pub async fn web_login(
     active: State<'_, Active>,
     keys: State<'_, Keys>,
+    channel: State<'_, Channel>,
+    terms: State<'_, Terms>,
     email: String,
     password: String,
 ) -> Result<WebAccount, WebError> {
-    login_and_activate(&active, &be_client(&active, &keys)?, &email, &password).await
+    let before = active.account_key().await;
+    // 활성화 도중 실패해도 이전 계정은 이미 내려갔을 수 있다 — 결과와 무관하게 정리한다.
+    let acc = login_and_activate(&active, &be_client(&active, &keys)?, &email, &password).await;
+    end_sessions_if_switched(before, &active, &channel, &terms).await;
+    acc
+}
+
+/// 만료 뒤 관문에서 다른 계정으로 바뀌었으면 옛 계정의 터미널·토큰을 끝낸다(남은 CLI 프로세스).
+/// 같은 계정 재로그인은 만료일 뿐 로그아웃이 아니라 그대로 둔다.
+pub async fn end_sessions_if_switched(
+    before: Option<String>,
+    active: &Active,
+    channel: &Channel,
+    terms: &Terms,
+) {
+    if before.is_some() && active.account_key().await != before {
+        end_all_sessions(channel, terms);
+    }
 }
 
 #[tauri::command]
