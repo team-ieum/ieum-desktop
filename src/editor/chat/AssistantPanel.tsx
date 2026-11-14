@@ -68,21 +68,23 @@ export function AssistantPanel({ workflowId, onOpenChange }: { workflowId: strin
         aria-label={t("assistant.open")}
         title={t("assistant.open")}
         aria-expanded={open}
-        className="absolute right-4 top-4 z-10 grid size-12 cursor-pointer place-items-center rounded-full border border-neutral-200 bg-white shadow-[0_8px_20px_rgba(41,83,124,0.3)] transition-opacity hover:opacity-90"
+        className="absolute right-4 top-4 z-10 grid h-12 w-12 cursor-pointer place-items-center rounded-full bg-main-deep-blue transition-opacity hover:opacity-90"
+        style={{ boxShadow: "0 8px 24px -4px rgba(41, 83, 124, 0.45), 0 4px 8px -2px rgba(16, 24, 40, 0.1)" }}
       >
-        <img src={symbol} alt="" className="size-7" />
+        <img src={symbol} alt="" className="h-7 w-7 object-contain" />
       </button>
       {opened && (
         <aside
           aria-label="IEUM Assistant"
           hidden={!open}
-          className={`absolute right-4 top-4 bottom-4 z-30 flex flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] ${
+          className={`absolute right-4 top-4 bottom-4 z-30 flex flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white ${
             mode === "terminal" ? "w-[560px]" : "w-[380px]"
           }`}
+          style={{ boxShadow: "0 24px 48px -8px rgba(16, 24, 40, 0.18), 0 8px 16px -4px rgba(16, 24, 40, 0.1)" }}
         >
-          <div className="flex items-center gap-2.5 border-b border-neutral-200 px-5 py-3">
-            <img src={symbol} alt="" className="size-6" />
-            <h2 className="min-w-0 flex-1 typo-body2_semibold text-neutral-900">IEUM Assistant</h2>
+          <div className="flex shrink-0 items-center gap-3 bg-main-deep-blue px-4 py-3.5 text-white">
+            <img src={symbol} alt="" className="h-5 w-5 object-contain" />
+            <h2 className="min-w-0 flex-1 text-sm font-semibold">IEUM Assistant</h2>
             <div role="tablist" className="flex gap-1 rounded-[10px] bg-neutral-100 p-1">
               {MODES.filter((m) => m !== "terminal" || terminal).map((m) => (
                 <button
@@ -107,9 +109,10 @@ export function AssistantPanel({ workflowId, onOpenChange }: { workflowId: strin
               }}
               aria-label={t("assistant.close")}
               title={t("assistant.close")}
-              className="grid size-8 shrink-0 place-items-center rounded-[10px] text-neutral-500 transition-colors hover:bg-neutral-100"
+              className="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded-lg transition-opacity hover:opacity-80"
+              style={{ background: "rgba(255,255,255,.12)" }}
             >
-              <X size={16} aria-hidden="true" />
+              <X size={14} aria-hidden="true" />
             </button>
           </div>
           {workflowId && (

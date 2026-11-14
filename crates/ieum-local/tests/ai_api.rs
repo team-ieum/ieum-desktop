@@ -174,6 +174,7 @@ async fn ask(
         schema: None,
         key_name: None,
         config_dir: None,
+        system: None,
     };
     let r = provider(kind, base, Some(KEY))
         .ask(req, &|c: &str| chunks.lock().unwrap().push(c.to_string()))
@@ -310,6 +311,7 @@ async fn missing_key_fails_with_message() {
             schema: None,
             key_name: None,
             config_dir: None,
+            system: None,
         };
         let err = provider(kind, &base, None)
             .ask(req, &|_: &str| {})
@@ -332,6 +334,7 @@ async fn keychain_error_is_not_missing_key() {
                 schema: None,
                 key_name: None,
                 config_dir: None,
+                system: None,
             },
             &|_: &str| {},
         )

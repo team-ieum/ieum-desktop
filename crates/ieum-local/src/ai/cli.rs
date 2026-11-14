@@ -11,7 +11,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
-use super::{AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, SYSTEM_INSTRUCTION};
+use super::{AiAnswer, AiError, AiProvider, AiRequest, AiUsage, ChunkFn, system_text};
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 /// 실패 메시지에 붙이는 stderr 끝부분(글자).
@@ -80,24 +80,27 @@ impl CliKind {
     /// 플러그인·훅 끔) + 세션 저장 안 함. codex: 읽기 전용 샌드박스.
     fn args(self, req: &AiRequest, schema_file: Option<&Path>) -> Vec<String> {
         let mut a: Vec<String> = match self {
-            CliKind::Claude => [
-                "-p",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--tools",
-                "",
-                "--strict-mcp-config",
-                "--setting-sources",
-                "",
-                "--safe-mode",
-                "--no-session-persistence",
-                "--disable-slash-commands",
-                "--append-system-prompt",
-                SYSTEM_INSTRUCTION,
-            ]
-            .map(String::from)
-            .to_vec(),
+            CliKind::Claude => {
+                let mut a: Vec<String> = [
+                    "-p",
+                    "--output-format",
+                    "stream-json",
+                    "--verbose",
+                    "--tools",
+                    "",
+                    "--strict-mcp-config",
+                    "--setting-sources",
+                    "",
+                    "--safe-mode",
+                    "--no-session-persistence",
+                    "--disable-slash-commands",
+                    "--append-system-prompt",
+                ]
+                .map(String::from)
+                .to_vec();
+                a.push(system_text(req));
+                a
+            }
             CliKind::Codex => {
                 let mut a: Vec<String> = [
                     "exec",
