@@ -1,7 +1,7 @@
 import { CircleHelp, MoreHorizontal, PanelLeft, Search, Settings, SquarePen } from "lucide-react";
 import { useState } from "react";
 import { api, type WebWorkflowSummary, type WorkflowEntry } from "../api";
-import symbol from "../assets/symbol.png";
+import { ProviderLogo } from "../assets/providers";
 import { locale, t } from "../i18n";
 import { NAV, type Page } from "./nav";
 
@@ -107,7 +107,9 @@ export function Sidebar({
   return (
     <aside aria-label={t("nav.sidebar")} className={`flex w-64 shrink-0 flex-col ${SIDE}`}>
       <div data-tauri-drag-region className={`flex ${TOP_ROW} shrink-0 items-center gap-2 pr-2.5 ${LIGHTS_PAD}`}>
-        <img src={symbol} className="pointer-events-none h-[18px] w-[18px]" alt="" />
+        <span className="pointer-events-none">
+          <ProviderLogo id="ieum" size={18} />
+        </span>
         <span className="pointer-events-none text-[15px] leading-none font-black tracking-wide text-main-deep-blue">{t("app.name")}</span>
         <div data-tauri-drag-region className="h-full flex-1" />
         <button type="button" onClick={onCollapse} className={ICON_BTN} aria-label={t("nav.collapse")} title={t("nav.collapse")}>

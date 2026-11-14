@@ -1,7 +1,7 @@
 import { ArrowUp, Gauge, Sparkles } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type ChatCard } from "../../api";
-import symbol from "../../assets/symbol.png";
+import { ProviderLogo } from "../../assets/providers";
 import { type Key, t } from "../../i18n";
 import { useCredentials } from "../../stores/credentials";
 import { Dropdown } from "../../usage/parts";
@@ -32,11 +32,7 @@ function savedAi(): Ai {
   }
 }
 
-const Face = () => (
-  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-main-light-blue">
-    <img src={symbol} alt="" className="h-4 w-4 object-contain" />
-  </span>
-);
+const Face = () => <ProviderLogo id="ieum" size={28} />;
 
 /** 응답을 기다리는 동안 — 웹 이음과 같은 세 점 + 단계 글. */
 function Typing({ stage }: { stage: "designing" | "testing" | null }) {
@@ -59,8 +55,8 @@ function Typing({ stage }: { stage: "designing" | "testing" | null }) {
 function Empty({ onPick, disabled }: { onPick: (text: string) => void; disabled: boolean }) {
   return (
     <div className="m-auto flex w-full flex-col items-center gap-4 px-2 py-6 text-center">
-      <span className="grid h-14 w-14 place-items-center rounded-2xl bg-main-light-blue shadow-[0_8px_20px_-8px_rgba(0,123,167,.45)]">
-        <img src={symbol} alt="" className="h-8 w-8 object-contain" />
+      <span className="grid rounded-2xl shadow-[0_8px_20px_-8px_rgba(0,123,167,.45)]">
+        <ProviderLogo id="ieum" size={56} />
       </span>
       <div className="flex flex-col gap-1">
         <p className="typo-body1_bold text-main-deep-blue">{t("chat.empty.title")}</p>

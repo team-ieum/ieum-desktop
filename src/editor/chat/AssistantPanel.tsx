@@ -1,7 +1,7 @@
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "../../api";
-import symbol from "../../assets/symbol.png";
+import { IeumMark } from "../../assets/providers";
 import { t } from "../../i18n";
 import { ChatSlot } from "./ChatSlot";
 import { TerminalSlot } from "./TerminalSlot";
@@ -85,10 +85,10 @@ export function AssistantPanel({
         aria-label={t("assistant.open")}
         title={t("assistant.open")}
         aria-expanded={open}
-        className="absolute right-4 top-4 z-10 grid h-12 w-12 cursor-pointer place-items-center rounded-full bg-main-deep-blue transition-opacity hover:opacity-90"
+        className="absolute right-4 top-4 z-10 grid h-12 w-12 cursor-pointer place-items-center rounded-full bg-main-deep-blue text-white transition-opacity hover:opacity-90"
         style={{ boxShadow: "0 8px 24px -4px rgba(41, 83, 124, 0.45), 0 4px 8px -2px rgba(16, 24, 40, 0.1)" }}
       >
-        <img src={symbol} alt="" className="h-7 w-7 object-contain" />
+        <IeumMark size={28} />
       </button>
       {opened && (
         <aside
@@ -99,7 +99,7 @@ export function AssistantPanel({
         >
           <div className="flex shrink-0 items-center gap-3 bg-main-deep-blue px-4 py-3.5 text-white">
             <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-white/12">
-              <img src={symbol} alt="" className="h-5 w-5 object-contain" />
+              <IeumMark size={20} />
             </span>
             <div className="min-w-0 flex-1">
               <h2 className="truncate text-sm font-semibold">IEUM Assistant</h2>

@@ -124,3 +124,10 @@ test("recent_marks_workflows_waiting_for_confirmation", () => {
   expect(screen.getByText("확인 필요")).toBeTruthy();
   expect(screen.queryByText("일시정지")).toBeNull(); // 상태 글자(`nav.dot.paused`) 자리를 대신한다
 });
+
+test("sidebar_brand_mark_is_svg_logo", () => {
+  const { container } = render(<Sidebar {...props} />);
+  const mark = container.querySelector('[data-logo="ieum"] svg path');
+  expect(mark?.getAttribute("d")).toBeTruthy();
+  expect(container.querySelector("img")).toBeNull();
+});

@@ -1,7 +1,7 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { ArrowLeft, ArrowRightLeft, ChevronDown, ChevronUp, Globe, Laptop, Server } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import symbol from "../assets/symbol.png";
+import { IeumMark } from "../assets/providers";
 import { t } from "../i18n";
 import { TOP_ROW } from "../shell/Sidebar";
 import { useSettings } from "../stores/settings";
@@ -100,7 +100,7 @@ export function AuthScreen({ initialEmail, onCancel }: { initialEmail?: string; 
         <div className="absolute top-[230px] right-[120px] h-[90px] w-[90px] rounded-full bg-node-yellow/50" />
         <div className="absolute -bottom-32 -left-20 h-[300px] w-[300px] rounded-full bg-sub-blue/20" />
         <div className="relative flex items-center gap-3">
-          <img src={symbol} className="h-11 w-11 brightness-0 invert" alt="" />
+          <IeumMark size={44} />
           <span className="text-3xl font-black tracking-wide">{t("app.name")}</span>
         </div>
         <div className="relative">
