@@ -454,13 +454,13 @@ pub fn send_test_notification(app: AppHandle) -> Result<(), String> {
     crate::notify::send_test(&app)
 }
 
-/// 설정 [업데이트 확인] — `dev`(개발 빌드라 안 함)·`latest`·`installed`(+버전, 다시 시작하면 적용).
+/// 설정 [업데이트 확인] — `dev`(개발 빌드라 안 함)·`latest`·`available`(+버전, 오른쪽 아래 알림에서 설치).
 #[derive(Serialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum UpdateCheck {
     Dev,
     Latest,
-    Installed { version: String },
+    Available { version: String },
 }
 
 #[tauri::command]
@@ -468,13 +468,106 @@ pub async fn check_update_now(app: AppHandle) -> Result<UpdateCheck, String> {
     if cfg!(debug_assertions) {
         return Ok(UpdateCheck::Dev);
     }
-    match crate::install_update(&app).await {
-        Ok(Some(version)) => Ok(UpdateCheck::Installed { version }),
+    match crate::find_update(&app, true).await {
+        Ok(Some(version)) => Ok(UpdateCheck::Available { version }),
         Ok(None) => Ok(UpdateCheck::Latest),
         Err(e) => {
             eprintln!("[ieum] 업데이트 확인 실패: {e}");
             Err("업데이트를 확인하지 못했어요. 네트워크를 확인해 주세요.".into())
         }
+    }
+}
+
+/// 이미 찾아 둔 새 버전 — 이벤트를 놓친(나중에 뜬) 창이 알림을 띄우려고 읽는다.
+#[tauri::command]
+pub fn pending_update(pending: State<'_, crate::PendingUpdate>) -> Option<String> {
+    pending.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// 이미 받는 중이면 두 번째 [업데이트]를 거절한다 — 화면이 바뀌어 알림이 다시 그려져도 설치는 하나만.
+static INSTALLING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `update-progress` 이벤트. 받는 중이면 받은 바이트·전체(서버가 알려 주면), 다 받으면 `installing`.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+    pub installing: bool,
+}
+
+/// 알림 [업데이트] — 다시 확인해 받아 설치하고 앱을 다시 시작한다. 받는 동안 진행을 알린다.
+/// 오류: `UP_TO_DATE`(그 사이 최신이 됐다 — 화면은 알림을 닫는다), `BUSY`, 그 밖은 사람이 읽는 글.
+#[tauri::command]
+pub async fn install_update_and_restart(app: AppHandle) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    use tauri_plugin_updater::UpdaterExt;
+    if INSTALLING.swap(true, Ordering::SeqCst) {
+        return Err("BUSY".into());
+    }
+    let fail = |e: tauri_plugin_updater::Error| {
+        INSTALLING.store(false, Ordering::SeqCst);
+        eprintln!("[ieum] 업데이트 설치 실패: {e}");
+        "업데이트를 받지 못했어요. 네트워크를 확인해 주세요.".to_string()
+    };
+    let Some(update) = app.updater().map_err(fail)?.check().await.map_err(fail)? else {
+        INSTALLING.store(false, Ordering::SeqCst);
+        return Err("UP_TO_DATE".into());
+    };
+    let (mut downloaded, mut last_pct) = (0u64, u64::MAX);
+    let (on_chunk, on_done) = (app.clone(), app.clone());
+    update
+        .download_and_install(
+            move |chunk, total| {
+                downloaded += chunk as u64;
+                // 조각마다 보내면 이벤트가 수천 개 — 1%가 바뀔 때만(전체를 모르면 256KB마다).
+                let pct = total.map_or(downloaded >> 18, |t| downloaded * 100 / t.max(1));
+                if pct != last_pct {
+                    last_pct = pct;
+                    let _ = on_chunk.emit(
+                        "update-progress",
+                        UpdateProgress {
+                            downloaded,
+                            total,
+                            installing: false,
+                        },
+                    );
+                }
+            },
+            move || {
+                let _ = on_done.emit(
+                    "update-progress",
+                    UpdateProgress {
+                        downloaded: 0,
+                        total: None,
+                        installing: true,
+                    },
+                );
+            },
+        )
+        .await
+        .map_err(fail)?;
+    app.restart()
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::UpdateCheck;
+
+    #[test]
+    fn update_check_serialises_with_status_tag() {
+        let v = serde_json::to_value(UpdateCheck::Available {
+            version: "1.2.3".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"status": "available", "version": "1.2.3"})
+        );
+        assert_eq!(
+            serde_json::to_value(UpdateCheck::Latest).unwrap(),
+            serde_json::json!({"status": "latest"})
+        );
     }
 }
 

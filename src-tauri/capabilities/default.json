@@ -57,6 +57,8 @@
     "allow-send-test-notification",
     "allow-open-data-folder",
     "allow-check-update-now",
+    "allow-pending-update",
+    "allow-install-update-and-restart",
     "allow-get-chat",
     "allow-pending-finish",
     "allow-confirm-finish",

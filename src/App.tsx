@@ -14,6 +14,7 @@ import { WorkflowList } from "./screens/WorkflowList";
 import { Header } from "./shell/Header";
 import { SearchDialog } from "./shell/SearchDialog";
 import { StatusBar } from "./shell/StatusBar";
+import { UpdateToast } from "./shell/UpdateToast";
 import { NAV, type Page, type View } from "./shell/nav";
 import { recentItems, Sidebar, useSidebarCollapsed } from "./shell/Sidebar";
 import { accountsOf } from "./screens/settings/AiPane";
@@ -253,6 +254,7 @@ function AppBody() {
         />
         <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
         {searchDialog}
+        <UpdateToast />
       </div>
     );
 
@@ -328,6 +330,7 @@ function AppBody() {
       </div>
       <StatusBar onUsage={openUsage} onSettings={openAiSettings} />
       {searchDialog}
+      <UpdateToast />
     </div>
   );
 }

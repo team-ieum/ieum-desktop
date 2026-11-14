@@ -56,7 +56,7 @@ export const generalTexts = (version: string) => [
 ];
 
 const updateText = (r: UpdateCheck) =>
-  r.status === "installed" ? t("settings.updateInstalled").replace("{version}", r.version) : t(r.status === "dev" ? "settings.updateDev" : "settings.updateLatest");
+  r.status === "available" ? t("settings.updateAvailable").replace("{version}", r.version) : t(r.status === "dev" ? "settings.updateDev" : "settings.updateLatest");
 
 /** 언어 · 확인 창 · 정보(버전·업데이트 확인·안내). */
 export function GeneralPane({ version }: { version: string }) {

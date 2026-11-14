@@ -49,6 +49,8 @@ const COMMANDS: &[&str] = &[
     "send_test_notification",
     "open_data_folder",
     "check_update_now",
+    "pending_update",
+    "install_update_and_restart",
     // ── 캔버스 채팅: 토대 ──
     "get_chat",
     "pending_finish",

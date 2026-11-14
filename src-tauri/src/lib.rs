@@ -39,32 +39,50 @@ use crate::supervisor::{AppEvent, Emit};
 /// 로그인 자동 시작 때 붙는 인자 — 창 없이 메뉴 막대로만 뜬다.
 const HIDDEN_ARG: &str = "--hidden";
 
-/// 새 버전이 있으면 받아 설치해 둔다(다음 실행부터 적용). 설치한 버전, 최신이면 None.
-/// 공개키가 자리표시자면 서명 확인에서 실패해 설치되지 않는다.
-pub(crate) async fn install_update(
+/// 찾은 새 버전 — 나중에 뜬 창도 `pending_update`로 꺼내 오른쪽 아래 알림을 띄운다.
+#[derive(Default)]
+pub struct PendingUpdate(pub std::sync::Mutex<Option<String>>);
+
+/// 새 버전이 있는지만 본다(받지 않는다 — 설치는 사용자가 알림에서 고른다).
+/// 있으면 기억하고 `update-available`로 알린다. `manual`이면 [나중에]로 숨긴 버전도 다시 띄운다.
+pub(crate) async fn find_update(
     handle: &tauri::AppHandle,
+    manual: bool,
 ) -> Result<Option<String>, tauri_plugin_updater::Error> {
     use tauri_plugin_updater::UpdaterExt;
     let Some(update) = handle.updater()?.check().await? else {
         return Ok(None);
     };
-    update.download_and_install(|_, _| {}, || {}).await?;
-    eprintln!(
-        "[ieum] 새 버전 {}을 설치했어요(다음 실행부터 적용)",
-        update.version
-    );
-    Ok(Some(update.version))
+    let version = update.version;
+    *handle
+        .state::<PendingUpdate>()
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(version.clone());
+    if let Err(e) = handle.emit(
+        "update-available",
+        json!({"version": version, "manual": manual}),
+    ) {
+        eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");
+    }
+    Ok(Some(version))
 }
 
-/// 시작할 때 자동 확인. 실패는 로그만 — 팝업 없음.
+/// 앱이 떠 있는 동안 다시 확인하는 간격.
+const UPDATE_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// 시작할 때 한 번, 그 뒤 6시간마다 확인. 실패는 로그만 — 팝업 없음.
 fn check_update(app: &App) {
     if cfg!(debug_assertions) {
         return;
     }
     let handle = app.handle().clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = install_update(&handle).await {
-            eprintln!("[ieum] 업데이트 확인 실패: {e}");
+        loop {
+            if let Err(e) = find_update(&handle, false).await {
+                eprintln!("[ieum] 업데이트 확인 실패: {e}");
+            }
+            tokio::time::sleep(UPDATE_EVERY).await;
         }
     });
 }
@@ -229,6 +247,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(channel::app_gate(app.handle()));
     app.manage(channel::app_channel(app.handle()));
     tray::create(app)?;
+    app.manage(PendingUpdate::default());
     check_update(app);
     if !std::env::args().any(|a| a == HIDDEN_ARG) {
         tray::show_main(app.handle());
@@ -311,6 +330,8 @@ pub fn run() {
             commands::send_test_notification,
             commands::open_data_folder,
             commands::check_update_now,
+            commands::pending_update,
+            commands::install_update_and_restart,
             // ── 캔버스 채팅: 토대 ──
             commands::get_chat,
             commands::pending_finish,
