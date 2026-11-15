@@ -15,9 +15,9 @@ use ieum_engine::{
 use ieum_local::ai::AiRunner;
 use ieum_local::builder::TestRun;
 use ieum_local::{
-    AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, Journal,
-    NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo, user_folders,
-    validate_user_folder,
+    AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, HttpRunner,
+    Journal, NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo,
+    user_folders, validate_user_folder,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -635,7 +635,7 @@ impl Supervisor {
         let roots = roots_for_workflow(&wf.workflow);
         let (journal, recent) = (Journal::default(), self.0.recent.clone());
         let mut runners = Runners::with_builtin();
-        let local: [(&str, Arc<dyn NodeRunner>); 4] = [
+        let local: [(&str, Arc<dyn NodeRunner>); 5] = [
             (
                 "local.ai",
                 Arc::new(self.0.deps.ai.with_roots(roots.clone())),
@@ -665,6 +665,7 @@ impl Supervisor {
                     self.0.deps.trash_dir.clone(),
                 )),
             ),
+            ("http.request", Arc::new(HttpRunner::new())),
         ];
         runners.extend(local.into_iter().map(|(k, v)| (k.to_string(), v)));
 

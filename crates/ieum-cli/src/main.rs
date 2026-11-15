@@ -16,7 +16,8 @@ use ieum_engine::{
 };
 use ieum_local::ai::AiRunner;
 use ieum_local::{
-    FileMoveRunner, FileRenameRunner, FileTrashRunner, Journal, RecentWrites, roots_for_workflow,
+    FileMoveRunner, FileRenameRunner, FileTrashRunner, HttpRunner, Journal, RecentWrites,
+    roots_for_workflow,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -141,7 +142,7 @@ async fn run(workflow: &Path, input: Option<&Path>, json: bool) -> Result<ExitCo
     let roots = roots_for_workflow(&wf);
     let (journal, recent) = (Journal::default(), RecentWrites::default());
     let mut runners = Runners::with_builtin();
-    let local: [(&str, Arc<dyn NodeRunner>); 4] = [
+    let local: [(&str, Arc<dyn NodeRunner>); 5] = [
         (
             "local.ai",
             Arc::new(AiRunner::new().with_roots(roots.clone())),
@@ -166,6 +167,7 @@ async fn run(workflow: &Path, input: Option<&Path>, json: bool) -> Result<ExitCo
             "local.file_trash",
             Arc::new(FileTrashRunner::new(journal, recent, roots)),
         ),
+        ("http.request", Arc::new(HttpRunner::new())),
     ];
     runners.extend(local.into_iter().map(|(k, v)| (k.to_string(), v)));
 
@@ -341,6 +343,7 @@ async fn check_case(case: &Path, catalog: &Catalog) -> Result<Vec<String>, Fail>
         "local.file_move",
         "local.file_rename",
         "local.file_trash",
+        "http.request",
     ] {
         runners.insert(event.to_string(), stub.clone());
     }
