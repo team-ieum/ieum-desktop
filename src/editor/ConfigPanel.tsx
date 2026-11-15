@@ -8,6 +8,7 @@ import { choicesFor, useCredentials } from "../stores/credentials";
 import { DEFS, fieldKey, FOLDER_FIELDS, newItem, outputKeys, upstream, type Field } from "../nodes/defs";
 import { Dropdown } from "../usage/parts";
 import { nodeTitle } from "./Canvas";
+import { DictField, useDraft } from "./DictField";
 import { effortItems, effortLevels, modelItems, shownModel, useModels } from "./models";
 
 type Ref = { value: string; label: string };
@@ -16,7 +17,7 @@ type Obj = Record<string, unknown>;
 const MAX_ITEMS = 10;
 export const INPUT =
   "w-full rounded-brand-sm border border-neutral-300 bg-white px-3 py-2 typo-body3_regular text-neutral-800 outline-none focus:border-main-blue";
-const SMALL_BUTTON =
+export const SMALL_BUTTON =
   "inline-flex items-center gap-1 rounded-brand-sm border border-neutral-300 bg-white px-2.5 py-1.5 typo-caption1_semibold text-neutral-700 hover:bg-neutral-100 disabled:opacity-40";
 
 interface FieldProps {
@@ -73,6 +74,85 @@ function CredentialSelect({ label, provider, value, onChange }: { label: string;
 }
 
 const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+/** 고르는 칸이 아니라 동작 메뉴 — 늘 맨 위 항목을 보이고, 고르면 참조식을 넘긴다. */
+function RefMenu({ refs, onPick }: { refs: Ref[]; onPick: (ref: string) => void }) {
+  return (
+    <Dropdown
+      label={t("editor.insertRef")}
+      items={[{ id: "", name: t("editor.insertRef"), icon: null }, ...refs.map((r) => ({ id: r.value, name: r.label, icon: null }))]}
+      sel=""
+      onSel={(v) => v && onPick(v)}
+      left
+      root="relative w-full"
+      trigger={`${SELECT_TRIGGER} typo-caption1_regular text-neutral-600`}
+    />
+  );
+}
+
+/** 정수만 저장한다. 참조식 칸이면 `{{`가 든 글도 글 그대로(빌더 `coerce`와 같은 규칙). 비우면 키를 뺀다. */
+function readInteger(s: string, allowRef: boolean): { value: unknown } | null {
+  const v = s.trim();
+  if (v === "") return { value: undefined };
+  if (/^-?\d+$/.test(v) && Number.isSafeInteger(Number(v))) return { value: Number(v) };
+  if (allowRef && v.includes("{{")) return { value: s };
+  return null;
+}
+
+const asText = (v: unknown) => (v === undefined || v === null ? "" : typeof v === "string" ? v : JSON.stringify(v));
+
+function IntegerInput({ id, value, onChange, allowRef, refs }: { id: string; value: unknown; onChange: (v: unknown) => void; allowRef: boolean; refs: Ref[] }) {
+  const [text, edit] = useDraft(value, asText, onChange);
+  const set = (s: string) => {
+    const got = readInteger(s, allowRef);
+    edit(s, got ?? undefined); // 못 읽는 글은 화면에만 두고 저장하지 않는다
+  };
+  const invalid = readInteger(text, allowRef) === null;
+  const errId = `${id}-err`;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <input
+        id={id}
+        inputMode="numeric"
+        aria-invalid={invalid || undefined}
+        aria-describedby={invalid ? errId : undefined}
+        className={`${INPUT} ${invalid ? "border-danger-600" : ""}`}
+        value={text}
+        onChange={(e) => set(e.target.value)}
+      />
+      {invalid && (
+        <p id={errId} className="flex items-center gap-1.5 typo-caption1_semibold text-danger-700">
+          <TriangleAlert size={14} aria-hidden="true" />
+          {t(allowRef ? "editor.integerInvalid" : "editor.integerOnly")}
+        </p>
+      )}
+      {allowRef && refs.length > 0 && <RefMenu refs={refs} onPick={(r) => set(text + r)} />}
+    </div>
+  );
+}
+
+/** HTTP 본문 — JSON 객체·배열로 읽히면 그 값을, 아니면 글을 저장(빌더 `json_or_text`와 같게). 화면 글은 친 그대로. */
+function readBody(s: string): unknown {
+  try {
+    const v: unknown = JSON.parse(s);
+    if (typeof v === "object" && v !== null) return v;
+  } catch {
+    // JSON이 아니면(참조식이 따옴표 밖에 있는 글 등) 글 그대로.
+  }
+  return s;
+}
+const showBody = (v: unknown) => (typeof v === "object" && v !== null ? JSON.stringify(v, null, 2) : asText(v));
+
+function BodyInput({ id, value, onChange, refs }: { id: string; value: unknown; onChange: (v: unknown) => void; refs: Ref[] }) {
+  const [text, edit] = useDraft(value, showBody, onChange);
+  const set = (s: string) => edit(s, { value: readBody(s) });
+  return (
+    <div className="flex flex-col gap-1.5">
+      <textarea id={id} className={`${INPUT} min-h-20 resize-y`} value={text} onChange={(e) => set(e.target.value)} />
+      {refs.length > 0 && <RefMenu refs={refs} onPick={(r) => set(text + r)} />}
+    </div>
+  );
+}
 
 /** AI 노드 "모델" — 고른 공급원의 모델 목록. "기본 모델"이면 칸을 저장하지 않는다(`undefined`). 목록에 없는 저장값은 그대로 둔다.
  *  예전 Antigravity 값(`…-high`)은 수준을 뗀 모델로 보여 주고, 같은 것을 다시 골라도 저장본을 고치지 않는다. */
@@ -243,6 +323,21 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
         />
       </div>
     );
+  } else if (field.type === "dict" && !field.list) {
+    input = (
+      <div id={id} role="group" aria-label={label}>
+        <DictField
+          label={label}
+          value={value}
+          onChange={onChange}
+          refPicker={field.ref !== false && refs.length > 0 ? (pick) => <RefMenu refs={refs} onPick={pick} /> : undefined}
+        />
+      </div>
+    );
+  } else if (field.type === "integer" && !field.list) {
+    input = <IntegerInput id={id} value={value} onChange={onChange} allowRef={field.ref !== false} refs={refs} />;
+  } else if (event === "http.request" && field.key === "body") {
+    input = <BodyInput id={id} value={value} onChange={onChange} refs={field.ref === false ? [] : refs} />;
   } else if (field.type === "boolean") {
     // Antigravity는 파일 내용을 못 받는다(러너도 거절한다) — 칸을 잠근다.
     const locked = field.key === "sendContent" && provider === "cli:agy";
@@ -274,18 +369,7 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
     input = (
       <div className="flex flex-col gap-1.5">
         <Tag id={id} className={`${INPUT} ${Tag === "textarea" ? "min-h-20 resize-y" : ""}`} value={str} onChange={(e) => onChange(e.target.value)} />
-        {field.ref !== false && refs.length > 0 && (
-          // 고르는 칸이 아니라 동작 메뉴 — 늘 맨 위 항목을 보이고, 고르면 글 끝에 참조식을 붙인다.
-          <Dropdown
-            label={t("editor.insertRef")}
-            items={[{ id: "", name: t("editor.insertRef"), icon: null }, ...refs.map((r) => ({ id: r.value, name: r.label, icon: null }))]}
-            sel=""
-            onSel={(v) => v && onChange(str + v)}
-            left
-            root="relative w-full"
-            trigger={`${SELECT_TRIGGER} typo-caption1_regular text-neutral-600`}
-          />
-        )}
+        {field.ref !== false && refs.length > 0 && <RefMenu refs={refs} onPick={(r) => onChange(str + r)} />}
       </div>
     );
   }
@@ -318,7 +402,12 @@ export function ConfigPanel({ node, workflow, onChange, pickFolder = () => api.p
     outputKeys(n).map((k) => ({ value: `{{nodes.${n.id}.output.${k}}}`, label: `${n.label || nodeTitle(n.event)} · ${k}` })),
   );
   const hasBranches = Array.isArray(node.config.branches) && node.config.branches.length > 0;
-  const fields = (def?.inputFields ?? []).filter((f) => !(node.event === "branch.if" && hasBranches && LEGACY_BRANCH_FIELDS.has(f.key)));
+  const fields = (def?.inputFields ?? []).filter(
+    (f) =>
+      !(node.event === "branch.if" && hasBranches && LEGACY_BRANCH_FIELDS.has(f.key)) &&
+      // 등록 웹훅은 데스크톱에 없다(빌더도 숨김). 저장값은 건드리지 않는다.
+      !(node.event === "http.request" && f.key === "webhookCredentialId"),
+  );
 
   return (
     <div className="flex flex-col gap-5">
