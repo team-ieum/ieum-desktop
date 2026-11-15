@@ -221,7 +221,13 @@ fn mask(text: &str) -> String {
         Some(i) => (&text[..i], format!("{}…", &text[i..=i])),
         None => (text, String::new()),
     };
-    if let Some(s) = head.find("://").map(|i| i + 3) {
+    // scheme 없는 `//계정@호스트`도 계정 정보가 붙는다.
+    let start = if head.starts_with("//") {
+        Some(2)
+    } else {
+        head.find("://").map(|i| i + 3)
+    };
+    if let Some(s) = start {
         let end = head[s..].find('/').map_or(head.len(), |i| s + i);
         if let Some(at) = head[s..end].rfind('@') {
             return format!("{}…{}{cut}", &head[..s], &head[s + at..]);

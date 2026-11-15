@@ -726,6 +726,26 @@ async fn fourth_redirect_location_secret_is_masked() {
     );
 }
 
+/// scheme 없는 `//계정@호스트`도 계정 정보를 가린다.
+#[tokio::test]
+async fn scheme_relative_userinfo_is_masked() {
+    let e = err(run(json!({"url": "//user:SECRET123@203.0.113.10/x"})).await);
+    assert_eq!(e.message, "http·https URL만 허용됩니다: //…@203.0.113.10/x");
+
+    let (l, base) = bind().await;
+    serve(l, |r| match r.path.as_str() {
+        "/" => redirect(302, "/a"),
+        "/a" => redirect(302, "/b"),
+        "/b" => redirect(302, "/c"),
+        _ => redirect(302, "//user:SECRET123@host"),
+    });
+    let e = err(run(json!({"url": base})).await);
+    assert_eq!(
+        e.message,
+        "리다이렉트가 3회를 넘었습니다 — 마지막 Location: //…@host"
+    );
+}
+
 // ── 시간 제한·본문 ──────────────────────────────────────
 
 #[tokio::test]
