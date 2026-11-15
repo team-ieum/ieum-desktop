@@ -48,7 +48,12 @@ const open = () => act(async () => render(<Editor id={null} onBack={() => {}} on
 const palette = () => screen.queryByRole("dialog", { name: "노드 추가" });
 const addNode = async (event: string) => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
-  await act(async () => fireEvent.click(within(palette()!).getAllByRole("button", { name: new RegExp(`^${nodeTitle(event)}`) })[0]));
+  // 팔레트 묶음은 접혀 있으므로 먼저 모두 편다.
+  for (const g of within(palette()!).getAllByRole("button").filter((b) => b.getAttribute("aria-expanded") === "false")) {
+    await act(async () => fireEvent.click(g));
+  }
+  const nodes = within(palette()!).getAllByRole("button", { name: new RegExp(`^${nodeTitle(event)}`) });
+  await act(async () => fireEvent.click(nodes.find((b) => !b.hasAttribute("aria-expanded"))!));
 };
 
 test("editor_palette_opens_from_plus_button", async () => {
