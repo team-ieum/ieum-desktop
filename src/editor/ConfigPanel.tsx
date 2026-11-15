@@ -90,11 +90,11 @@ function RefMenu({ refs, onPick }: { refs: Ref[]; onPick: (ref: string) => void 
   );
 }
 
-/** 정수만 저장한다. 참조식 칸이면 `{{`가 든 글도 글 그대로(빌더 `coerce`와 같은 규칙). 비우면 키를 뺀다. */
+/** 정수만 저장한다. 참조식 칸이면 `{{`가 든 글도 글 그대로(빌더 `coerce`와 같은 규칙 — 앞뒤 공백·`+` 부호 허용, `3.0` 거부). 비우면 키를 뺀다. */
 function readInteger(s: string, allowRef: boolean): { value: unknown } | null {
   const v = s.trim();
   if (v === "") return { value: undefined };
-  if (/^-?\d+$/.test(v) && Number.isSafeInteger(Number(v))) return { value: Number(v) };
+  if (/^[+-]?\d+$/.test(v) && Number.isSafeInteger(Number(v))) return { value: Number(v) };
   if (allowRef && v.includes("{{")) return { value: s };
   return null;
 }

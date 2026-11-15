@@ -374,6 +374,80 @@ test("dict_field_keeps_non_string_values_and_text_values", () => {
   expect(table.queryByRole("button", { name: "줄 추가" })).toBeNull();
 });
 
+test("same_content_with_new_reference_keeps_draft", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "t", event: "transform.map", type: "TRANSFORM", config: { mappings: { a: "1" } } };
+  const panel = (n: WfNode) => <ConfigPanel node={n} workflow={{ nodes: [n], edges: [] }} onChange={onChange} />;
+  const r = render(panel(node));
+  fireEvent.click(screen.getByRole("button", { name: "줄 추가" }));
+  // 저장 뒤 백엔드에서 받은 것처럼 — 내용은 같고 참조만 새것(키 순서도 다를 수 있다)
+  r.rerender(panel(structuredClone(node)));
+  expect(screen.getByRole("textbox", { name: "매핑 2번째 줄 키" })).toBeTruthy();
+  // 내용이 달라지면(되돌리기 등) 다시 읽는다
+  r.rerender(panel({ ...node, config: { mappings: { b: "2" } } }));
+  expect(screen.queryByRole("textbox", { name: "매핑 2번째 줄 키" })).toBeNull();
+  expect((screen.getByRole("textbox", { name: "매핑 1번째 줄 키" }) as HTMLInputElement).value).toBe("b");
+  r.unmount();
+
+  // 본문은 저장값을 받는 부모 아래서(실제 편집기처럼) 친 뒤, 같은 내용의 새 객체를 내려 준다.
+  let push: (n: WfNode) => void = () => {};
+  function Parent({ start }: { start: WfNode }) {
+    const [n, setN] = useState(start);
+    push = setN;
+    return <ConfigPanel node={n} workflow={{ nodes: [n], edges: [] }} onChange={setN} />;
+  }
+  const http: WfNode = { id: "h", event: "http.request", type: "HTTP", config: { method: "POST", url: "https://x" } };
+  render(<Parent start={http} />);
+  typeIn(screen.getByTestId("field-body").querySelector("textarea")!, '{"b":2,"a":1}');
+  act(() => push({ ...http, config: { ...http.config, body: { a: 1, b: 2 } } }));
+  expect(screen.getByTestId("field-body").querySelector("textarea")!.value).toBe('{"b":2,"a":1}');
+});
+
+test("dict_text_value_rules", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "l", event: "formatter.lookup_table", type: "TRANSFORM", config: { input: "", table: "{{nodes.a.output.t}}" } };
+  render(<Live start={node} onChange={onChange} />);
+  const table = () => within(screen.getByTestId("field-table"));
+  const box = table().getByRole("textbox");
+  // 참조식은 글 그대로
+  typeIn(box, "{{nodes.a.output.u}}");
+  expect(onChange.mock.lastCall![0].config.table).toBe("{{nodes.a.output.u}}");
+  // 일반 글은 저장하지 않고 알린다
+  onChange.mockClear();
+  typeIn(box, "hello");
+  expect(onChange).not.toHaveBeenCalled();
+  expect(box.getAttribute("aria-invalid")).toBe("true");
+  expect((box as HTMLInputElement).value).toBe("hello");
+  // 다 지우면 키를 빼고 줄 화면으로
+  typeIn(box, "");
+  expect("table" in onChange.mock.lastCall![0].config).toBe(false);
+  expect(table().getByRole("button", { name: "줄 추가" })).toBeTruthy();
+  cleanup();
+
+  // JSON 객체 글은 객체로
+  render(<Live start={node} onChange={onChange} />);
+  typeIn(table().getByRole("textbox"), '{"k":"v"}');
+  expect(onChange.mock.lastCall![0].config.table).toEqual({ k: "v" });
+});
+
+test("integer_field_matches_builder", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "x", event: "formatter.text_truncate", type: "TRANSFORM", config: { input: "abc" } };
+  render(<Live start={node} onChange={onChange} />);
+  const box = screen.getByRole("textbox", { name: /^최대 글자 수/ });
+  typeIn(box, "+5");
+  expect(onChange.mock.lastCall![0].config.maxLength).toBe(5);
+  typeIn(box, " 7 ");
+  expect(onChange.mock.lastCall![0].config.maxLength).toBe(7);
+  onChange.mockClear();
+  typeIn(box, "3.0");
+  expect(onChange).not.toHaveBeenCalled();
+  expect(box.getAttribute("aria-invalid")).toBe("true");
+});
+
 test("integer_field_saves_number", () => {
   setLang("ko");
   const onChange = vi.fn();

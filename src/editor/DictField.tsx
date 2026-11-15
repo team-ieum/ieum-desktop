@@ -1,13 +1,18 @@
 import { Plus, TriangleAlert, X } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { t } from "../i18n";
 import { INPUT, SMALL_BUTTON } from "./ConfigPanel";
 
-/** 화면 글(draft)은 사람이 친 그대로 두고 저장값만 따로 낸다. 바깥 값이 우리가 낸 것과 다르게 바뀌면(되돌리기 등) 다시 읽는다. */
+// 키 순서와 무관하게 내용만 본다.
+const stable = (v: unknown): string | undefined =>
+  JSON.stringify(v, (_, x) => (isObj(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+
+/** 화면 글(draft)은 사람이 친 그대로 두고 저장값만 따로 낸다. 바깥 값의 내용이 우리가 낸 것과 다르게 바뀌면(되돌리기 등) 다시 읽는다.
+ *  저장 뒤 편집기는 내용이 같은 새 객체를 내려 주므로 참조가 아니라 내용으로 비교한다. */
 export function useDraft<T>(value: unknown, read: (v: unknown) => T, onChange: (v: unknown) => void) {
   const [draft, setDraft] = useState(() => read(value));
   const [seen, setSeen] = useState(value);
-  if (value !== seen) {
+  if (value !== seen && stable(value) !== stable(seen)) {
     setSeen(value);
     setDraft(read(value));
   }
@@ -45,6 +50,55 @@ function duplicates(rows: Row[]): Set<number> {
 const toObject = (rows: Row[], dup: Set<number>) =>
   Object.fromEntries(rows.filter((r) => !blank(r.key) && !dup.has(r.id)).map((r) => [r.key, r.value]));
 
+/** 빌더 `coerce`(dict)와 같은 규칙: JSON 객체 글은 객체, `{{`가 든 글은 글 그대로, 그 밖은 저장하지 않는다. 비우면 키를 뺀다. */
+function readDictText(s: string): { value: unknown } | null {
+  if (s.trim() === "") return { value: undefined };
+  try {
+    const v: unknown = JSON.parse(s);
+    if (isObj(v)) return { value: v };
+  } catch {
+    // 객체 글이 아니면 아래 규칙으로.
+  }
+  if (s.includes("{{")) return { value: s };
+  return null;
+}
+
+function DictText({
+  label,
+  value,
+  onChange,
+  refPicker,
+}: {
+  label: string;
+  value: string;
+  onChange: (next: unknown) => void;
+  refPicker?: (pick: (ref: string) => void) => ReactNode;
+}) {
+  const errId = useId();
+  const [text, edit] = useDraft(value, (v) => (typeof v === "string" ? v : ""), onChange);
+  const set = (s: string) => edit(s, readDictText(s) ?? undefined); // 못 읽는 글은 화면에만 둔다
+  const invalid = readDictText(text) === null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <input
+        aria-label={label}
+        aria-invalid={invalid || undefined}
+        aria-describedby={invalid ? errId : undefined}
+        className={`${INPUT} ${invalid ? "border-danger-600" : ""}`}
+        value={text}
+        onChange={(e) => set(e.target.value)}
+      />
+      {invalid && (
+        <p id={errId} className="flex items-center gap-1.5 typo-caption1_semibold text-danger-700">
+          <TriangleAlert size={14} aria-hidden="true" />
+          {t("editor.dictTextInvalid")}
+        </p>
+      )}
+      {refPicker?.((ref) => set(text + ref))}
+    </div>
+  );
+}
+
 const fill = (s: string, label: string, n: number) => s.replace("{label}", label).replace("{n}", String(n));
 
 export function DictField({
@@ -64,12 +118,7 @@ export function DictField({
 
   // 참조식 글(빌더가 글 그대로 둔 값)은 지우지 않고 글 칸으로.
   if (typeof value === "string" && value !== "") {
-    return (
-      <div className="flex flex-col gap-1.5">
-        <input aria-label={label} className={INPUT} value={value} onChange={(e) => onChange(e.target.value)} />
-        {refPicker?.((ref) => onChange(value + ref))}
-      </div>
-    );
+    return <DictText label={label} value={value} onChange={onChange} refPicker={refPicker} />;
   }
 
   const save = (next: Row[]) => edit(next, { value: toObject(next, duplicates(next)) });
