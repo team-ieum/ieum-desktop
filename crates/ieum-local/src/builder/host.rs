@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use ieum_engine::{NodeRecord, RunStatus, Workflow};
+use serde::Serialize;
 
 use super::ChatFile;
 use crate::UndoReport;
@@ -41,6 +42,26 @@ pub struct TestRun {
     pub undo: UndoReport,
 }
 
+/// HTTP 테스트 확인 카드의 한 줄. 값이 밖으로 나가기 전에 사람이 주소를 본다.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpLine {
+    pub node_id: String,
+    pub label: String,
+    /// 대문자. 없으면 GET.
+    pub method: String,
+    /// `config.url` 원문(참조식 그대로) — 치환한 값은 싣지 않는다.
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpConfirm {
+    Send,
+    Skip,
+    /// 사람이 답하지 않음(5분 초과 포함).
+    Cancelled,
+}
+
 /// Builder가 앱에 기대는 일. 앱 구현은 `src-tauri`의 `AppHost`, 테스트는 메모리 가짜.
 #[async_trait]
 pub trait Host: Send + Sync {
@@ -61,6 +82,8 @@ pub trait Host: Send + Sync {
     fn user_editing(&self, workflow_id: &str) -> bool;
     /// 앱 창을 앞으로 가져와 시스템 폴더 고르기 창. `title` = 창 제목(어느 노드의 어느 칸인지). 취소·5분 초과 = None.
     async fn pick_folder(&self, workflow_id: &str, title: &str) -> Option<PathBuf>;
+    /// HTTP 노드가 낀 테스트를 돌리기 전 사람 확인 카드. 무응답·5분 초과 = Cancelled.
+    async fn confirm_http(&self, workflow_id: &str, lines: &[HttpLine]) -> HttpConfirm;
     /// 터미널용 기본 AI 연결(설계 3절 순서의 첫 번째). 없으면 None.
     async fn ai_default(&self) -> Option<AiDefault>;
     async fn ai_ready(&self, provider: &str, credential: Option<&str>) -> bool;

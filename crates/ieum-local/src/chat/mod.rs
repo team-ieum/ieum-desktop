@@ -63,6 +63,8 @@ pub enum Card {
         node_id: String,
         run_id: String,
         status: String,
+        /// HTTP 요청을 실제로 보냈다(사람이 [보내기]).
+        http_sent: bool,
     },
     PickFolder {
         node_id: String,
@@ -240,6 +242,7 @@ pub async fn run_turn(
                             node_id,
                             run_id: run_id.into(),
                             status: reply.data["status"].as_str().unwrap_or("").into(),
+                            http_sent: reply.data["httpSent"] == true,
                         });
                     }
                     if finish && reply.ok && reply.data["status"] == "awaiting_user" {

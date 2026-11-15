@@ -372,12 +372,14 @@ async fn fourth_test_in_turn_is_not_run() {
             Card::Test {
                 node_id: "a".into(),
                 run_id: "r1".into(),
-                status: "success".into()
+                status: "success".into(),
+                http_sent: false
             },
             Card::Test {
                 node_id: "a".into(),
                 run_id: "r1".into(),
-                status: "failed".into()
+                status: "failed".into(),
+                http_sent: false
             },
         ]
     );
@@ -385,6 +387,35 @@ async fn fourth_test_in_turn_is_not_run() {
         script.seen()[1]
             .prompt
             .contains(r#""code":"TURN_TEST_LIMIT""#)
+    );
+}
+
+#[tokio::test]
+async fn http_test_card_carries_sent_and_skip_has_no_card() {
+    let t = |id: &str| json!({"op": "test", "args": {"id": id}});
+    let script = Script::new([
+        ans("", json!([t("h"), t("h")])),
+        ans("테스트했어요", json!([])),
+    ]);
+    let fake = Fake::with([
+        Reply::ok(
+            json!({"runId": "r1", "status": "success", "nodes": [], "undo": {"restored": 0, "failed": 0}, "httpSent": true}),
+        ),
+        Reply::ok(json!({"status": "skipped_by_user", "nodes": ["h"]})),
+    ]);
+    let (r, _) = go(script, &fake, Limits::default()).await;
+    assert_eq!(
+        r.cards,
+        [Card::Test {
+            node_id: "h".into(),
+            run_id: "r1".into(),
+            status: "success".into(),
+            http_sent: true
+        }]
+    );
+    assert_eq!(
+        serde_json::to_value(&r.cards[0]).unwrap(),
+        json!({"kind": "test", "nodeId": "h", "runId": "r1", "status": "success", "httpSent": true})
     );
 }
 

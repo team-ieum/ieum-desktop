@@ -6,7 +6,7 @@ use std::sync::Arc;
 use ieum_engine::{ValidationError, Workflow};
 use ieum_local::UndoReport;
 use ieum_local::ai::{KeyStore, detect_clis};
-use ieum_local::builder::{ChatFile, PendingFinish, Reply};
+use ieum_local::builder::{ChatFile, HttpConfirm, PendingFinish, Reply};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
@@ -881,6 +881,20 @@ pub async fn confirm_finish(
         .await?
         .confirm_finish(&workflow_id, accept)
         .await)
+}
+
+/// HTTP 테스트 확인 카드의 [보내기]/[테스트 없이 넘어가기]. 기다리는 대기가 없으면(시간 초과·덮어씀) false.
+#[tauri::command]
+pub async fn answer_http_confirm(
+    active: State<'_, Active>,
+    workflow_id: String,
+    send: bool,
+) -> Result<bool, String> {
+    let choice = match send {
+        true => HttpConfirm::Send,
+        false => HttpConfirm::Skip,
+    };
+    Ok(active.sup().await?.http_gate().answer(&workflow_id, choice))
 }
 
 /// 편집기의 미저장 편집 표시 — 켜져 있는 동안 빌더의 고치는 동작은 `USER_EDITING`으로 거절된다(사람의 편집 우선).

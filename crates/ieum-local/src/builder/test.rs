@@ -1,12 +1,17 @@
 //! test 동작 — 트리거부터 대상 노드까지만 실제 파일로 실행하고, AI에게는 상태·출력 키와 타입·오류 코드만 준다.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use ieum_engine::{NodeStatus, RunStatus, Workflow, upstream_ids};
 use serde_json::{Map, Value, json};
 
-use super::{Builder, Code, Doc, Reply, TestEntry, TestStatus, node_hash};
+use super::finish::http_lines;
+use super::{
+    Builder, Code, Doc, HttpConfirm, HttpLine, Reply, TestEntry, TestStatus, node_hash,
+    workflow_hash,
+};
 
 /// 대상 + 조상만 남긴 그래프(노드는 원래 순서, 엣지는 양 끝이 다 남은 것만). 없는 id면 None.
 pub fn subgraph_to(wf: &Workflow, id: &str) -> Option<Workflow> {
@@ -92,6 +97,27 @@ impl Builder {
             .find_map(|n| n.config.get("folder")?.as_str())
             .ok_or(Code::FolderMissing)?;
         let sample = pick_sample(Path::new(folder), file.map(Path::new))?;
+        // HTTP 요청은 되돌릴 수 없고 참조식으로 값이 밖에 나갈 수 있다 — GET이어도 사람이 먼저 본다.
+        let lines = http_lines(&sub);
+        let sent = !lines.is_empty();
+        let sub = match sent {
+            false => sub,
+            true => match self.host.confirm_http(id, &lines).await {
+                HttpConfirm::Cancelled => return Err(Code::TestDeclined.into()),
+                HttpConfirm::Skip => return self.skip_http(id, &sub, &lines),
+                HttpConfirm::Send => {
+                    // 기다리는 사이(최대 5분) 캔버스가 고쳤을 수 있다 — 사람이 본 그래프와 같을 때만 보낸다.
+                    let now = self.load(id)?;
+                    if workflow_hash(&now.workflow) != workflow_hash(&doc.workflow) {
+                        return Err(Code::Stale.into());
+                    }
+                    if self.host.user_editing(id) {
+                        return Err(Code::UserEditing.into());
+                    }
+                    subgraph_to(&now.workflow, node_id).ok_or(Code::NodeNotFound)?
+                }
+            },
+        };
         let run = self
             .host
             .run_test(id, sub.clone(), &sample)
@@ -150,7 +176,7 @@ impl Builder {
         self.update_chat(id, |s| s.tests.extend(entries.clone()))?;
 
         let failed = undo_failed || first_failure.is_some() || target.is_none();
-        let data = json!({
+        let mut data = json!({
             "runId": run.run_id,
             "status": match (failed, target) {
                 (false, Some(status)) => status,
@@ -159,6 +185,9 @@ impl Builder {
             "nodes": lines,
             "undo": {"restored": run.undo.restored.len(), "failed": run.undo.skipped.len()},
         });
+        if sent {
+            data["httpSent"] = true.into();
+        }
         let code = match first_failure {
             _ if undo_failed => Code::UndoFailed,
             Some(code) => code,
@@ -166,6 +195,36 @@ impl Builder {
             None => return Ok(data),
         };
         Err(Reply::err_with(code, data))
+    }
+
+    /// 사람이 [테스트 없이 넘어가기] — 요청 없이 HTTP 노드와 그 아래 노드를 건너뜀으로 적는다.
+    /// HTTP보다 위 노드는 적지 않는다(따로 테스트해야 한다).
+    fn skip_http(&self, id: &str, sub: &Workflow, lines: &[HttpLine]) -> Result<Value, Reply> {
+        let http: HashSet<&str> = lines.iter().map(|l| l.node_id.as_str()).collect();
+        let skipped: Vec<_> = sub
+            .nodes
+            .iter()
+            .filter(|n| {
+                http.contains(n.id.as_str())
+                    || upstream_ids(sub, &n.id)
+                        .iter()
+                        .any(|u| http.contains(u.as_str()))
+            })
+            .collect();
+        let entries: Vec<(String, TestEntry)> = skipped
+            .iter()
+            .map(|n| {
+                let hash = node_hash(n);
+                let entry = TestEntry {
+                    hash,
+                    status: TestStatus::Skipped,
+                };
+                (n.id.clone(), entry)
+            })
+            .collect();
+        self.update_chat(id, |s| s.tests.extend(entries.clone()))?;
+        let ids: Vec<&str> = skipped.iter().map(|n| n.id.as_str()).collect();
+        Ok(json!({"status": "skipped_by_user", "nodes": ids}))
     }
 }
 

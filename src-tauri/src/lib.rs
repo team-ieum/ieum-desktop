@@ -5,6 +5,7 @@ pub mod channel;
 pub mod chat;
 pub mod commands;
 pub mod credentials;
+pub mod http_confirm;
 pub mod limit_watch;
 pub mod models;
 pub mod notify;
@@ -194,6 +195,10 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 "finish-pending",
                 json!({"id": workflow_id, "name": workflow_name}),
             ),
+            AppEvent::HttpTestConfirm { workflow_id, lines } => handle.emit(
+                "http-test-confirm",
+                json!({"id": workflow_id, "lines": lines}),
+            ),
             // 앱 시작 때 실패: 화면이 아직 듣지 않는다(웹뷰 로드 전·로그인 관문) — 여기서 바로 알린다.
             // 그 편집 화면이 떠 있을 수 없으니 화면 표시 여부는 묻지 않는다. 문구에 경로는 없다.
             AppEvent::TestUndoFailed {
@@ -359,6 +364,7 @@ pub fn run() {
             commands::get_chat,
             commands::pending_finish,
             commands::confirm_finish,
+            commands::answer_http_confirm,
             // ── 캔버스 채팅 B(통로·동기화) — 여기 아래에 추가 ──
             commands::set_editing,
             commands::finish_notice,
