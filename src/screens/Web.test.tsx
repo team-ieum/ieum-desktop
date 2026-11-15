@@ -53,7 +53,7 @@ test("web_executions_more_appends_and_unwatch_on_leave", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "실행 기록" })));
 
   // 웹 편집 열기 실패는 화면에.
-  await act(async () => fireEvent.click(screen.getByRole("button", { name: "웹에서 수정하기" })));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "이음 클라우드에서 수정하기" })));
   expect(screen.getByText("브라우저를 열지 못했어요")).toBeTruthy();
 
   // 더 보기: 실패 뒤 재시도가 성공하면 오류가 지워지고 이어 붙는다.
@@ -117,7 +117,7 @@ test("web_view_canvas_full_width_no_execution_list", async () => {
   expect(screen.getByRole("heading", { name: "흐름" })).toBeTruthy();
   expect(screen.getByText("활성")).toBeTruthy();
   expect(screen.getByRole("switch", { name: "기술 정보" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "웹에서 수정하기" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "이음 클라우드에서 수정하기" })).toBeTruthy();
 });
 
 test("web_history_icon_opens_execution_panel", async () => {
