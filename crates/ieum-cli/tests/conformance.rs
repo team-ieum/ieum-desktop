@@ -1,4 +1,4 @@
-//! 적합성 묶음과 `ieum` 바이너리. 실제 AI·파일 노드는 돌리지 않는다(트리거 + `branch.if`만).
+//! 적합성 묶음과 `ieum-dev` 바이너리. 실제 AI·파일 노드는 돌리지 않는다(트리거 + `branch.if`만).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 fn ieum(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_ieum"))
+    Command::new(env!("CARGO_BIN_EXE_ieum-dev"))
         .args(args)
         .output()
         .unwrap()

@@ -750,3 +750,47 @@ fn relative_folder_never_becomes_root() {
         AllowedRoots::default()
     );
 }
+
+#[tokio::test]
+async fn file_errors_carry_safe_codes() {
+    let (_t, root) = tmp();
+    let (_o, outside) = tmp();
+    let (watch, base) = (root.join("watch"), root.join("base"));
+    write(&watch.join("a.txt"), "a");
+    fs::create_dir_all(&base).unwrap();
+    write(&outside.join("secret.txt"), "s");
+    // (config, 기대 코드)
+    let cases = [
+        (json!({"path": "", "baseFolder": base}), "FIELD_EMPTY path"),
+        (
+            json!({"path": watch.join("없는파일.txt"), "baseFolder": base}),
+            "FILE_MISSING",
+        ),
+        (
+            json!({"path": outside.join("secret.txt"), "baseFolder": base}),
+            "FOLDER_NOT_ALLOWED",
+        ),
+        (
+            json!({"path": watch.join("a.txt"), "baseFolder": base.join("없는폴더")}),
+            "FOLDER_MISSING",
+        ),
+        (
+            json!({"path": watch.join("a.txt"), "baseFolder": base, "destination": "../밖"}),
+            "FOLDER_NOT_ALLOWED",
+        ),
+        (
+            json!({"path": watch.join("a.txt"), "baseFolder": base, "destination": true}),
+            "FIELD_INVALID destination",
+        ),
+    ];
+    for (config, want) in cases {
+        let e = run(&mover(&root).0, config).await.unwrap_err();
+        assert_eq!(e.code.as_deref(), Some(want));
+        let code = e.code.unwrap();
+        // 코드에 경로·이름 없음
+        assert!(
+            !code.contains('/') && !code.contains("없는") && !code.contains("secret"),
+            "{code}"
+        );
+    }
+}

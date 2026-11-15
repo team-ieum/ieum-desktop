@@ -1,7 +1,11 @@
-/* ieum-frontend/src/styles/tokens.css 복사(브레이크포인트·차트·다크 모드는 뺌). */
+/* ieum-frontend/src/styles/tokens.css 복사(차트·다크 모드는 뺌). */
 @import './typography.css';
 
 @theme {
+	/* 브레이크포인트 */
+	--breakpoint-sm: 24.5625rem; /* 393px */
+	--breakpoint-lg: 46.5rem; /* 744px */
+	--breakpoint-2xl: 90rem; /* 1440px */
 	--color-main-blue: #007ba7;
 	--color-main-deep-blue: #29537c;
 	--color-main-light-blue: #e0f6ff;
@@ -41,4 +45,11 @@
 	--radius-brand-lg: 2rem; /* 32px */
 	--radius-brand-xl: 3rem; /* 48px */
 	--radius-brand-full: 6.25rem; /* 100px */
+}
+
+/* 레이아웃 토큰 */
+:root {
+	--layout-header-height: 3.5rem;
+	--layout-sidebar-width: 16rem;
+	--layout-content-max-width: 90rem;
 }

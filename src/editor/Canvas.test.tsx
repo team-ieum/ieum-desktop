@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { Position, ReactFlowProvider } from "@xyflow/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Workflow } from "../api";
-import { Canvas } from "./Canvas";
+import { setLang } from "../i18n";
+import { useCredentials } from "../stores/credentials";
+import { AnimatedEdge } from "./AnimatedEdge";
+import { Canvas, FOLLOW_QUIET_MS, modelLabel, shouldFollow } from "./Canvas";
 
 // ReactFlow는 진짜로 그리되, Canvas가 넘긴 핸들러를 꺼내 직접 부를 수 있게 한다.
-const probe = vi.hoisted(() => ({ props: null as unknown as Record<string, any> }));
+const probe = vi.hoisted(() => ({ props: null as unknown as Record<string, any>, fitView: vi.fn(async (_opts?: unknown) => true) }));
 vi.mock("@xyflow/react", async (orig) => {
   const m = await orig<typeof import("@xyflow/react")>();
   return {
@@ -14,10 +18,15 @@ vi.mock("@xyflow/react", async (orig) => {
       probe.props = p;
       return <m.ReactFlow {...p} />;
     },
+    // 따라가기가 부르는 fitView를 잡는다(나머지는 진짜).
+    useReactFlow: () => ({ ...m.useReactFlow(), fitView: probe.fitView }),
+    // jsdom에선 엣지 라벨 층이 없다 — 보일 때 그 자리에 그린다.
+    EdgeToolbar: ({ isVisible, children }: { isVisible?: boolean; children: React.ReactNode }) => (isVisible ? <div>{children}</div> : null),
   };
 });
 
 beforeAll(() => {
+  setLang("ko");
   globalThis.ResizeObserver = class {
     observe() {}
     unobserve() {}
@@ -80,7 +89,7 @@ test("canvas_read_only_blocks_edits", async () => {
 test("canvas_fit_view_caps_zoom", () => {
   setup(false);
   expect(probe.props.fitView).toBe(true);
-  expect(probe.props.fitViewOptions?.maxZoom).toBe(1);
+  expect(probe.props.fitViewOptions).toEqual({ padding: 0.24, minZoom: 0.78, maxZoom: 1 });
 });
 
 test("canvas_read_only_callbacks_guarded", async () => {
@@ -121,4 +130,146 @@ test("delete_node_and_unrelated_edge_together", async () => {
   const last: Workflow = onChange.mock.lastCall![0];
   expect(last.nodes.map((n) => n.id)).toEqual(["m", "x"]);
   expect(last.edges).toEqual([]);
+});
+
+test("node_card_shows_step_numbers", () => {
+  const three: Workflow = {
+    nodes: [...wf.nodes, { id: "x", event: "local.ai", type: "AI", position: { x: 600, y: 0 }, config: {} }],
+    edges: [],
+  };
+  const { container } = render(
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas workflow={three} />
+    </div>,
+  );
+  const steps = [...container.querySelectorAll("[data-step]")].map((e) => e.getAttribute("data-step"));
+  expect(steps).toEqual(["1", "2", "3"]);
+});
+
+test("ai_node_shows_model_pill", () => {
+  const ai = (config: Record<string, unknown>): Workflow => ({
+    nodes: [{ id: "a", event: "local.ai", type: "AI", position: { x: 0, y: 0 }, config }],
+    edges: [],
+  });
+  const r = render(<Canvas workflow={ai({ provider: "api:anthropic", model: "claude-sonnet-5-5" })} />);
+  expect(screen.getByText("claude-sonnet-5-5")).toBeTruthy();
+  r.rerender(<Canvas workflow={ai({ provider: "api:openai" })} />);
+  expect(screen.getByText("모델 정보 없음")).toBeTruthy();
+  r.rerender(<Canvas workflow={ai({ provider: "cli:claude", model: "x" })} />);
+  expect(screen.getByText("Claude (구독) · x")).toBeTruthy();
+});
+
+test("model_label_names_subscription_providers", () => {
+  // 구독 공급원도 고른 모델이 있으면 붙인다(없으면 기본 모델이라 공급원만).
+  expect(modelLabel({ provider: "cli:codex", model: "gpt-5.6-luna" })).toBe("Codex (구독) · gpt-5.6-luna");
+  expect(modelLabel({ provider: "cli:claude" })).toBe("Claude (구독)");
+  // 예전 Antigravity 값(`…-high`)은 수준을 뗀 모델 이름.
+  expect(modelLabel({ provider: "cli:agy", model: "gemini-4-argon-high" })).toBe("Antigravity (구독) · gemini-4-argon");
+});
+
+test("canvas_pill_shows_credential_label", () => {
+  const sys = { id: "system", label: "이 Mac의 로그인", isDefault: true, createdAt: "", email: null };
+  const work = { id: "abcd1234", label: "회사", isDefault: false, createdAt: "1", email: "w@x.dev" };
+  useCredentials.setState({
+    view: {
+      apiKeys: { anthropic: [{ id: "default", label: "기본", isDefault: true, createdAt: "", last4: "1234" }], openai: [], gemini: [] },
+      claudeAccounts: [sys, work],
+      codexAccounts: [sys],
+      keychainError: null,
+    },
+  });
+  const ai = (config: Record<string, unknown>): Workflow => ({
+    nodes: [{ id: "a", event: "local.ai", type: "AI", position: { x: 0, y: 0 }, config }],
+    edges: [],
+  });
+  const r = render(<Canvas workflow={ai({ provider: "cli:claude", credential: "abcd1234" })} />);
+  expect(screen.getByText("Claude (구독) · 회사")).toBeTruthy();
+  // 기본이면 이름표 생략.
+  r.rerender(<Canvas workflow={ai({ provider: "api:anthropic", model: "m", credential: "default" })} />);
+  expect(screen.getByText("m")).toBeTruthy();
+  r.rerender(<Canvas workflow={ai({ provider: "api:anthropic", model: "m", credential: "deadbeef" })} />);
+  expect(screen.getByText("m · 찾을 수 없는 키")).toBeTruthy();
+  useCredentials.setState({ view: null });
+});
+
+test("read_only_hides_edge_delete", () => {
+  const edge = (readOnly: boolean) => (
+    <ReactFlowProvider>
+      <svg>
+        <AnimatedEdge
+          {...({} as Parameters<typeof AnimatedEdge>[0])}
+          id="e"
+          source="t"
+          target="m"
+          sourceX={0}
+          sourceY={0}
+          targetX={100}
+          targetY={0}
+          sourcePosition={Position.Right}
+          targetPosition={Position.Left}
+          selected
+          data={{ readOnly }}
+        />
+      </svg>
+    </ReactFlowProvider>
+  );
+  const r = render(edge(false));
+  expect(screen.getByRole("button", { name: "연결 삭제" })).toBeTruthy();
+  r.rerender(edge(true));
+  expect(screen.queryByRole("button", { name: "연결 삭제" })).toBeNull();
+});
+
+test("패널이 열려 있고 노드가 늘었을 때만 따라간다 — 조작 중이거나 조작이 막 끝났으면 뺏지 않는다", () => {
+  const now = 100_000;
+  const idle = { active: false, endedAt: 0 };
+  expect(shouldFollow(2, 3, 396, idle, now)).toBe(true);
+  expect(shouldFollow(3, 3, 396, idle, now)).toBe(false); // 늘지 않음
+  expect(shouldFollow(3, 2, 396, idle, now)).toBe(false); // 줄어듦
+  expect(shouldFollow(2, 3, 0, idle, now)).toBe(false); // 패널 닫힘
+  // 끄는 중이면 시작한 지 오래여도 뺏지 않는다.
+  expect(shouldFollow(2, 3, 396, { active: true, endedAt: 0 }, now)).toBe(false);
+  // 3초는 조작이 끝난 시각부터.
+  expect(shouldFollow(2, 3, 396, { active: false, endedAt: now - FOLLOW_QUIET_MS + 1 }, now)).toBe(false);
+  expect(shouldFollow(2, 3, 396, { active: false, endedAt: now - FOLLOW_QUIET_MS }, now)).toBe(true);
+});
+
+test("follow_calls_fitView_with_panel_padding_and_waits_for_any_user_move_to_end", async () => {
+  let now = 1_000_000;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  probe.fitView.mockClear();
+  const node = (id: string, x: number) => ({ id, event: "local.file_trash", type: "ACTION", position: { x, y: 0 }, config: {} });
+  const view = (n: number) => (
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas workflow={{ nodes: [...wf.nodes, ...Array.from({ length: n }, (_, i) => node(`n${i}`, 600 + i * 300))], edges: [] }} rightCover={396} />
+    </div>
+  );
+  const r = render(view(0));
+  now += FOLLOW_QUIET_MS;
+  await act(async () => r.rerender(view(1)));
+  expect(probe.fitView).toHaveBeenCalledTimes(1);
+  expect(probe.fitView.mock.calls[0][0]).toMatchObject({ padding: { right: "444px", left: "48px" } });
+
+  // 확대 버튼·미니맵처럼 이벤트가 null인 이동도 사람 조작으로 본다. 길게 끄는 중이면 뺏지 않는다.
+  act(() => probe.props.onMoveStart(null));
+  now += FOLLOW_QUIET_MS * 3;
+  await act(async () => r.rerender(view(2)));
+  expect(probe.fitView).toHaveBeenCalledTimes(1);
+  act(() => probe.props.onMoveEnd(null));
+  await act(async () => r.rerender(view(3)));
+  expect(probe.fitView).toHaveBeenCalledTimes(1); // 막 끝났다
+  now += FOLLOW_QUIET_MS;
+  await act(async () => r.rerender(view(4)));
+  expect(probe.fitView).toHaveBeenCalledTimes(2);
+
+  // 노드 끌기도 끝날 때까지 기다린다.
+  now += FOLLOW_QUIET_MS;
+  act(() => probe.props.onNodeDragStart());
+  now += FOLLOW_QUIET_MS * 3;
+  await act(async () => r.rerender(view(5)));
+  expect(probe.fitView).toHaveBeenCalledTimes(2);
+  act(() => probe.props.onNodeDragStop());
+  now += FOLLOW_QUIET_MS;
+  await act(async () => r.rerender(view(6)));
+  expect(probe.fitView).toHaveBeenCalledTimes(3);
+  clock.mockRestore();
 });

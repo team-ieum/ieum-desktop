@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "ieum"
+name = "ieum-dev"
 path = "src/main.rs"
+
+[[bin]]
+name = "ieum"
+path = "src/bin/ieum.rs"
 
 [dependencies]
 async-trait = "0.1.92"

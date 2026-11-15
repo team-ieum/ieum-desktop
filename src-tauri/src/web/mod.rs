@@ -1,8 +1,10 @@
-//! 이음 웹 계정 연결 — BE 기존 API만, 읽기 전용(로그인·갱신·로그아웃 외 GET만).
+//! 이음 웹 계정 연결 — BE 기존 API만, 읽기 전용(로그인·갱신·로그아웃·가입 외 GET만).
 
 pub mod auth;
 pub mod client;
+pub mod dashboard;
 pub mod executions;
+pub mod signup;
 pub mod sse;
 pub mod workflows;
 

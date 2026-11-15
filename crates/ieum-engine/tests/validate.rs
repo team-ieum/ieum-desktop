@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use ieum_engine::{Catalog, ErrorCode, ValidationError, Workflow, validate};
+use ieum_engine::{Catalog, ErrorCode, ValidationError, Workflow, validate, validate_fields};
 use serde_json::{Value, json};
 
 fn catalog() -> Catalog {
@@ -458,4 +458,65 @@ fn user_values_clipped_to_80_chars() {
         errors[0].node_id.as_deref(),
         Some(format!("{}…", "q".repeat(80)).as_str())
     );
+}
+
+#[test]
+fn required_and_choice_live_outside_validate() {
+    let nodes = json!([
+        {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": ""}},
+        {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:nope"}},
+        {"id": "m", "type": "ACTION", "event": "local.file_move", "config": {"path": "{{nodes.t.output.path}}"}}
+    ]);
+    let edges = json!([{"source": "t", "target": "a"}, {"source": "a", "target": "m"}]);
+    assert!(run(nodes.clone(), edges.clone()).is_empty()); // validate는 그대로
+    let wf: Workflow = serde_json::from_value(json!({"nodes": nodes, "edges": edges})).unwrap();
+    let errors = validate_fields(&wf, &catalog());
+    assert_eq!(
+        codes(&errors),
+        [
+            (ErrorCode::Required, Some("t"), Some("config.folder")),
+            (ErrorCode::Choice, Some("a"), Some("config.provider")),
+            (ErrorCode::Required, Some("a"), Some("config.prompt")),
+            (ErrorCode::Required, Some("m"), Some("config.baseFolder")),
+        ]
+    );
+    assert_eq!(errors[0].message, "'감시할 폴더' 칸이 비어 있어요.");
+    assert_eq!(errors[1].message, "'AI 공급원' 칸의 값이 선택지에 없어요.");
+    assert_eq!(
+        serde_json::to_value(ErrorCode::Required).unwrap(),
+        json!("REQUIRED")
+    );
+}
+
+#[test]
+fn required_walks_list_children_and_skips_unused_condition_fields() {
+    let branch = |config: Value| -> Vec<ValidationError> {
+        let wf: Workflow = serde_json::from_value(json!({"nodes": [trigger(), {"id": "c", "type": "CONDITION", "event": "branch.if", "config": config}], "edges": [{"source": "t", "target": "c"}]})).unwrap();
+        validate_fields(&wf, &catalog())
+    };
+    let e = branch(
+        json!({"branches": [{"key": "b_1", "name": "", "rules": [{"left": "", "operator": "nope"}]}]}),
+    );
+    assert_eq!(
+        codes(&e),
+        [
+            (
+                ErrorCode::Required,
+                Some("c"),
+                Some("config.branches.0.name")
+            ),
+            (
+                ErrorCode::Required,
+                Some("c"),
+                Some("config.branches.0.rules.0.left")
+            ),
+            (
+                ErrorCode::Choice,
+                Some("c"),
+                Some("config.branches.0.rules.0.operator")
+            ),
+        ]
+    );
+    assert!(branch(json!({"operator": "isEmpty", "left": "x"})).is_empty()); // 옛 방식 분기
+    assert!(branch(json!({"branches": [{"key": "b_1", "name": "n", "rules": [{"left": "{{nodes.t.output.name}}", "operator": "isNotEmpty"}]}]})).is_empty());
 }

@@ -11,7 +11,43 @@ body,
 body {
 	margin: 0;
 	font-family: var(--font-family-pretendard);
-	background: var(--color-neutral-100);
+	background: var(--color-neutral-50);
 	color: var(--color-neutral-800);
 	-webkit-font-smoothing: antialiased;
+}
+
+/* 실행 중인 엣지 위를 흐르는 점선(웹 AnimatedEdge의 framer-motion 대신). */
+@keyframes ieum-flow {
+	to {
+		stroke-dashoffset: -28;
+	}
+}
+.ieum-flow {
+	animation: ieum-flow 0.9s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.ieum-flow {
+		animation: none;
+	}
+}
+
+/* 채팅 응답 대기 점(웹 TypingIndicator의 framer-motion 대신): 차례로 떠올랐다 내려온다. */
+@keyframes ieum-dot {
+	0%,
+	100% {
+		opacity: 0.3;
+		transform: translateY(0);
+	}
+	50% {
+		opacity: 1;
+		transform: translateY(-4px);
+	}
+}
+.ieum-dot {
+	animation: ieum-dot 1s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.ieum-dot {
+		animation: none;
+	}
 }

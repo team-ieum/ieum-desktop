@@ -23,6 +23,20 @@ pub struct WebWorkflowSummary {
     pub trigger_type: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// BE `WorkflowServiceType` 이름(`GOOGLE_DRIVE` 등). 옛 응답엔 없다.
+    #[serde(default)]
+    pub services: Option<Vec<String>>,
+    /// BE `nodes` 배열의 길이만 — 화면에는 `nodeCount`로 간다.
+    #[serde(
+        default,
+        rename(deserialize = "nodes", serialize = "nodeCount"),
+        deserialize_with = "count"
+    )]
+    pub node_count: Option<usize>,
+}
+
+fn count<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<usize>, D::Error> {
+    Ok(Option::<Vec<serde::de::IgnoredAny>>::deserialize(d)?.map(|v| v.len()))
 }
 
 /// BE `WorkflowResponse`. `nodes`·`edges`와 그 밖의 키는 엔진 `Workflow`로(모르는 키 보존).

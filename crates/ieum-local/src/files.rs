@@ -15,16 +15,21 @@ use crate::paths::{AllowedRoots, numbered, resolve_in_base, sanitize_name, trunc
 /// `name (n).ext`를 시도하는 최대 번호.
 const MAX_SUFFIX: u32 = 9999;
 
-fn fail(message: impl Into<String>) -> NodeError {
+/// `code` = AI에게 보여도 되는 코드(`NodeError.code`). 경로·이름은 `message`에만 싣는다.
+fn fail_code(code: impl Into<String>, message: impl Into<String>) -> NodeError {
     NodeError {
         message: message.into(),
+        code: Some(code.into()),
     }
 }
 
 fn str_cfg<'a>(cfg: &'a Map<String, Value>, key: &str) -> Result<&'a str, NodeError> {
     match cfg.get(key) {
         Some(Value::String(s)) if !s.trim().is_empty() => Ok(s),
-        _ => Err(fail(format!("'{key}' 칸이 비었거나 글자가 아니에요."))),
+        _ => Err(fail_code(
+            format!("FIELD_EMPTY {key}"),
+            format!("'{key}' 칸이 비었거나 글자가 아니에요."),
+        )),
     }
 }
 
@@ -32,8 +37,9 @@ fn str_cfg<'a>(cfg: &'a Map<String, Value>, key: &str) -> Result<&'a str, NodeEr
 /// 폴더·심볼릭 링크는 안 된다. 실제 경로(canonicalize)를 돌려준다.
 fn source_file(cfg: &Map<String, Value>, roots: &AllowedRoots) -> Result<PathBuf, NodeError> {
     let p = PathBuf::from(str_cfg(cfg, "path")?);
+    let missing = |message: String| fail_code("FILE_MISSING", message);
     if !p.is_absolute() {
-        return Err(fail(format!(
+        return Err(missing(format!(
             "파일 경로는 절대 경로여야 해요: {}",
             p.display()
         )));
@@ -41,21 +47,29 @@ fn source_file(cfg: &Map<String, Value>, roots: &AllowedRoots) -> Result<PathBuf
     match fs::symlink_metadata(&p) {
         Ok(m) if m.file_type().is_file() => {}
         Ok(_) => {
-            return Err(fail(format!(
+            return Err(missing(format!(
                 "일반 파일이 아니에요(폴더·심볼릭 링크): {}",
                 p.display()
             )));
         }
-        Err(e) => return Err(fail(format!("파일을 찾을 수 없어요: {}: {e}", p.display()))),
+        Err(e) => {
+            return Err(missing(format!(
+                "파일을 찾을 수 없어요: {}: {e}",
+                p.display()
+            )));
+        }
     }
     let real = p
         .canonicalize()
-        .map_err(|e| fail(format!("파일을 찾을 수 없어요: {}: {e}", p.display())))?;
+        .map_err(|e| missing(format!("파일을 찾을 수 없어요: {}: {e}", p.display())))?;
     if !roots.contains(&real) {
-        return Err(fail(format!(
-            "이 워크플로우가 다룰 수 있는 폴더 밖의 파일이에요: {}",
-            real.display()
-        )));
+        return Err(fail_code(
+            "FOLDER_NOT_ALLOWED",
+            format!(
+                "이 워크플로우가 다룰 수 있는 폴더 밖의 파일이에요: {}",
+                real.display()
+            ),
+        ));
     }
     Ok(real)
 }
@@ -63,10 +77,13 @@ fn source_file(cfg: &Map<String, Value>, roots: &AllowedRoots) -> Result<PathBuf
 /// 이미 있는 절대 경로 폴더의 실제 경로.
 fn real_dir(p: &Path, what: &str) -> Result<PathBuf, NodeError> {
     let err = || {
-        fail(format!(
-            "{what}는 이미 있는 절대 경로 폴더여야 해요: {}",
-            p.display()
-        ))
+        fail_code(
+            "FOLDER_MISSING",
+            format!(
+                "{what}는 이미 있는 절대 경로 폴더여야 해요: {}",
+                p.display()
+            ),
+        )
     };
     if !p.is_absolute() {
         return Err(err());
@@ -142,13 +159,14 @@ fn move_no_clobber(from: &Path, dir: &Path, name: &str) -> Result<PathBuf, NodeE
     if dir.join(name) == from {
         return Ok(from.to_path_buf());
     }
+    let fail = |message: String| fail_code("MOVE_FAILED", message);
     for n in 0..=MAX_SUFFIX {
         let to = dir.join(numbered(name, n));
         match rename_excl(from, &to) {
             Ok(()) => return Ok(to),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) if e.kind() == io::ErrorKind::Unsupported => {
-                return Err(fail("이 디스크에서는 덮어쓰기 없이 옮길 수 없어요."));
+                return Err(fail("이 디스크에서는 덮어쓰기 없이 옮길 수 없어요.".into()));
             }
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
                 return Err(fail(format!(
@@ -165,10 +183,10 @@ fn move_no_clobber(from: &Path, dir: &Path, name: &str) -> Result<PathBuf, NodeE
             }
         }
     }
-    Err(fail(format!(
-        "같은 이름 파일이 너무 많아요: {}",
-        dir.join(name).display()
-    )))
+    Err(fail_code(
+        "DEST_OCCUPIED",
+        format!("같은 이름 파일이 너무 많아요: {}", dir.join(name).display()),
+    ))
 }
 
 /// 실제로 옮겨졌을 때만 기록한다.
@@ -221,14 +239,20 @@ impl NodeRunner for FileMoveRunner {
             None | Some(Value::Null) => String::new(),
             Some(Value::String(s)) => s.clone(),
             Some(Value::Number(n)) => n.to_string(),
-            Some(_) => return Err(fail("'destination' 칸은 글자여야 해요.")),
+            Some(_) => {
+                return Err(fail_code(
+                    "FIELD_INVALID destination",
+                    "'destination' 칸은 글자여야 해요.",
+                ));
+            }
         };
-        let dir = resolve_in_base(&base, &rel).map_err(|e| fail(e.to_string()))?;
+        let dir = resolve_in_base(&base, &rel)
+            .map_err(|e| fail_code("FOLDER_NOT_ALLOWED", e.to_string()))?;
         fs::create_dir_all(&dir).map_err(|e| {
-            fail(format!(
-                "목적지 폴더를 만들지 못했어요: {}: {e}",
-                dir.display()
-            ))
+            fail_code(
+                "MOVE_FAILED",
+                format!("목적지 폴더를 만들지 못했어요: {}: {e}", dir.display()),
+            )
         })?;
 
         let to = move_no_clobber(&from, &dir, &file_name(&from))?;
@@ -246,7 +270,8 @@ fn is_bidi_control(c: char) -> bool {
 /// 원본에 확장자가 없으면 결과에도 생기지 않게 `.`을 `_`로 바꾼다. 양방향 서식 문자는 거부한다.
 fn renamed(from: &Path, new_name: &str) -> Result<String, NodeError> {
     if new_name.chars().any(is_bidi_control) {
-        return Err(fail(
+        return Err(fail_code(
+            "FIELD_INVALID newName",
             "새 이름에 글자 방향을 바꾸는 문자가 있어 쓸 수 없어요.",
         ));
     }

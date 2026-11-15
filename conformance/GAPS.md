@@ -1,6 +1,6 @@
 # 적합성 묶음 — 계약 공백과 의도된 차이
 
-묶음 형식: `<case>/{workflow.json, input.json, expected.json}`. 실행 = `ieum conformance conformance/`.
+묶음 형식: `<case>/{workflow.json, input.json, expected.json}`. 실행 = `ieum-dev conformance conformance/`.
 
 - `input.json` = `{trigger, nodeOutputs}`. 트리거 출력은 `trigger`, `branch.if` 밖의 노드는 스텁이 `nodeOutputs[id]`(없으면 `{}`)를 그대로 낸다.
 - `expected.json` = `{source, validationErrors: [{nodeId, field, code}], nodes: {id: {status, output?}}}`. `nodes`에 없는 노드는 `NOT_RUN`. `output`이 없으면 출력은 비교하지 않는다. 검증 에러는 순서까지 비교, 메시지는 비교하지 않는다.

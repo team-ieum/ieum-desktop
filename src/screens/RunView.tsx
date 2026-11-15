@@ -1,7 +1,7 @@
 import { ArrowLeft, FileUp, Pencil } from "lucide-react";
-import { useEffect, useState } from "react";
-import { api } from "../api";
+import { useEffect } from "react";
 import { Canvas, nodeTitle, StatusIcon } from "../editor/Canvas";
+import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
 import { emptyLive, useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
@@ -12,26 +12,11 @@ export function RunView({ workflowId, onBack, onEdit }: { workflowId: string; on
   const entry = useWorkflows((s) => s.list.find((w) => w.id === workflowId));
   const load = useWorkflows((s) => s.load);
   const live = useRuns((s) => s.live[workflowId]) ?? emptyLive(workflowId);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { running, error, run: testRun } = useTestRun(workflowId);
 
   useEffect(() => {
     if (!entry) void load();
   }, [entry, load]);
-
-  const testRun = async () => {
-    setError(null);
-    const path = await api.pickPath(false).catch((e) => (setError(String(e)), null));
-    if (!path) return;
-    setRunning(true);
-    try {
-      await api.runNow(workflowId, path);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setRunning(false);
-    }
-  };
 
   const nodes = entry?.workflow.nodes ?? [];
   return (

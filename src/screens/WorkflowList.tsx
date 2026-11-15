@@ -1,97 +1,70 @@
-import { Eye, Pencil, Plus, Trash2 } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { WorkflowEntry } from "../api";
-import { locale, t } from "../i18n";
+import { t } from "../i18n";
+import { ListPage } from "../list/ListPage";
+import { localCard, WorkflowCard } from "../list/WorkflowCard";
+import { useSettings } from "../stores/settings";
 import { useWorkflows } from "../stores/workflows";
-import { BUTTON, PRIMARY } from "./Editor";
+import { BUTTON } from "./Editor";
 
-const WATCH_PILL: Record<WorkflowEntry["watch"], string> = {
-  off: "bg-neutral-white text-neutral-600 border-neutral-300",
-  watching: "bg-main-light-blue text-main-deep-blue border-main-light-blue",
-  watch_error: "bg-danger-100 text-danger-700 border-danger-300",
-};
-
-export function WorkflowList({ onOpen, onOpenRuns }: { onOpen: (id: string | null) => void; onOpenRuns: (id: string) => void }) {
+export function WorkflowList({ onOpen }: { onOpen: (id: string | null) => void }) {
   const { list, loaded, error, load, remove } = useWorkflows();
   const [confirming, setConfirming] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
+  // 설정 확인 창에서 끄면 묻지 않고 바로 지운다.
+  const ask = useSettings((s) => s.settings?.confirmDeleteWorkflow !== false);
+  const doRemove = async (id: string) => {
+    try {
+      await remove(id);
+      setRemoveError(null);
+    } catch (e) {
+      setRemoveError(String(e));
+    }
+  };
 
   useEffect(() => {
     void load();
   }, [load]);
 
+  const msg = error ?? removeError;
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-4 p-6">
-      <header className="flex items-center justify-between">
-        <h1 className="typo-title2_bold text-neutral-800">{t("list.title")}</h1>
-        <button type="button" className={PRIMARY} onClick={() => onOpen(null)}>
-          <Plus size={16} aria-hidden="true" />
-          {t("list.new")}
+    <ListPage
+      title={t("list.title")}
+      subtitle={t("list.subtitle")}
+      actions={
+        <button
+          type="button"
+          onClick={() => onOpen(null)}
+          className="inline-flex h-10 items-center gap-2 rounded-[10px] bg-main-deep-blue px-4 typo-body2_semibold text-white shadow-[0_8px_18px_-10px_rgba(41,83,124,.7)] hover:bg-main-deep-blue/90"
+        >
+          <Plus className="size-4" aria-hidden="true" />
+          <span>{t("list.new")}</span>
         </button>
-      </header>
-      {(error || removeError) && <p className="typo-body3_regular text-danger-700">{error ?? removeError}</p>}
-      {!loaded ? (
-        <p className="typo-body3_regular text-neutral-500">{t("common.loading")}</p>
-      ) : list.length === 0 ? (
-        <p className="rounded-brand-md border border-dashed border-neutral-300 bg-white p-8 text-center typo-body2_regular text-neutral-500">
-          {t("list.empty")}
-        </p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {list.map((w) => (
-            <li key={w.id} className="flex items-center gap-3 rounded-brand-md border border-neutral-200 bg-white px-4 py-3">
-              <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="truncate typo-body1_semibold text-neutral-800">{w.name}</span>
-                <span className="flex flex-wrap items-center gap-2 typo-caption1_regular text-neutral-500">
-                  <span className={`inline-flex items-center rounded-full border px-2.5 py-1 typo-caption1_semibold ${WATCH_PILL[w.watch]}`} title={w.watchMessage ?? undefined}>
-                    {w.enabled ? t(`list.watch.${w.watch}`) : t("list.disabled")}
-                  </span>
-                  {w.updatedAt && (
-                    <span>
-                      {t("list.updated")} {new Date(w.updatedAt).toLocaleString(locale())}
-                    </span>
-                  )}
-                </span>
-                {w.watch === "watch_error" && w.watchMessage && <span className="typo-caption1_regular text-danger-700">{w.watchMessage}</span>}
-              </div>
-              <button type="button" className={BUTTON} onClick={() => onOpenRuns(w.id)}>
-                <Eye size={14} aria-hidden="true" />
-                {t("list.runView")}
+      }
+      banner={msg && <p className="typo-body3_regular text-danger-700">{msg}</p>}
+      cards={loaded ? list.map(localCard) : null}
+      empty={t("list.empty")}
+      renderCard={(c) => (
+        <WorkflowCard key={c.id} data={c} onOpen={() => onOpen(c.id)} menu={[{ label: t("common.delete"), danger: true, onSelect: () => (ask ? setConfirming(c.id) : void doRemove(c.id)) }]}>
+          {confirming === c.id && (
+            <div className="flex items-center justify-end gap-2">
+              <button type="button" className={BUTTON} onClick={() => setConfirming(null)}>
+                {t("common.cancel")}
               </button>
-              <button type="button" className={BUTTON} onClick={() => onOpen(w.id)}>
-                <Pencil size={14} aria-hidden="true" />
-                {t("list.open")}
+              <button
+                type="button"
+                className={`${BUTTON} border-danger-300 text-danger-700`}
+                onClick={() => {
+                  setConfirming(null);
+                  void doRemove(c.id);
+                }}
+              >
+                {t("common.confirmDelete")}
               </button>
-              {confirming === w.id ? (
-                <>
-                  <button
-                    type="button"
-                    className={`${BUTTON} border-danger-300 text-danger-700`}
-                    onClick={async () => {
-                      setConfirming(null);
-                      try {
-                        await remove(w.id);
-                        setRemoveError(null);
-                      } catch (e) {
-                        setRemoveError(String(e));
-                      }
-                    }}
-                  >
-                    {t("common.confirmDelete")}
-                  </button>
-                  <button type="button" className={BUTTON} onClick={() => setConfirming(null)}>
-                    {t("common.cancel")}
-                  </button>
-                </>
-              ) : (
-                <button type="button" className={BUTTON} onClick={() => setConfirming(w.id)} aria-label={t("common.delete")} title={t("common.delete")}>
-                  <Trash2 size={14} aria-hidden="true" />
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+            </div>
+          )}
+        </WorkflowCard>
       )}
-    </div>
+    />
   );
 }

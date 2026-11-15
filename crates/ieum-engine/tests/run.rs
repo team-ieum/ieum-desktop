@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ieum_engine::{
-    Catalog, ExecEvent, NodeCtx, NodeError, NodeRunner, NodeStatus, RejectReason, RunResult,
-    RunStatus, Runners, Workflow, run_workflow,
+    Catalog, ExecEvent, NodeCtx, NodeError, NodeRecord, NodeRunner, NodeStatus, RejectReason,
+    RunResult, RunStatus, Runners, Workflow, run_workflow,
 };
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
@@ -21,6 +21,7 @@ impl NodeRunner for Echo {
             ctx.cancel.cancelled().await;
             return Err(NodeError {
                 message: "취소됨".into(),
+                code: None,
             });
         }
         if ctx.config.get("panic") == Some(&json!(true)) {
@@ -29,6 +30,11 @@ impl NodeRunner for Echo {
         if ctx.config.get("fail") == Some(&json!(true)) {
             return Err(NodeError {
                 message: "일부러 실패".into(),
+                code: ctx
+                    .config
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .map(String::from),
             });
         }
         Ok(ctx.config)
@@ -470,4 +476,35 @@ async fn runner_panic_marks_node_failed() {
             ..
         })
     ));
+}
+
+#[tokio::test]
+async fn node_error_code_lands_in_record() {
+    let (r, _) = run(
+        json!([
+            trigger(),
+            ai("a", json!({"fail": true, "code": "FILE_MISSING"}))
+        ]),
+        json!([edge("t", "a")]),
+    )
+    .await;
+    let rec = &r.nodes["a"];
+    assert_eq!(
+        (rec.status, rec.error_code.as_deref()),
+        (NodeStatus::Failed, Some("FILE_MISSING"))
+    );
+    assert_eq!(
+        serde_json::to_value(rec).unwrap()["errorCode"],
+        "FILE_MISSING"
+    );
+    // 옛 기록(칸 없음)도 읽히고, 코드가 없으면 칸을 쓰지 않는다.
+    let old: NodeRecord =
+        serde_json::from_value(json!({"status": "failed", "output": null, "error": "x"})).unwrap();
+    assert_eq!(old.error_code, None);
+    assert!(
+        serde_json::to_value(&old)
+            .unwrap()
+            .get("errorCode")
+            .is_none()
+    );
 }

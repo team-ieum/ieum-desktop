@@ -2,8 +2,11 @@ import {
   applyEdgeChanges,
   applyNodeChanges,
   Background,
+  BackgroundVariant,
   Controls,
   Handle,
+  MarkerType,
+  MiniMap,
   Position,
   ReactFlow,
   type Connection,
@@ -13,26 +16,19 @@ import {
   type NodeChange,
   type NodeProps,
   type NodeSelectionChange,
+  useReactFlow,
 } from "@xyflow/react";
-import {
-  Bot,
-  Check,
-  CircleAlert,
-  CircleDashed,
-  CircleSlash,
-  FolderInput,
-  FolderOpen,
-  GitBranch,
-  Laptop,
-  LoaderCircle,
-  PenLine,
-  Trash2,
-} from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import type { ValidationError, Workflow, WfNode } from "../api";
+import { Check, CircleAlert, CircleDashed, CircleSlash, Laptop, LoaderCircle } from "lucide-react";
+import { type RefObject, useEffect, useRef, useState } from "react";
+import type { CredentialsView, ValidationError, Workflow, WfNode } from "../api";
 import { t, tDyn } from "../i18n";
 import { branchHandles, DEFS, isLocal } from "../nodes/defs";
+import { nodeMeta, toneStyle } from "../nodes/meta";
+import { credLabel } from "../screens/settings/AiPane";
+import { choicesFor, useCredentials } from "../stores/credentials";
 import type { NodeRunStatus } from "../stores/runs";
+import { AnimatedEdge, type EdgeData } from "./AnimatedEdge";
+import { shownModel } from "./models";
 
 /** 로컬 노드 표시 — 웹 이음 상태 배지(DashboardStatusBadge)와 같은 알약. */
 export function LocalBadge() {
@@ -42,27 +38,6 @@ export function LocalBadge() {
       {t("editor.local")}
     </span>
   );
-}
-
-export const TONE: Record<string, string> = {
-  TRIGGER: "[--node-color:#2e8b68] [--node-tint:#dff2e9]",
-  AI: "[--node-color:#6d5ce7] [--node-tint:#eeeafd]",
-  ACTION: "[--node-color:#287fa4] [--node-tint:#e2f2f8]",
-  CONDITION: "[--node-color:#9a6700] [--node-tint:#fff1d6]",
-};
-const FALLBACK_TONE = "[--node-color:#596b78] [--node-tint:#eef2f4]";
-
-export function NodeIcon({ event, size = 18 }: { event: string; size?: number }) {
-  const Icon =
-    {
-      "local.folder_new_file": FolderOpen,
-      "local.ai": Bot,
-      "local.file_move": FolderInput,
-      "local.file_rename": PenLine,
-      "local.file_trash": Trash2,
-      "branch.if": GitBranch,
-    }[event] ?? CircleDashed;
-  return <Icon size={size} aria-hidden="true" />;
 }
 
 const STATUS_CLASS: Record<NodeRunStatus | "idle", string> = {
@@ -77,7 +52,7 @@ export function StatusIcon({ status }: { status?: NodeRunStatus }) {
   const Icon = { running: LoaderCircle, succeeded: Check, failed: CircleAlert, skipped: CircleSlash }[status ?? "running"];
   return (
     <span
-      className={`inline-flex size-6 shrink-0 items-center justify-center rounded-full ${STATUS_CLASS[status ?? "idle"]}`}
+      className={`inline-flex size-[1.55rem] shrink-0 items-center justify-center rounded-full ${STATUS_CLASS[status ?? "idle"]}`}
       role="img"
       aria-label={status ? t(`status.${status}`) : undefined}
       title={status ? t(`status.${status}`) : undefined}
@@ -93,10 +68,46 @@ export function StatusIcon({ status }: { status?: NodeRunStatus }) {
 
 export const nodeTitle = (event: string) => tDyn(`node.${event}.title`) ?? event;
 
-type Data = { wf: WfNode; errors: string[]; status?: NodeRunStatus; showStatus: boolean };
+const isAi = (event: string, kind: string) => kind === "AI" || event === "local.ai" || event.startsWith("ai.");
+
+/** AI 노드 알약 — 구독이면 공급원 이름(모델을 골랐으면 " · 모델"), API면 모델 이름. 고른 키·계정이 있으면 " · 이름표"(기본이면 생략). */
+export function modelLabel(config: WfNode["config"], view?: CredentialsView | null): string {
+  const p = config.provider;
+  const model = typeof config.model === "string" ? config.model : "";
+  let base: string;
+  if (typeof p === "string" && p.startsWith("cli:")) {
+    const name = tDyn(`choice.provider.${p}`) ?? p;
+    // 예전 Antigravity 값(`…-high`)은 수준을 뗀 이름.
+    base = model ? `${name} · ${shownModel(p, model, "").model}` : name;
+  } else base = model || t("editor.noModel");
+  if (!view || typeof config.credential !== "string" || !config.credential) return base;
+  const m = choicesFor(view, config.provider).find((x) => x.id === config.credential);
+  if (m?.isDefault) return base;
+  return `${base} · ${m ? credLabel(m) : t("editor.credentialMissing")}`;
+}
+
+/** 기술 정보 줄 — 이벤트 id, AI면 공급원·모델·키·계정 이름표. 빈 값은 뺀다. */
+export function techRows(wf: WfNode, kind: string, view?: CredentialsView | null): [string, string][] {
+  const str = (v: unknown) => (typeof v === "string" ? v : "");
+  const rows: [string, string][] = [[t("editor.tech.event"), wf.event]];
+  if (isAi(wf.event, kind)) {
+    const { provider, model, credential } = wf.config;
+    const m = view && str(credential) ? choicesFor(view, provider).find((x) => x.id === credential) : undefined;
+    rows.push(
+      [t("editor.tech.provider"), str(provider)],
+      [t("editor.tech.model"), str(model)],
+      [t("editor.tech.credential"), m ? credLabel(m) : str(credential)],
+    );
+  }
+  return rows.filter(([, v]) => v);
+}
+
+type Data = { wf: WfNode; step: number; errors: string[]; status?: NodeRunStatus; techInfo?: boolean };
 type IeumNode = Node<Data, "ieum">;
 
-const HANDLE = "!size-3.5 !border-2 !border-white !bg-(--node-color)";
+// 웹 WorkflowNode HANDLE_CLASS.
+const HANDLE =
+  "!z-[3] !size-4.5 !cursor-crosshair !border-[3px] !border-white !bg-(--node-color) !shadow-[0_0_0_2px_var(--node-color),0_3px_8px_rgba(28,54,65,0.2)]";
 
 function handleLabel(h: { id: string; name: string }) {
   if (h.id === "true") return t("canvas.true");
@@ -104,16 +115,20 @@ function handleLabel(h: { id: string; name: string }) {
   return h.name || t("editor.branchName");
 }
 
+/** 웹 이음 WorkflowNode와 같은 카드. */
 function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
-  const { wf, errors, status, showStatus } = data;
-  const def = DEFS[wf.event];
-  const kind = def?.node_type ?? wf.type ?? "";
+  const { wf, step, errors, status, techInfo } = data;
+  const kind = DEFS[wf.event]?.node_type ?? wf.type ?? "";
+  const meta = nodeMeta(wf.event, wf.type);
   const branches = kind === "CONDITION" ? branchHandles(wf) : null;
+  const title = wf.label || nodeTitle(wf.event);
+  const creds = useCredentials((s) => s.view);
   return (
     <article
-      className={`relative w-64 rounded-[1.2rem] border-2 border-(--node-color) bg-white shadow-[0.4rem_0.5rem_0_var(--node-tint)] ${
-        TONE[kind] ?? FALLBACK_TONE
-      } ${selected ? "outline-2 outline-offset-4 outline-main-blue" : ""}`}
+      style={toneStyle(meta)}
+      className={`relative w-66 rounded-[1.2rem] border-2 border-(--node-color) bg-white shadow-[0.5rem_0.6rem_0_var(--node-tint),0_14px_30px_rgba(65,52,139,0.1)] ${
+        selected ? "outline-2 outline-offset-4 outline-main-blue" : ""
+      }`}
     >
       {errors.length > 0 && (
         <ul className="absolute bottom-full left-0 right-0 mb-2 flex flex-col gap-0.5 rounded-brand-sm border border-danger-300 bg-danger-100 px-2.5 py-1.5 typo-caption2_semibold text-danger-700">
@@ -122,37 +137,41 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
           ))}
         </ul>
       )}
-      {kind !== "TRIGGER" && (
-        <Handle type="target" position={Position.Left} className={HANDLE} isConnectable={isConnectable} />
-      )}
-      <header className="flex items-center gap-2 rounded-t-[1rem] border-b border-b-[color-mix(in_srgb,var(--node-color)_28%,white)] bg-(--node-tint) px-2.5 py-2 typo-caption1_bold text-(--node-color)">
-        <span className="grid size-7 shrink-0 place-items-center rounded-[0.6rem] bg-(--node-color) text-white">
-          <NodeIcon event={wf.event} size={16} />
+      {kind !== "TRIGGER" && <Handle type="target" position={Position.Left} className={HANDLE} isConnectable={isConnectable} />}
+      <header className="flex min-h-[2.9rem] items-center gap-[0.45rem] rounded-t-[1rem] border-b border-b-[color-mix(in_srgb,var(--node-color)_28%,white)] bg-(--node-tint) px-[0.65rem] py-[0.45rem] text-[0.72rem] font-bold text-(--node-color)">
+        <span className="grid size-8 shrink-0 place-items-center rounded-[0.65rem] bg-(--node-color) text-white [box-shadow:0_4px_0_color-mix(in_srgb,var(--node-color)_78%,black)]">
+          {meta.icon}
         </span>
-        <span className="min-w-0 truncate">{nodeTitle(wf.event)}</span>
+        <span className="min-w-0 truncate">{meta.label}</span>
         <span className="ml-auto flex items-center gap-1.5">
           {isLocal(wf.event) && <LocalBadge />}
-          {showStatus && <StatusIcon status={status} />}
+          <StatusIcon status={status} />
         </span>
       </header>
-      <div className="flex flex-col gap-1 p-3">
-        <h3 className="truncate typo-body2_bold text-neutral-800" title={wf.label}>
-          {wf.label || nodeTitle(wf.event)}
-        </h3>
-        <p className="typo-caption1_regular text-neutral-500">{tDyn(`node.${wf.event}.desc`) ?? wf.description}</p>
+      <div className="flex flex-col gap-[0.55rem] p-[0.85rem]">
+        <div className="flex items-center gap-[0.55rem]">
+          <span data-step={step} className="grid size-6 shrink-0 place-items-center rounded-full bg-(--node-color) text-[0.7rem] font-bold text-white">
+            <span aria-hidden="true">{step}</span>
+            <span className="sr-only">{t("editor.step").replace("{n}", String(step))}</span>
+          </span>
+          <h3 className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[0.9rem] font-bold text-[#27273b]" title={title}>
+            {title}
+          </h3>
+        </div>
+        <p className="m-0 min-h-[1.95rem] text-[0.68rem] leading-[1.45] text-[#6d6b7c]">{tDyn(`node.${wf.event}.desc`) ?? wf.description}</p>
+        {isAi(wf.event, kind) && (
+          <span className="inline-flex min-h-8 w-full items-center rounded-[0.65rem] border border-[color-mix(in_srgb,var(--node-color)_30%,white)] bg-(--node-tint) px-[0.6rem] py-[0.28rem] text-[0.67rem] font-bold text-(--node-color)">
+            {modelLabel(wf.config, creds)}
+          </span>
+        )}
+        {techInfo && <TechInfo rows={techRows(wf, kind, creds)} />}
       </div>
       {branches ? (
-        <ul className="flex flex-col gap-1 border-t border-neutral-200 px-3 py-2">
+        <ul className="flex flex-col gap-1 border-t border-neutral-200 px-[0.85rem] py-2">
           {branches.map((h) => (
-            <li key={h.id} className="relative flex justify-end typo-caption1_semibold text-neutral-600">
+            <li key={h.id} className="relative flex justify-end pr-2 text-[0.72rem] font-semibold text-neutral-600">
               {handleLabel(h)}
-              <Handle
-                id={h.id}
-                type="source"
-                position={Position.Right}
-                className={`${HANDLE} !-right-[1.2rem]`}
-                isConnectable={isConnectable}
-              />
+              <Handle id={h.id} type="source" position={Position.Right} className={`${HANDLE} !-right-[0.85rem]`} isConnectable={isConnectable} />
             </li>
           ))}
         </ul>
@@ -163,28 +182,112 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
   );
 }
 
+function TechInfo({ rows }: { rows: [string, string][] }) {
+  if (!rows.length) return <p className="m-0 rounded-[0.65rem] bg-neutral-100 px-[0.6rem] py-1.5 text-[0.67rem] text-neutral-500">{t("editor.noTechInfo")}</p>;
+  return (
+    <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 rounded-[0.65rem] bg-neutral-100 px-[0.6rem] py-1.5 text-[0.67rem]">
+      {rows.map(([k, v]) => (
+        <div key={k} className="contents">
+          <dt className="text-neutral-500">{k}</dt>
+          <dd className="m-0 min-w-0 truncate font-mono text-neutral-800" title={v}>
+            {v}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 const nodeTypes = { ieum: NodeCard };
+const edgeTypes = { animated: AnimatedEdge };
+
+// 웹 WorkFlowPage WORKFLOW_CANVAS_CLASS 그대로. Tailwind v4는 임의 선택자의 `_`를 공백으로 바꾸므로
+// 클래스 이름 안 밑줄은 `\_`로(String.raw — 스캐너가 소스 글자 그대로 읽는다).
+const WORKFLOW_CANVAS_CLASS = [
+  "bg-[#f7f6fc]",
+  String.raw`[&_.react-flow\_\_controls]:overflow-hidden [&_.react-flow\_\_controls]:rounded-[0.7rem]`,
+  String.raw`[&_.react-flow\_\_controls]:border [&_.react-flow\_\_controls]:border-[#d8e3e7]`,
+  String.raw`[&_.react-flow\_\_controls]:shadow-[0_8px_20px_rgba(43,72,86,0.09)]`,
+  String.raw`[&_.react-flow\_\_controls-button]:size-8 [&_.react-flow\_\_controls-button]:border-b-[#e5ecef]`,
+  String.raw`[&_.react-flow\_\_minimap]:rounded-xl [&_.react-flow\_\_minimap]:border [&_.react-flow\_\_minimap]:border-[#d8e3e7]`,
+  String.raw`[&_.react-flow\_\_minimap]:bg-white/90 [&_.react-flow\_\_minimap]:shadow-[0_8px_20px_rgba(43,72,86,0.08)]`,
+  String.raw`[&_.react-flow\_\_edge.selected_.react-flow\_\_edge-path]:stroke-[2px]`,
+  String.raw`max-[560px]:[&_.react-flow\_\_minimap]:hidden`,
+].join(" ");
+
+const MARKER = { type: MarkerType.ArrowClosed, color: "#a8b0ba" };
+const minimapMeta = (n: Node) => nodeMeta((n.data as Data).wf.event, (n.data as Data).wf.type);
 
 export interface CanvasProps {
   workflow: Workflow;
   /** 웹 이음 탭(16b) — 이동·삭제·연결·선택 콜백을 부르지 않는다. */
   readOnly?: boolean;
   errors?: ValidationError[];
-  /** 주면 노드에 실행 상태 배지를 단다(실행 보기). */
+  /** 노드별 실행 상태(없으면 대기 동그라미). 실행 중인 노드로 들어가는 엣지에 흐름 점선. */
   statuses?: Record<string, NodeRunStatus>;
   selectedId?: string | null;
   onChange?: (wf: Workflow) => void;
   onSelect?: (id: string | null) => void;
+  /** 읽기 전용에서도 불린다 — 노드 정보 패널을 여는 데. */
+  onNodeClick?: (id: string) => void;
+  /** 노드 카드 안에 기술 정보(이벤트 id 등). */
+  techInfo?: boolean;
+  /** 오른쪽에 떠 있는 패널이 가리는 폭(px). 0보다 크면 노드가 늘 때 새 노드가 가리지 않게 보기를 옮긴다. */
+  rightCover?: number;
+}
+
+/** 사용자가 캔버스 조작을 끝낸 뒤 이 시간 안에는 보기를 뺏지 않는다. */
+export const FOLLOW_QUIET_MS = 3000;
+
+/** 사람의 캔버스 조작(이동·확대·미니맵·노드 끌기): 지금 하는 중인가, 마지막으로 끝난 때. */
+export type UserMove = { active: boolean; endedAt: number };
+/** `UserMove` + 따라가기가 스스로 보기를 옮기는 중(그 이동은 사람 조작으로 치지 않는다). */
+type MoveState = UserMove & { self: boolean };
+
+/** 노드가 늘었고, 패널이 캔버스를 가리고 있고, 사용자가 조작 중이 아니며 끝난 지 3초가 지났다 → 보기를 옮긴다. */
+export function shouldFollow(prev: number, count: number, cover: number, user: UserMove, now: number): boolean {
+  return count > prev && cover > 0 && !user.active && now - user.endedAt >= FOLLOW_QUIET_MS;
+}
+
+/** 오른쪽 패널에 가리지 않게 새 노드까지 보이도록 맞춘다. ReactFlow 안에서 그린다. */
+function Follow({ count, cover, move }: { count: number; cover: number; move: RefObject<MoveState> }) {
+  const { fitView } = useReactFlow();
+  const prev = useRef(count);
+  useEffect(() => {
+    const was = prev.current;
+    prev.current = count;
+    if (!shouldFollow(was, count, cover, move.current, Date.now())) return;
+    move.current.self = true;
+    // 새 노드는 아직 재지 않았다 — fitView가 잰 뒤로 미룬다(React Flow 12.5+). 애니메이션이 끝나면 풀린다.
+    void fitView({ padding: { top: "48px", bottom: "48px", left: "48px", right: `${cover + 48}px` }, minZoom: 0.5, maxZoom: 1, duration: 300 }).finally(
+      () => (move.current.self = false),
+    );
+  }, [count, cover, fitView, move]);
+  return null;
 }
 
 const edgeId = (e: Workflow["edges"][number]) => e.id ?? `${e.source}-${e.target}-${e.conditionType ?? ""}`;
 
-export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect }: CanvasProps) {
+export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect, onNodeClick, techInfo = false, rightCover = 0 }: CanvasProps) {
   const [nodes, setNodes] = useState<IeumNode[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
+  // 사람의 캔버스 조작 상태. 확대 버튼·미니맵은 이벤트가 null로 오므로, 따라가기 자신의 이동만 빼고 모두 사람 조작으로 본다.
+  const move = useRef<MoveState>({ active: false, endedAt: 0, self: false });
+  const begin = () => {
+    if (!move.current.self) move.current.active = true;
+  };
+  const end = () => {
+    if (!move.current.active) return;
+    move.current.active = false;
+    move.current.endedAt = Date.now();
+  };
+  const [edges, setEdges] = useState<Edge<EdgeData>[]>([]);
   // 한 틱에 여러 변경(엣지 삭제 → 노드 삭제)이 오면 앞 변경 결과 위에 쌓는다 — 렌더의 workflow는 낡았다.
   const latest = useRef(workflow);
   latest.current = workflow;
+  // 노드 알약의 키·계정 이름표.
+  useEffect(() => {
+    useCredentials.getState().load().catch(() => {});
+  }, []);
   const emit = (f: (w: Workflow) => Workflow) => {
     latest.current = f(latest.current);
     onChange?.(latest.current);
@@ -198,16 +301,17 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
         type: "ieum",
         position: n.position ?? { x: i * 320, y: 0 },
         measured: measured.get(n.id),
-        selected: !readOnly && n.id === selectedId,
+        selected: n.id === selectedId,
         data: {
           wf: n,
+          step: i + 1,
           errors: (errors ?? []).filter((e) => e.nodeId === n.id).map((e) => e.message),
           status: statuses?.[n.id],
-          showStatus: statuses !== undefined,
+          techInfo,
         },
       }));
     });
-  }, [workflow.nodes, errors, statuses, selectedId, readOnly]);
+  }, [workflow.nodes, errors, statuses, selectedId, readOnly, techInfo]);
 
   useEffect(() => {
     setEdges((prev) => {
@@ -217,10 +321,13 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
         source: e.source,
         target: e.target,
         sourceHandle: e.conditionType ?? null,
+        type: "animated",
+        markerEnd: MARKER,
+        data: { flowing: statuses?.[e.target] === "running", readOnly },
         selected: !readOnly && sel.has(edgeId(e)),
       }));
     });
-  }, [workflow.edges, readOnly]);
+  }, [workflow.edges, statuses, readOnly]);
 
   const onNodesChange = (changes: NodeChange<IeumNode>[]) => {
     setNodes((ns) => applyNodeChanges(readOnly ? changes.filter((c) => c.type === "dimensions") : changes, ns));
@@ -245,7 +352,7 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
       }));
   };
 
-  const onEdgesChange = (changes: EdgeChange[]) => {
+  const onEdgesChange = (changes: EdgeChange<Edge<EdgeData>>[]) => {
     if (readOnly) return;
     setEdges((es) => applyEdgeChanges(changes, es));
     const removed = new Set(changes.flatMap((c) => (c.type === "remove" ? [c.id] : [])));
@@ -260,22 +367,35 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
 
   return (
     <ReactFlow
+      className={WORKFLOW_CANVAS_CLASS}
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
       onNodesChange={onNodesChange}
       onEdgesChange={onEdgesChange}
       onConnect={onConnect}
+      onMoveStart={begin}
+      onMoveEnd={end}
+      onNodeDragStart={begin}
+      onNodeDragStop={end}
+      onNodeClick={onNodeClick && ((_: unknown, n: IeumNode) => onNodeClick(n.id))}
       nodesDraggable={!readOnly}
       nodesConnectable={!readOnly}
       elementsSelectable={!readOnly}
       deleteKeyCode={readOnly ? null : ["Backspace", "Delete"]}
       fitView
-      fitViewOptions={{ maxZoom: 1 }}
+      // 노드를 0.78보다 작게 줄이지 않는다 — 다 안 들어가면 끌어서(패닝) 본다.
+      fitViewOptions={{ padding: 0.24, minZoom: 0.78, maxZoom: 1 }}
+      minZoom={0.5}
+      maxZoom={1.4}
       proOptions={{ hideAttribution: true }}
     >
-      <Background />
+      <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="rgba(74, 101, 124, 0.18)" />
       <Controls showInteractive={false} />
+      <Follow count={workflow.nodes.length} cover={rightCover} move={move} />
+      {/* 오른쪽은 떠 있는 패널 자리 — 미니맵은 왼쪽 아래, 줌 버튼 옆. */}
+      <MiniMap position="bottom-left" style={{ marginLeft: 56 }} pannable zoomable nodeStrokeWidth={3} nodeColor={(n) => minimapMeta(n).tint} nodeStrokeColor={(n) => minimapMeta(n).color} />
     </ReactFlow>
   );
 }

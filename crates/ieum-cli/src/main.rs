@@ -1,4 +1,4 @@
-//! 내부 CLI `ieum` — 화면 없이 워크플로우를 돌리고 적합성 묶음을 검사한다(스펙 §4.7, 공개하지 않음).
+//! 내부 CLI `ieum-dev` — 화면 없이 워크플로우를 돌리고 적합성 묶음을 검사한다(스펙 §4.7, 공개하지 않음).
 //! 종료 코드: 0 성공 / 1 실행 실패 / 2 검증 에러·거부 / 3 사용법·입출력.
 //! `--json`: 표준 출력은 `ExecEvent` 한 줄씩 + 마지막 줄 `RunResult`, 에러는 표준 에러에 `{code, message}` 한 줄씩.
 
@@ -24,7 +24,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
-#[command(name = "ieum", about = "IEUM 내부 CLI(개발용)")]
+#[command(name = "ieum-dev", about = "IEUM 내부 CLI(개발용)")]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
