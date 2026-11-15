@@ -69,6 +69,20 @@ pub(crate) fn summary(s: &str) -> String {
     cut + "…"
 }
 
+/// JSON 글 읽기. f64 범위 밖 숫자 때문에 못 읽으면 BE(BigDecimal)와 다른 값을 내지 않게 실패,
+/// 그 밖의 실패는 `None`(호출부가 BE처럼 다른 방법으로 읽는다).
+/// serde_json은 이 오류를 Category::Syntax로만 묶어 공개하므로 문구로 가린다 —
+/// 문구가 바뀌면 `out_of_range_message_is_pinned` 테스트가 깨진다.
+pub(crate) fn parse_json<T: serde::de::DeserializeOwned>(t: &str) -> R<Option<T>> {
+    match serde_json::from_str(t) {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if e.is_syntax() && e.to_string().starts_with("number out of range") => {
+            Err(too_large("목록 속 숫자가 너무 커요"))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
 /// 런타임이 치환해 넘긴 설정.
 pub(crate) struct In<'a>(pub &'a Map<String, Value>);
 
@@ -151,7 +165,8 @@ impl In<'_> {
                     Vec::new()
                 } else if let Some(a) = t
                     .starts_with('[')
-                    .then(|| serde_json::from_str::<Vec<Value>>(t).ok())
+                    .then(|| parse_json::<Vec<Value>>(t))
+                    .transpose()?
                     .flatten()
                 {
                     a
@@ -175,6 +190,15 @@ mod tests {
 
     fn with(key: &str, v: Value) -> Map<String, Value> {
         Map::from_iter([(key.to_string(), v)])
+    }
+
+    #[test]
+    fn out_of_range_message_is_pinned() {
+        let e = serde_json::from_str::<Value>("[1e99999]").unwrap_err();
+        assert!(e.is_syntax(), "{e}");
+        assert!(e.to_string().starts_with("number out of range"), "{e}");
+        assert!(parse_json::<Value>("[-1e400]").is_err());
+        assert!(matches!(parse_json::<Value>("[1] x"), Ok(None)));
     }
 
     #[test]

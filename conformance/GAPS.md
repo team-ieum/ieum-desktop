@@ -33,7 +33,7 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `branch.if` | `rules` | chrono 범위 밖 날짜(연도 262143+): ±999999999년까지 읽음 → 판단 불가(거짓), panic 없음 | `condition.rs` `far_future_rfc_date_does_not_panic` |
 | `branch.if` | — | 분기 경고 문구: 실행 detail에 실음 → 러너가 버림(`evaluate`에서만 보임) | `condition.rs` `gap_runner_drops_warnings` |
 | `local.ai` | `outputFields` | `ref: false` 목록 속 참조: 검증(agent)이 건너뜀 → 부모 `ref: false`를 자식에 전파해 `REF_NOT_ALLOWED`(보안 강화, 데스크톱 로컬 워크플로우 전용) | `crates/ieum-engine/tests/validate.rs` `ai_output_fields_refuse_refs` |
-| `formatter.text_markdown_to_html` | `input` | Markdown 중첩이 101단계를 넘으면: commonmark-java가 열린 블록 100개에서 잘라 낸 결과 → `Markdown 중첩이 너무 깊어요`(TOO_LARGE)로 실패 | 없음(`formatter/html.rs` `MAX_DEPTH` 주석) |
+| `formatter.text_markdown_to_html` | `input` | Markdown 중첩이 101단계를 넘으면: commonmark-java가 열린 블록 100개에서 잘라 낸 결과 → `Markdown 중첩이 너무 깊어요`(TOO_LARGE)로 실패 | `formatter_html.rs` `markdown_depth_limit` |
 | `formatter.text_case` | `input` | `capitalize`·`title`에서 대문자가 여러 글자인 특수 글자(`ᾳ` 등 그리스 iota 하첨자): Java 한 글자 대응(`ᾼ`) → 원문 유지(`ᾳ`). `upper`·`lower`(`ß` → `SS`)는 같다 | 없음(`formatter/text.rs` `upper` 주석) |
 | `formatter.text_extract_pattern` | `pattern` | Java 백트래킹이 시간·스택으로 무너지는 패턴(`(a{1,30}){1,30}$`, `(a\|b)*` 긴 입력): `패턴 검사가 1초를 넘었어요`·`패턴이 너무 복잡해요`로 실패 → 뒤·앞 확인·역참조가 없으면 선형 엔진이라 정상 결과(빈 값·전체 일치) | `crates/ieum-engine/tests/formatter_extract.rs` `gap_java_timeout_pattern_ends`·`gap_java_stack_overflow_pattern_matches` |
 | `formatter.text_extract_pattern` | `pattern` | 1초 마감 문구: `패턴 검사가 1초를 넘었어요` → 역추적 상한(100만)·1초 마감 모두 `패턴이 너무 복잡해요` | `formatter_extract.rs` `runaway_pattern_ends_fast`·`runaway_lookahead_scan_hits_deadline` |
@@ -44,6 +44,6 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 펴면 10만 자를 넘는 소수(`0e-999999999`·`1e-99999`): 수억 자 글을 만듦 → `목록 속 숫자가 10만 자를 넘어요`(TOO_LARGE)로 실패 | `formatter_list.rs` `decimals_keep_source_digits`·`huge_exponents_fail_fast` |
 | `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 한 목록·표에서 편 소수 글의 합계가 100만 자를 넘으면(`1e-99997` × 11): 그대로 폄 → `목록 속 숫자가 모두 합해 100만 자를 넘어요`(TOO_LARGE)로 실패 | `formatter_list.rs` `huge_exponents_fail_fast` |
 | `http.request` | — | 4xx·5xx 실패 문구의 응답 본문: 1MB까지 그대로 → 앞 2,000자(UTF-16 단위)까지, 넘으면 `…`(실행 기록이 커지지 않게) | `crates/ieum-local/tests/http.rs` `error_body_in_message_is_capped_at_2000_utf16_units` |
-| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | f64 범위를 넘는 소수가 든 JSON 글(`[1e99999]`): `BigDecimal`로 읽어 폄 → JSON으로 읽지 못해 쉼표로 나눈 글(`[1e99999`). 표는 `대응표 모양이 아니에요`로 실패 | 없음 |
+| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | f64 범위를 넘는 숫자가 든 JSON 글(`[1e99999]`·`{"a": -1e400}`): `BigDecimal`로 읽어 폄 → `목록 속 숫자가 너무 커요`(TOO_LARGE)로 실패. 그 밖의 파싱 실패(뒤에 글자가 남음·깨진 JSON)는 BE처럼 쉼표로 나눈다. 범위 초과는 serde_json 오류 문구(`number out of range`)로 가린다 | `formatter_list.rs` `numbers_beyond_f64_fail`, `formatter/inputs.rs` `out_of_range_message_is_pinned` |
 
 실수 표기·이스케이프 차이는 참조식 치환 결과 문자열에만 나타난다(조건 비교는 `java_num`으로 Java 표기를 따른다). u64를 넘는 정수는 읽는 순간 f64가 되므로 조건 비교에도 나타난다.

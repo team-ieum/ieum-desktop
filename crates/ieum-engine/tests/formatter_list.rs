@@ -364,6 +364,39 @@ fn huge_exponents_fail_fast() {
 }
 
 #[test]
+fn numbers_beyond_f64_fail() {
+    const TOO_BIG: &str = "목록 속 숫자가 너무 커요";
+    for input in ["[1e99999, 2]", "[-1e400]", "[[1e99999]] x"] {
+        fails(
+            PICK,
+            json!({"input":input,"position":"first"}),
+            TOO_BIG,
+            "TOO_LARGE",
+        );
+        fails(TO_TEXT, json!({"input":input}), TOO_BIG, "TOO_LARGE");
+    }
+    fails(
+        LOOKUP,
+        json!({"input":"a","table":r#"{"a": 1e99999}"#}),
+        TOO_BIG,
+        "TOO_LARGE",
+    );
+    // 다른 파싱 실패는 지금처럼 쉼표로 나눈다(BE와 같다).
+    case(TO_TEXT, json!({"input":"[1, 2] x"}), "[1, 2] x");
+    case(TO_TEXT, json!({"input":r#"["1e99999"]"#}), "1e99999");
+    case(
+        LOOKUP,
+        json!({"input":"a","table":r#"{"a": "1e99999"}"#}),
+        "1e99999",
+    );
+    case(
+        TO_TEXT,
+        json!({"input":"[1e300]"}),
+        &format!("1{}", "0".repeat(300)),
+    );
+}
+
+#[test]
 fn table_string_over_limit() {
     let t = format!("{{\"a\":\"{}\"}}", "x".repeat(MAX_TEXT));
     fails(

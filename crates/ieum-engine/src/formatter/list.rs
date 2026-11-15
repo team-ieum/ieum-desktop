@@ -6,7 +6,7 @@ use bigdecimal::{BigDecimal, Signed, Zero};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
-use super::inputs::{In, MAX_ITEMS, MAX_TEXT, R, invalid, json, too_large};
+use super::inputs::{In, MAX_ITEMS, MAX_TEXT, R, invalid, json, parse_json, too_large};
 use super::{Entry, out};
 use crate::condition::strip;
 
@@ -95,8 +95,8 @@ fn lookup_table(i: &In, _: DateTime<Utc>) -> Out {
             if t.encode_utf16().count() > MAX_TEXT {
                 return Err(too_large("'table' 칸이 10만 자를 넘어요"));
             }
-            match serde_json::from_str::<Map<String, Value>>(t) {
-                Ok(mut m) => {
+            match parse_json::<Map<String, Value>>(t)? {
+                Some(mut m) => {
                     if m.values().any(Value::is_f64) {
                         let mut total = 0;
                         // 뒤에서부터 — 겹친 키는 마지막 값이 남고, 바꾼 값은 더는 소수가 아니라 건너뛴다.
@@ -113,7 +113,7 @@ fn lookup_table(i: &In, _: DateTime<Utc>) -> Out {
                     }
                     Some(m)
                 }
-                Err(_) => None,
+                None => None,
             }
         }
         Value::Object(m) => Some(m.clone()),
