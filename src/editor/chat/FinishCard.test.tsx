@@ -37,6 +37,17 @@ test("card_shows_folder_and_actions_and_only_a_click_turns_on", async () => {
   expect(usePendingFinish.getState().pending.w1).toBeUndefined();
 });
 
+test("finish_card_shows_http_action", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({
+    ...P,
+    actions: [{ nodeId: "h", event: "http.request", label: "주문 넣기", target: "POST https://x.test/o/{{nodes.a.output.id}}" }],
+  });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  expect(within(card).getByText("이 워크플로우가 하는 일")).toBeTruthy();
+  expect(within(card).getByText("요청 보내기 → POST https://x.test/o/{{nodes.a.output.id}}")).toBeTruthy();
+});
+
 test("card_lists_ai_nodes_and_marks_file_content_sending", async () => {
   vi.spyOn(api, "pendingFinish").mockResolvedValue({
     ...P,

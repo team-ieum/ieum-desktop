@@ -221,7 +221,7 @@ export function ChatSlot({
           item.kind === "card" ? (
             <div key={i} className="pl-9">
               {item.card.kind === "test" ? (
-                <TestCard runId={item.card.runId} status={item.card.status} nodeNames={nodeNames} />
+                <TestCard runId={item.card.runId} status={item.card.status} nodeNames={nodeNames} httpSent={item.card.httpSent} />
               ) : item.card.kind === "pickFolder" ? (
                 <PickFolderCard
                   workflowId={workflowId}

@@ -1,6 +1,7 @@
 import { ArrowLeft, FileUp, Pencil } from "lucide-react";
 import { useEffect } from "react";
 import { Canvas, nodeTitle, StatusIcon } from "../editor/Canvas";
+import { HttpConfirm } from "../editor/chat/HttpTestCard";
 import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
 import { emptyLive, useRuns } from "../stores/runs";
@@ -12,7 +13,7 @@ export function RunView({ workflowId, onBack, onEdit }: { workflowId: string; on
   const entry = useWorkflows((s) => s.list.find((w) => w.id === workflowId));
   const load = useWorkflows((s) => s.load);
   const live = useRuns((s) => s.live[workflowId]) ?? emptyLive(workflowId);
-  const { running, error, run: testRun } = useTestRun(workflowId);
+  const { running, error, run: testRun, ask, answer } = useTestRun(workflowId, entry?.workflow.nodes ?? []);
 
   useEffect(() => {
     if (!entry) void load();
@@ -44,7 +45,10 @@ export function RunView({ workflowId, onBack, onEdit }: { workflowId: string; on
       </header>
       {error && <p className="border-b border-danger-300 bg-danger-100 px-4 py-2 typo-caption1_semibold text-danger-700">{error}</p>}
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1">{entry && <Canvas workflow={entry.workflow} readOnly statuses={live.nodes} />}</div>
+        <div className="relative min-w-0 flex-1">
+          {entry && <Canvas workflow={entry.workflow} readOnly statuses={live.nodes} />}
+          {ask && <HttpConfirm lines={ask} skipLabel={t("common.cancel")} onAnswer={answer} />}
+        </div>
         <aside className="w-96 shrink-0 overflow-y-auto border-l border-neutral-200 bg-white p-4">
           {!live.runId ? (
             <p className="typo-body3_regular text-neutral-500">{t("run.idle")}</p>

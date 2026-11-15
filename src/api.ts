@@ -388,6 +388,18 @@ export interface PendingFinish {
   ai?: { nodeId: string; label: string; provider: string; sendContent: boolean }[];
 }
 
+/** HTTP 테스트 확인 카드의 한 줄 — `url`은 참조식 그대로(치환한 값은 오지 않는다). `method`는 대문자. */
+export interface HttpLine {
+  nodeId: string;
+  label: string;
+  method: string;
+  url: string;
+}
+export interface HttpTestConfirm {
+  id: string;
+  lines: HttpLine[];
+}
+
 /** 앱 안 터미널에 띄울 수 있는 CLI. */
 export type TermTool = "claude" | "codex" | "agy";
 /** CLI 카드의 상태 — `ready`·`unknown`(확인 불가)은 고를 수 있다. */
@@ -424,7 +436,7 @@ export interface ChatFile {
 
 /** 채팅 턴 응답에만 실리는 카드. 테스트 값은 없다 — 화면이 `runId`로 실행 기록을 읽는다. */
 export type ChatCard =
-  | { kind: "test"; nodeId: string; runId: string; status: string }
+  | { kind: "test"; nodeId: string; runId: string; status: string; httpSent?: boolean }
   | { kind: "pickFolder"; nodeId: string; field: string }
   | { kind: "finish" };
 export interface ChatTurn {
@@ -552,6 +564,11 @@ export const api = {
     listen<{ id: string; updatedAt: string }>("workflow-changed", (e) => cb(e.payload)),
   onFinishPending: (cb: (p: { id: string; name: string }) => void): Promise<UnlistenFn> =>
     listen<{ id: string; name: string }>("finish-pending", (e) => cb(e.payload)),
+  /** 빌더 테스트가 HTTP 요청을 보내기 전 사람 확인을 기다린다. */
+  onHttpTestConfirm: (cb: (p: HttpTestConfirm) => void): Promise<UnlistenFn> =>
+    listen<HttpTestConfirm>("http-test-confirm", (e) => cb(e.payload)),
+  /** [보내기]/[테스트 없이 넘어가기]. 기다리는 대기가 없으면(시간 초과·덮어씀) false. */
+  answerHttpConfirm: (workflowId: string, send: boolean) => invoke<boolean>("answer_http_confirm", { workflowId, send }),
   // ── 채팅 패널 ──
   chatSend: (workflowId: string, text: string, ai: ChatAi) =>
     invoke<ChatTurn>("chat_send", {
