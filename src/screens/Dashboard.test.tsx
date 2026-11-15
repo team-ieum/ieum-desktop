@@ -82,18 +82,18 @@ test("dashboard_web_offline_shows_badge_keeps_local", async () => {
   vi.mocked(api.dashboardSummary).mockRejectedValue({ code: "NETWORK" });
   vi.mocked(api.dashboardExecutions).mockRejectedValue({ code: "NETWORK" });
   await mount();
-  expect(screen.getByText("웹 이음 연결 안 됨")).toBeTruthy();
+  expect(screen.getByText("이음 클라우드 연결 안 됨")).toBeTruthy();
   expect(screen.getByText("RUN-7F3A21C9")).toBeTruthy();
   expect(screen.getByTestId("today-runs").textContent).toContain("1");
 
-  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "웹 이음" })));
+  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "이음 클라우드" })));
   expect(screen.queryByTestId("today-runs")).toBeNull();
 });
 
 test("dashboard_non_network_error_no_offline_badge", async () => {
   vi.mocked(api.dashboardSummary).mockRejectedValue({ code: "BAD_INPUT" });
   await mount();
-  expect(screen.queryByText("웹 이음 연결 안 됨")).toBeNull();
+  expect(screen.queryByText("이음 클라우드 연결 안 됨")).toBeNull();
 });
 
 test("dashboard_tabs_arrow_keys_and_panel", async () => {
@@ -106,7 +106,7 @@ test("dashboard_tabs_arrow_keys_and_panel", async () => {
   expect(document.activeElement).toBe(local);
   await act(async () => fireEvent.keyDown(local, { key: "ArrowLeft" }));
   await act(async () => fireEvent.keyDown(screen.getByRole("tab", { name: "전체" }), { key: "ArrowLeft" }));
-  expect(screen.getByRole("tab", { name: "웹 이음" }).getAttribute("aria-selected")).toBe("true");
+  expect(screen.getByRole("tab", { name: "이음 클라우드" }).getAttribute("aria-selected")).toBe("true");
 });
 
 test("dashboard_row_space_opens_and_web_failure_logged", async () => {
@@ -182,7 +182,7 @@ test("runs_table_filters_status_and_trigger", async () => {
   expect(tableRows()).toHaveLength(1);
   expect(screen.getByText("RUN-L0000003")).toBeTruthy();
   // 웹 탭: 트리거는 받은 값(웹훅)만, 상태엔 취소·거부가 없다
-  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "웹 이음" })));
+  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "이음 클라우드" })));
   await act(async () => fireEvent.click(screen.getByRole("button", { name: /^트리거:/ })));
   expect(screen.getByRole("option", { name: "웹훅" })).toBeTruthy();
   expect(screen.queryByRole("option", { name: "폴더 감시" })).toBeNull();
@@ -216,7 +216,7 @@ test("web_runs_fetch_next_cursor_only_when_needed", async () => {
     .mockResolvedValueOnce({ content: Array.from({ length: 20 }, (_, i) => webExec(i)), hasNext: true, nextCursor: "c2" })
     .mockResolvedValueOnce({ content: Array.from({ length: 5 }, (_, i) => webExec(20 + i)), hasNext: false, nextCursor: null });
   await mount();
-  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "웹 이음" })));
+  await act(async () => fireEvent.click(screen.getByRole("tab", { name: "이음 클라우드" })));
   expect(api.dashboardExecutions).toHaveBeenCalledTimes(1);
   expect(screen.getByText("1–10 / 20건+ · 더 있음")).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "다음" })));

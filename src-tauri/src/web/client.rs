@@ -82,7 +82,7 @@ impl fmt::Display for WebError {
             }
             WebError::AuthExpired => f.write_str("로그인이 만료됐어요. 다시 로그인해 주세요."),
             WebError::ExternalExpired => {
-                f.write_str("연결된 외부 서비스 인증이 만료됐어요. 웹 이음에서 다시 연동해 주세요.")
+                f.write_str("연결된 외부 서비스 인증이 만료됐어요. 이음 클라우드에서 다시 연동해 주세요.")
             }
             WebError::Network(m) => write!(f, "서버에 연결하지 못했어요: {m}"),
             WebError::Server(m) => write!(f, "서버 오류: {m}"),

@@ -51,7 +51,7 @@ test("search_web_offline_still_lists_local", async () => {
   await mount();
   type("정리");
   expect(screen.getAllByRole("option")).toHaveLength(2);
-  expect(screen.getByText("웹 이음 연결 안 됨")).toBeTruthy();
+  expect(screen.getByText("이음 클라우드 연결 안 됨")).toBeTruthy();
 });
 
 test("search_active_option_is_announced", async () => {

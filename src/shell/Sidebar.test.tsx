@@ -101,7 +101,7 @@ test("recent_mixes_local_and_web_by_time", () => {
   const items = screen.getAllByRole("button", { name: /^(local|web) / });
   expect(items.map((b) => b.textContent?.match(/^(local|web) \w/)?.[0])).toEqual(["local b", "web c", "local a", "web d"]);
   expect(within(items[0]).getByText("내 PC")).toBeTruthy();
-  expect(within(items[1]).getByText("웹 이음")).toBeTruthy();
+  expect(within(items[1]).getByText("이음 클라우드")).toBeTruthy();
 });
 
 test("recent_shows_only_five_with_status_text", () => {

@@ -51,6 +51,6 @@ test("web_card_menu_opens_in_browser", async () => {
   });
   expect(screen.getByText("노드 4개")).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "메뉴" })));
-  await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "웹에서 열기" })));
+  await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "이음 클라우드에서 열기" })));
   expect(open).toHaveBeenCalledWith("aaaaaaaa-0000-4000-8000-000000000001");
 });
