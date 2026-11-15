@@ -44,6 +44,7 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 펴면 10만 자를 넘는 소수(`0e-999999999`·`1e-99999`): 수억 자 글을 만듦 → `목록 속 숫자가 10만 자를 넘어요`(TOO_LARGE)로 실패 | `formatter_list.rs` `decimals_keep_source_digits`·`huge_exponents_fail_fast` |
 | `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 한 목록·표에서 편 소수 글의 합계가 100만 자를 넘으면(`1e-99997` × 11): 그대로 폄 → `목록 속 숫자가 모두 합해 100만 자를 넘어요`(TOO_LARGE)로 실패 | `formatter_list.rs` `huge_exponents_fail_fast` |
 | `http.request` | — | 4xx·5xx 실패 문구의 응답 본문: 1MB까지 그대로 → 앞 2,000자(UTF-16 단위)까지, 넘으면 `…`(실행 기록이 커지지 않게) | `crates/ieum-local/tests/http.rs` `error_body_in_message_is_capped_at_2000_utf16_units` |
+| `http.request` | `url` | 실패 문구(주소 형식·scheme·호스트 없음·리다이렉트 3회 초과·Location 형식)에 싣는 주소: 원문 그대로 → 쿼리·fragment를 `?…`·`#…`로, `://` 뒤 계정 정보(`@` 앞)를 `…`로 가림(토큰이 실행 기록에 남지 않게) | `crates/ieum-local/tests/http.rs` `url_secrets_are_masked_in_messages`·`fourth_redirect_location_secret_is_masked` |
 | `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | f64 범위를 넘는 숫자가 든 JSON 글(`[1e99999]`·`{"a": -1e400}`): `BigDecimal`로 읽어 폄 → `목록 속 숫자가 너무 커요`(TOO_LARGE)로 실패. 그 밖의 파싱 실패(뒤에 글자가 남음·깨진 JSON)는 BE처럼 쉼표로 나눈다. 범위 초과는 serde_json 오류 문구(`number out of range`)로 가린다 | `formatter_list.rs` `numbers_beyond_f64_fail`, `formatter/inputs.rs` `out_of_range_message_is_pinned` |
 
 실수 표기·이스케이프 차이는 참조식 치환 결과 문자열에만 나타난다(조건 비교는 `java_num`으로 Java 표기를 따른다). u64를 넘는 정수는 읽는 순간 f64가 되므로 조건 비교에도 나타난다.

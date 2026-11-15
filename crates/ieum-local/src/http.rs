@@ -3,6 +3,7 @@
 
 use std::error::Error as _;
 use std::str::FromStr;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -34,22 +35,40 @@ fn unreachable(message: impl Into<String>) -> NodeError {
     fail_code("HTTP_UNREACHABLE", message)
 }
 
+/// BE와 같은 연결 10초·읽기 30초.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 실행마다 TLS 루트·연결 풀을 새로 만들지 않게 프로세스에서 같이 쓴다.
+static SHARED: LazyLock<Client> = LazyLock::new(|| client(CONNECT_TIMEOUT, READ_TIMEOUT));
+
+fn client(connect: Duration, read: Duration) -> Client {
+    // 리다이렉트는 직접 따라간다(출처가 바뀌면 자격 헤더를 떼야 한다).
+    // `.timeout()`은 요청 전체 마감이라 쓰지 않는다 — 읽기 제한은 읽기마다 다시 건다.
+    // gzip 등 reqwest feature를 켜지 않아 압축 응답을 풀지 않는다(작은 응답이 크게 풀리지 않게).
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(connect)
+        .read_timeout(read)
+        .build()
+        .expect("HTTP 클라이언트 생성")
+}
+
 pub struct HttpRunner {
     client: Client,
 }
 
 impl HttpRunner {
     pub fn new() -> Self {
-        // 리다이렉트는 직접 따라간다(출처가 바뀌면 자격 헤더를 떼야 한다).
-        // `.timeout()`은 요청 전체 마감이라 쓰지 않는다 — BE는 연결 10초·읽기 30초.
-        // gzip 등 reqwest feature를 켜지 않아 압축 응답을 풀지 않는다(작은 응답이 크게 풀리지 않게).
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(Duration::from_secs(10))
-            .read_timeout(Duration::from_secs(30))
-            .build()
-            .expect("HTTP 클라이언트 생성");
-        HttpRunner { client }
+        HttpRunner {
+            client: SHARED.clone(),
+        }
+    }
+
+    pub fn with_timeouts(connect: Duration, read: Duration) -> Self {
+        HttpRunner {
+            client: client(connect, read),
+        }
     }
 }
 
@@ -99,7 +118,8 @@ fn request(cfg: &Map<String, Value>) -> Result<Request, NodeError> {
         Some(Value::String(s)) if !s.trim().is_empty() => s,
         _ => return Err(fail_code("FIELD_EMPTY url", "'URL' 칸이 비어 있어요")),
     };
-    let url = check_url(Url::parse(url), url).map_err(|m| fail_code("FIELD_INVALID url", m))?;
+    let url =
+        check_url(url, None, "유효하지 않은 URL").map_err(|m| fail_code("FIELD_INVALID url", m))?;
 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -143,20 +163,71 @@ fn request(cfg: &Map<String, Value>) -> Result<Request, NodeError> {
     })
 }
 
-/// BE `validateUrl`에서 내부망 검사를 뺀 것. `shown`은 실패 문구에 싣는 원문.
-fn check_url(parsed: Result<Url, ParseError>, shown: &str) -> Result<Url, String> {
-    let url = match parsed {
+/// BE `validateUrl`에서 내부망 검사를 뺀 것. `base`가 있으면 리다이렉트 Location으로 읽고,
+/// `syntax`는 읽지 못했을 때의 문구. 실패 문구에는 가린 원문을 싣는다.
+fn check_url(text: &str, base: Option<&Url>, syntax: &str) -> Result<Url, String> {
+    let fail = |what: &str| Err(format!("{what}: {}", mask(text)));
+    // `Url`은 이런 글자를 퍼센트 인코딩하거나 지워 조용히 따라간다 — BE `java.net.URI`는 거절.
+    if uri_rejects(text) {
+        return fail(syntax);
+    }
+    let url = match base.map_or_else(|| Url::parse(text), |b| b.join(text)) {
         Ok(u) => u,
-        Err(ParseError::EmptyHost) => return Err(format!("URL에 호스트가 없습니다: {shown}")),
-        Err(_) => return Err(format!("유효하지 않은 URL: {shown}")),
+        Err(ParseError::RelativeUrlWithoutBase) => return fail("http·https URL만 허용됩니다"),
+        Err(ParseError::EmptyHost) => return fail("URL에 호스트가 없습니다"),
+        Err(_) => return fail(syntax),
     };
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(format!("http·https URL만 허용됩니다: {shown}"));
+        return fail("http·https URL만 허용됩니다");
     }
-    if url.host_str().is_none_or(str::is_empty) {
-        return Err(format!("URL에 호스트가 없습니다: {shown}"));
+    // `Url`은 `http:/x`·`http:///x`를 `http://x/`로 고쳐 읽는다 — URI에는 호스트가 없다.
+    let no_authority = after_scheme(text).is_some_and(|rest| {
+        rest.strip_prefix("//")
+            .is_none_or(|a| a.is_empty() || a.starts_with(['/', '?', '#']))
+    });
+    if no_authority || url.host_str().is_none_or(str::is_empty) {
+        return fail("URL에 호스트가 없습니다");
     }
     Ok(url)
+}
+
+/// 공백(유니코드 공백 포함)·제어문자·`"<>\^`{|}`·두 자리 16진수가 뒤따르지 않는 `%` (JDK 21로 확인).
+fn uri_rejects(text: &str) -> bool {
+    let b = text.as_bytes();
+    text.char_indices().any(|(i, c)| {
+        c.is_whitespace()
+            || c.is_control()
+            || "\"<>\\^`{|}".contains(c)
+            || (c == '%'
+                && !b
+                    .get(i + 1..i + 3)
+                    .is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit)))
+    })
+}
+
+/// `scheme:` 뒤의 글. scheme이 없으면(상대 주소) None.
+fn after_scheme(text: &str) -> Option<&str> {
+    let (scheme, rest) = text.split_once(':')?;
+    let mut cs = scheme.chars();
+    (cs.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && cs.all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)))
+    .then_some(rest)
+}
+
+/// 실패 문구에 싣는 주소 — 쿼리·fragment·계정 정보는 토큰일 수 있어 가린다(BE는 원문, GAPS.md).
+/// 읽지 못한 글에도 쓰므로 파싱 없이 글자로만 자른다.
+fn mask(text: &str) -> String {
+    let (head, cut) = match text.find(['?', '#']) {
+        Some(i) => (&text[..i], format!("{}…", &text[i..=i])),
+        None => (text, String::new()),
+    };
+    if let Some(s) = head.find("://").map(|i| i + 3) {
+        let end = head[s..].find('/').map_or(head.len(), |i| s + i);
+        if let Some(at) = head[s..end].rfind('@') {
+            return format!("{}…{}{cut}", &head[..s], &head[s + at..]);
+        }
+    }
+    format!("{head}{cut}")
 }
 
 /// scheme·host·port(기본 80/443). `url`이 scheme·host를 소문자로 맞춰 둔다.
@@ -250,20 +321,17 @@ impl HttpRunner {
                 let shown = String::from_utf8_lossy(loc.as_bytes()).into_owned();
                 if hops == MAX_REDIRECTS {
                     return Err(unreachable(format!(
-                        "리다이렉트가 {MAX_REDIRECTS}회를 넘었습니다 — 마지막 Location: {shown}"
+                        "리다이렉트가 {MAX_REDIRECTS}회를 넘었습니다 — 마지막 Location: {}",
+                        mask(&shown)
                     )));
                 }
-                let next = loc
-                    .to_str()
-                    .ok()
-                    .and_then(|s| url.join(s).ok())
-                    .ok_or_else(|| {
-                        unreachable(format!(
-                            "리다이렉트 Location 형식이 올바르지 않습니다: {shown}"
-                        ))
-                    })?;
-                let shown = next.to_string();
-                let next = check_url(Ok(next), &shown).map_err(unreachable)?;
+                // 보이는 ASCII가 아닌 바이트도 형식 오류다(그 글은 lossy로 싣는다).
+                let syntax = "리다이렉트 Location 형식이 올바르지 않습니다";
+                let next = match loc.to_str() {
+                    Ok(s) => check_url(s, Some(&url), syntax),
+                    Err(_) => Err(format!("{syntax}: {}", mask(&shown))),
+                }
+                .map_err(unreachable)?;
                 // 한 번 뗀 자격 헤더는 원래 출처로 돌아와도 되살리지 않는다.
                 if !same_origin(&url, &next) {
                     for h in [AUTHORIZATION, PROXY_AUTHORIZATION, COOKIE] {

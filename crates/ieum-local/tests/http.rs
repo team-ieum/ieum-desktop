@@ -123,9 +123,17 @@ async fn run_with(
     config: Value,
     cancel: CancellationToken,
 ) -> Result<Map<String, Value>, NodeError> {
+    run_on(&HttpRunner::new(), config, cancel).await
+}
+
+async fn run_on(
+    runner: &HttpRunner,
+    config: Value,
+    cancel: CancellationToken,
+) -> Result<Map<String, Value>, NodeError> {
     let node: Node = serde_json::from_value(json!({"id": "n", "event": "http.request"})).unwrap();
     let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-    HttpRunner::new()
+    runner
         .run(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
@@ -416,7 +424,13 @@ async fn scheme_relative_location_is_followed() {
 
 #[tokio::test]
 async fn non_http_location_fails_url_check() {
-    for loc in ["file:///etc/passwd", "data:text/plain,hi", "ftp://x/y"] {
+    // BE처럼 resolve 결과의 원문 표기(`ftp://x`, 정규화한 `ftp://x/`가 아니다).
+    for loc in [
+        "file:///etc/passwd",
+        "data:text/plain,hi",
+        "ftp://x/y",
+        "ftp://x",
+    ] {
         let (base, log) = serve_one(redirect(302, loc)).await;
         let e = err(run(json!({"url": base})).await);
         assert_eq!(e.message, format!("http·https URL만 허용됩니다: {loc}"));
@@ -600,4 +614,236 @@ async fn error_never_contains_header_values() {
     let e = err(run(json!({"url": base, "headers": {"Authorization": "Bearer SECRET\n"}})).await);
     assert!(!e.message.contains("SECRET"), "{}", e.message);
     assert_eq!(code(&e), "FIELD_INVALID headers");
+}
+
+// ── java.net.URI가 거절하는 주소 ─────────────────────────
+
+/// BE `redirect_unparsableLocation_fails` — 고쳐 읽어 따라가지 않는다.
+#[tokio::test]
+async fn redirect_unparsable_location_fails() {
+    for (loc, shown) in [
+        ("/search?q=a b", "/search?…"),
+        ("/a b", "/a b"),
+        ("/a\tb", "/a\tb"),
+        ("/a|b", "/a|b"),
+        ("/a%zz", "/a%zz"),
+    ] {
+        let (base, log) = serve_one(redirect(302, loc)).await;
+        let e = err(run(json!({"url": base})).await);
+        assert_eq!(
+            e.message,
+            format!("리다이렉트 Location 형식이 올바르지 않습니다: {shown}")
+        );
+        assert_eq!(code(&e), "HTTP_UNREACHABLE");
+        assert_eq!(log.lock().unwrap().len(), 1, "{loc:?}");
+    }
+}
+
+#[tokio::test]
+async fn url_with_disallowed_chars_fails() {
+    for url in [
+        "http://127.0.0.1:1/a b",
+        "http://127.0.0.1:1/a\nb",
+        "http://127.0.0.1:1/a\tb",
+        " http://127.0.0.1:1/",
+        "http://127.0.0.1:1/a\u{3000}b",
+        "http://127.0.0.1:1/\"<>\\^`{|}",
+        "http://127.0.0.1:1/a%2",
+    ] {
+        let e = err(run(json!({"url": url})).await);
+        assert_eq!(e.message, format!("유효하지 않은 URL: {url}"));
+        assert_eq!(code(&e), "FIELD_INVALID url");
+    }
+}
+
+/// BE `nonHttpScheme_blocked`의 scheme 없는 `//host`.
+#[tokio::test]
+async fn scheme_relative_url_is_refused() {
+    let e = err(run(json!({"url": "//203.0.113.10/x"})).await);
+    assert_eq!(e.message, "http·https URL만 허용됩니다: //203.0.113.10/x");
+    assert_eq!(code(&e), "FIELD_INVALID url");
+}
+
+#[tokio::test]
+async fn location_without_host_fails() {
+    let (base, log) = serve_one(redirect(302, "http:///path")).await;
+    let e = err(run(json!({"url": base})).await);
+    assert_eq!(e.message, "URL에 호스트가 없습니다: http:///path");
+    assert_eq!(code(&e), "HTTP_UNREACHABLE");
+    assert_eq!(log.lock().unwrap().len(), 1);
+
+    let e = err(run(json!({"url": "http:///path"})).await);
+    assert_eq!(e.message, "URL에 호스트가 없습니다: http:///path");
+    assert_eq!(code(&e), "FIELD_INVALID url");
+}
+
+// ── 실패 문구 속 주소의 비밀 ─────────────────────────────
+
+fn no_secret(e: &NodeError) {
+    assert!(!e.message.contains("SECRET123"), "{}", e.message);
+}
+
+#[tokio::test]
+async fn url_secrets_are_masked_in_messages() {
+    let e = err(run(json!({"url": "http://u:SECRET123@h/a b?t=SECRET123#SECRET123"})).await);
+    assert_eq!(e.message, "유효하지 않은 URL: http://…@h/a b?…");
+
+    let e = err(run(json!({"url": "ftp://u:SECRET123@x/?t=SECRET123"})).await);
+    assert_eq!(e.message, "http·https URL만 허용됩니다: ftp://…@x/?…");
+
+    let e = err(run(json!({"url": "http://SECRET123@/p#SECRET123"})).await);
+    assert_eq!(e.message, "URL에 호스트가 없습니다: http://…@/p#…");
+
+    let e = err(run(json!({"url": "http:///p?t=SECRET123"})).await);
+    no_secret(&e);
+
+    for loc in [
+        "/x y?token=SECRET123",
+        "/x#SECRET123 y",
+        "ftp://u:SECRET123@x/",
+        "http:///p?token=SECRET123",
+    ] {
+        let (base, _) = serve_one(redirect(302, loc)).await;
+        let e = err(run(json!({"url": base})).await);
+        assert_eq!(code(&e), "HTTP_UNREACHABLE");
+        no_secret(&e);
+    }
+}
+
+#[tokio::test]
+async fn fourth_redirect_location_secret_is_masked() {
+    let (l, base) = bind().await;
+    serve(l, |r| match r.path.as_str() {
+        "/" => redirect(302, "/a"),
+        "/a" => redirect(302, "/b"),
+        "/b" => redirect(302, "/c"),
+        _ => redirect(302, "/d?token=SECRET123"),
+    });
+    let e = err(run(json!({"url": base})).await);
+    assert_eq!(
+        e.message,
+        "리다이렉트가 3회를 넘었습니다 — 마지막 Location: /d?…"
+    );
+}
+
+// ── 시간 제한·본문 ──────────────────────────────────────
+
+#[tokio::test]
+async fn read_timeout_fails_as_unreachable() {
+    let (l, base) = bind().await;
+    // 요청을 읽고 응답하지 않는다.
+    tokio::spawn(async move {
+        let mut socks = Vec::new();
+        loop {
+            let (mut s, _) = l.accept().await.unwrap();
+            read_request(&mut s).await;
+            socks.push(s);
+        }
+    });
+    let runner = HttpRunner::with_timeouts(Duration::from_secs(1), Duration::from_millis(300));
+    let e = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_on(&runner, json!({"url": base}), CancellationToken::new()),
+    )
+    .await
+    .expect("읽기 제한에서 끝나야 함")
+    .expect_err("실패해야 함");
+    assert_eq!(e.message, "요청을 보내지 못했어요: 시간 초과");
+    assert_eq!(code(&e), "HTTP_UNREACHABLE");
+}
+
+/// 읽기 제한은 읽기마다 다시 건다 — 전체 마감이 아니다.
+#[tokio::test]
+async fn slow_body_within_read_timeout_succeeds() {
+    let (l, base) = bind().await;
+    tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.unwrap();
+        read_request(&mut s).await;
+        let body = b"{\"slow\":true}";
+        let head = format!(
+            "HTTP/1.1 200 X\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        );
+        s.write_all(head.as_bytes()).await.unwrap();
+        for b in body {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            s.write_all(&[*b]).await.unwrap();
+        }
+    });
+    let runner = HttpRunner::with_timeouts(Duration::from_secs(1), Duration::from_millis(400));
+    let started = std::time::Instant::now();
+    let out = run_on(&runner, json!({"url": base}), CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(started.elapsed() > Duration::from_millis(400));
+    assert_eq!(out["body"], json!({"slow": true}));
+}
+
+#[tokio::test]
+async fn get_and_delete_send_body() {
+    for method in ["GET", "DELETE"] {
+        let (base, log) = serve_one(ok("{}")).await;
+        run(json!({"method": method, "url": base, "body": {"a": 1}}))
+            .await
+            .unwrap();
+        let r = log.lock().unwrap()[0].clone();
+        assert_eq!(r.method, method);
+        assert_eq!(r.body_str(), r#"{"a":1}"#);
+    }
+}
+
+/// 객체를 `output`으로 내는 가짜 AI 노드.
+struct ObjectAi;
+
+#[async_trait::async_trait]
+impl NodeRunner for ObjectAi {
+    async fn run(&self, _: NodeCtx<'_>) -> Result<Map<String, Value>, NodeError> {
+        let out = json!({"output": {"model": "gemini", "tokens": 150}});
+        Ok(out.as_object().unwrap().clone())
+    }
+}
+
+/// BE `body_mapReference_staysValidJson` — 엔진이 치환(render_deep)한 본문을 실제로 보낸다.
+#[tokio::test]
+async fn body_map_reference_stays_valid_json() {
+    use ieum_engine::{Catalog, RunStatus, Runners, Workflow, run_workflow};
+
+    let (base, log) = serve_one(ok("{}")).await;
+    let wf: Workflow = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": "/in"}},
+            {"id": "ai", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "p"}},
+            {"id": "h", "type": "HTTP", "event": "http.request", "config": {
+                "method": "POST",
+                "url": base,
+                "body": {"summary": "{{nodes.ai.output.output}}", "static": "그대로"},
+            }},
+        ],
+        "edges": [{"source": "t", "target": "ai"}, {"source": "ai", "target": "h"}],
+    }))
+    .unwrap();
+    let mut runners: Runners = Default::default();
+    runners.insert("local.ai".into(), Arc::new(ObjectAi));
+    runners.insert("http.request".into(), Arc::new(HttpRunner::new()));
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let run = run_workflow(
+        &wf,
+        &Catalog::embedded().unwrap(),
+        &runners,
+        Map::new(),
+        tx,
+        CancellationToken::new(),
+    )
+    .await;
+    assert_eq!(
+        run.status,
+        RunStatus::Succeeded,
+        "{:?} {:?}",
+        run.validation_errors,
+        run.nodes
+    );
+    let sent: Value = serde_json::from_slice(&log.lock().unwrap()[0].body).unwrap();
+    assert_eq!(sent["static"], json!("그대로"));
+    let summary: Value = serde_json::from_str(sent["summary"].as_str().unwrap()).unwrap();
+    assert_eq!(summary, json!({"model": "gemini", "tokens": 150}));
 }
