@@ -32,6 +32,7 @@ pub enum Code {
     MoveFailed,
     AiNotConnected,
     AiFailed,
+    AiModelListFailed,
     NodeFailed,
     UndoFailed,
 }
@@ -75,6 +76,9 @@ impl Code {
             MoveFailed => "파일을 옮기지 못함",
             AiNotConnected => "AI 연결(키·계정)이 없음. 사용자가 캔버스에서 골라야 함",
             AiFailed => "AI 호출이 실패함",
+            AiModelListFailed => {
+                "Antigravity 모델 목록을 읽지 못함. 사용자가 agy 로그인·설치 상태를 확인해야 함"
+            }
             NodeFailed => "노드 실행이 실패함. 자세한 내용은 사용자 화면에만 보임",
             UndoFailed => "테스트가 옮긴 파일 일부를 되돌리지 못함. 경로는 사용자 화면에 표시됨",
         }
@@ -86,7 +90,8 @@ impl Code {
         match self {
             BadRequest | Unauthorized => 3,
             Internal | NoSampleFile | FolderMissing | FileMissing | DestOccupied | FieldEmpty
-            | FieldInvalid | MoveFailed | AiNotConnected | AiFailed | NodeFailed | UndoFailed => 1,
+            | FieldInvalid | MoveFailed | AiNotConnected | AiFailed | AiModelListFailed
+            | NodeFailed | UndoFailed => 1,
             Stale | UserEditing | NodeNotFound | EventUnknown | TriggerRule | FieldUnknown
             | FieldLocked | NotFolderField | PickCancelled | FolderNotAllowed | EdgeInvalid
             | SaveRejected | Invalid | SampleNotAllowed | NotReady => 2,

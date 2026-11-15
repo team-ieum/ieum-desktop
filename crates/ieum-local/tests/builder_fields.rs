@@ -247,3 +247,35 @@ async fn set_branches_fills_missing_keys_and_resets_test_state() {
         "untested"
     );
 }
+
+#[tokio::test]
+async fn set_branches_replaces_reserved_and_duplicate_keys() {
+    let cond = json!({"id": "c", "type": "CONDITION", "event": "branch.if", "config": {}});
+    let b = Builder::new(MemHost::with(
+        W,
+        json!({"nodes": [trig(), cond], "edges": [{"source": "t", "target": "c"}]}),
+    ))
+    .unwrap();
+    let rule =
+        json!([{"left": "{{nodes.t.output.extension}}", "operator": "equals", "right": "pdf"}]);
+    let r = run(
+        &b,
+        set(
+            "c",
+            json!({"branches": [{"key": "else", "rules": rule}, {"key": "b_1234abcd", "rules": rule}, {"key": "b_1234abcd", "rules": rule}]}),
+        ),
+    )
+    .await;
+    let keys: Vec<&str> = r.data["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys[1], "b_1234abcd");
+    assert!(
+        keys[0].starts_with("b_") && keys[2].starts_with("b_"),
+        "{keys:?}"
+    );
+    assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
+}

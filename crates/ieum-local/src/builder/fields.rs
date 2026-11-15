@@ -113,15 +113,16 @@ fn fill_branch_keys(value: &mut Value) -> Value {
         .as_array_mut()
         .map(Vec::as_mut_slice)
         .unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
     for item in list.iter_mut() {
         let Some(branch) = item.as_object_mut() else {
             continue;
         };
-        let has_key = branch
-            .get("key")
-            .and_then(Value::as_str)
-            .is_some_and(|k| !k.is_empty());
-        if !has_key {
+        // 예약어(else·true·false)·중복 key는 엣지 고르기를 깨므로 새로 짓는다.
+        let ok = branch.get("key").and_then(Value::as_str).is_some_and(|k| {
+            !k.is_empty() && !["else", "true", "false"].contains(&k) && seen.insert(k.to_string())
+        });
+        if !ok {
             let hex = uuid::Uuid::new_v4().simple().to_string();
             branch.insert("key".into(), format!("b_{}", &hex[..8]).into());
         }

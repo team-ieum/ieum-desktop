@@ -151,7 +151,14 @@ fn to_op(cmd: Cmd) -> Result<Op, String> {
         Cmd::Disconnect { from, to } => Op::Disconnect { from, to },
         Cmd::Rename { id, label } => Op::Rename { id, label },
         Cmd::PickFolder { id, field } => Op::PickFolder { id, field },
-        Cmd::Test { id, file } => Op::Test { id, file },
+        // 앱은 cwd가 달라 상대 경로를 못 푼다 — 여기(CLI cwd)서 절대 경로로.
+        Cmd::Test { id, file } => Op::Test {
+            id,
+            file: file
+                .map(|f| std::path::absolute(&f).map(|p| p.to_string_lossy().into_owned()))
+                .transpose()
+                .map_err(|e| format!("--file 경로를 읽지 못했어요: {e}"))?,
+        },
     })
 }
 

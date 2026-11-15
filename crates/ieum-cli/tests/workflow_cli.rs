@@ -113,6 +113,20 @@ fn args_become_request_lines() {
                 file: Some(s("/h/in/a.pdf")),
             },
         ),
+        (
+            // 상대 경로는 앱이 아니라 CLI cwd 기준 절대 경로로 보낸다.
+            vec!["test", "m", "--file", "a.pdf"],
+            Op::Test {
+                id: s("m"),
+                file: Some(
+                    std::env::current_dir()
+                        .unwrap()
+                        .join("a.pdf")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            },
+        ),
         (vec!["finish"], Op::Finish {}),
     ];
     for (args, op) in cases {

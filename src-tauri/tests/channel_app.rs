@@ -295,6 +295,31 @@ async fn deleting_workflow_revokes_its_sessions() {
     );
 }
 
+/// 지우기가 실패해도 토큰은 이미 버렸으니 터미널도 끝낸다(토큰 없는 PTY가 남지 않게).
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_delete_still_ends_terminal() {
+    use std::os::unix::fs::PermissionsExt;
+    let (env, t) = (env(), short());
+    env.active.activate(acc("a@x.com")).await.unwrap();
+    let sup = env.active.sup().await.unwrap();
+    let id = sup
+        .save_workflow(stored(ai_only_wf(&env.dir("in"))))
+        .unwrap()
+        .id;
+    let ch = Channel::new(
+        handler(env.active.clone(), no_pick()),
+        t.path().to_path_buf(),
+    );
+    let (gate, terms) = (gate_of(&ch, &env.active), Terms::default());
+    launch(&env, &terms, &gate, &id).await;
+    let wfs = sup.store().root().join("workflows");
+    fs::set_permissions(&wfs, fs::Permissions::from_mode(0o555)).unwrap();
+    let r = delete_workflow_and_sessions(&env.active, &ch, &terms, &env.dir("work"), &id).await;
+    fs::set_permissions(&wfs, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(r.is_err());
+    assert!(terms.running(&id).is_none());
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn signed_out_app_gives_no_session() {
     let (env, t) = (env(), short());

@@ -228,3 +228,12 @@ fn request_line() {
         Some(Code::BadRequest)
     );
 }
+
+/// AI 노드가 내는 `AI_MODEL_LIST_FAILED`가 test 응답에서 NODE_FAILED로 뭉개지지 않는다.
+#[test]
+fn ai_model_list_failed_code_is_known() {
+    let c: Code = serde_json::from_value(serde_json::json!("AI_MODEL_LIST_FAILED")).unwrap();
+    assert_eq!(c, Code::AiModelListFailed);
+    assert!(c.message().contains("Antigravity"));
+    assert_eq!(c.exit_code(), 1);
+}

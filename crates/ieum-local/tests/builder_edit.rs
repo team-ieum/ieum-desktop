@@ -434,3 +434,20 @@ async fn outline_with_same_name_keeps_workflow_on() {
     assert!(r.ok, "{r:?}");
     assert!(h.doc(W).enabled && h.saves() == 0); // 지금 이름과 같으면 바꾸는 게 아니다
 }
+
+#[tokio::test]
+async fn outline_rename_only_keeps_steps() {
+    let h = MemHost::with(W, json!({"nodes": [trig()], "edges": []}));
+    let b = Builder::new(h.clone()).unwrap();
+    run(&b, json!({"op": "outline", "args": {"steps": ["a", "b"]}})).await;
+    assert!(
+        run(&b, json!({"op": "outline", "args": {"name": "새이름"}}))
+            .await
+            .ok
+    );
+    let s = run(&b, json!({"op": "status"})).await;
+    assert_eq!(
+        (&s.data["outline"], &s.data["name"]),
+        (&json!(["a", "b"]), &json!("새이름"))
+    );
+}

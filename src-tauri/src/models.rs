@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use ieum_local::ai::{agy_split, shell_output};
+use ieum_local::ai::{ApiKind, agy_split, shell_output};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -41,7 +41,7 @@ const CLAUDE_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 /// (OpenAI reasoning 안내). 나머지는 codex 내장 목록의 같은 모델 수준과 같다.
 const OPENAI_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
-/// Gemini `thinkingLevel` — Gemini 생각 안내의 모델별 표. 표에 없는 모델(기본 `gemini-3.5-flash` 포함)은 고르지 않는다.
+/// Gemini `thinkingLevel` — Gemini 생각 안내의 모델별 표. 표에 없는 모델은 고르지 않는다.
 fn gemini_efforts(id: &str) -> Vec<String> {
     owned(match id {
         "gemini-4-carbon" | "gemini-4-argon" | "gemini-3.8-flash" => &["low", "medium", "high"],
@@ -209,12 +209,15 @@ fn agy_models() -> Result<Vec<ModelChoice>, String> {
 
 /// 공급원의 모델 목록. 모르는 공급원은 Err. 빈 목록도 Err — 화면이 "기본 모델"만 보이며 알린다.
 /// 기본 모델의 수준: claude CLI는 모델과 무관, Anthropic API는 기본 모델(Haiku 5.5)의 수준, codex는 카탈로그 기본 모델의 것.
-/// OpenAI는 기본 모델이 없고, Gemini 기본 모델·Antigravity("기본"은 수준이 id에 묶인다)는 고르지 않는다.
+/// Gemini는 기본 모델의 수준. OpenAI는 기본 모델이 없고, Antigravity("기본"은 수준이 id에 묶인다)는 고르지 않는다.
 pub fn list(provider: &str) -> Result<ModelList, String> {
     let (models, default_efforts) = match provider {
         "api:anthropic" | "cli:claude" => (priced("claude-"), owned(&CLAUDE_EFFORTS)),
         "api:openai" => (priced("gpt-"), Vec::new()),
-        "api:gemini" => (priced("gemini-"), Vec::new()),
+        "api:gemini" => (
+            priced("gemini-"),
+            gemini_efforts(ApiKind::Gemini.default_model().unwrap_or_default()),
+        ),
         "cli:codex" => {
             let l = codex_models()?;
             (l.models, l.default_efforts)

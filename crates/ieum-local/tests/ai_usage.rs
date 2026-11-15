@@ -196,7 +196,7 @@ async fn gemini_usage_metadata_parsed() {
         a.usage,
         Some(AiUsage {
             source: "gemini".into(),
-            model: Some("gemini-3.5-flash".into()),
+            model: Some("gemini-3.8-flash".into()),
             input_tokens: 20,
             output_tokens: 10,
             cache_read_tokens: Some(10),

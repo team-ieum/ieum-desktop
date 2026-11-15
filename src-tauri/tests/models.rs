@@ -83,11 +83,12 @@ fn priced_efforts_per_provider() {
             .clone()
     };
     assert_eq!(of("gemini-4-argon"), s(&["low", "medium", "high"]));
+    // 기본 모델(gemini-3.8-flash)의 수준을 "기본 모델"에서도 고른다.
+    assert_eq!(gemini.default_efforts, s(&["low", "medium", "high"]));
     assert_eq!(
         of("gemini-3.5-flash-lite"),
         s(&["minimal", "low", "medium", "high"])
     );
-    assert!(gemini.default_efforts.is_empty());
 }
 
 #[test]

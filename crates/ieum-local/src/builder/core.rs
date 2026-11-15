@@ -92,7 +92,10 @@ impl Builder {
             }
             Op::Events {} => return Ok(edit::events(&self.catalog)),
             Op::Outline { name, steps } => {
-                self.update_chat(id, |c| c.outline = steps.clone())?;
+                // 이름만 바꾸는 호출(steps 없음)이 개요를 지우지 않게.
+                if !steps.is_empty() {
+                    self.update_chat(id, |c| c.outline = steps.clone())?;
+                }
                 // 이름을 안 바꾸면(없거나 지금과 같으면) 저장본은 건드리지 않는다(끄지도 않는다).
                 match name.map(|n| n.trim().to_string()) {
                     Some(name) if !name.is_empty() && name != doc.name => doc.name = name,

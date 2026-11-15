@@ -96,8 +96,13 @@ pub async fn delete_workflow_and_sessions(
 ) -> Result<(), String> {
     channel.revoke_workflow(id);
     // 저장소가 id(UUID 정규형)를 검사한다 — 통과한 id만 폴더 이름이 된다.
-    active.sup().await?.delete_workflow(id)?;
+    let r = match active.sup().await {
+        Ok(sup) => sup.delete_workflow(id),
+        Err(e) => Err(e),
+    };
+    // 토큰은 이미 버렸다 — 지우기가 실패해도 터미널은 끝내야 토큰 없는 PTY가 남지 않는다.
     terms.kill(id);
+    r?;
     terms.clear_work_if_idle(work_root);
     Ok(())
 }
@@ -142,6 +147,7 @@ pub async fn list_runs(
 }
 
 /// 활성 계정의 AI 사용량 요약. `range` = `today`·`week`·`month`(로컬 시각대).
+// ponytail: 매번 기록·채팅 파일을 전부 읽는다 — 기록이 수천 개가 되면 요약 색인 파일 또는 mtime으로 건너뛰기
 #[tauri::command]
 pub async fn usage_summary(
     active: State<'_, Active>,
@@ -587,7 +593,8 @@ pub async fn set_settings(
 ) -> Result<(), String> {
     web::validate_server_url(&s.server_url)?;
     let old = active.settings().get_settings()?;
-    if s.autostart != old.autostart {
+    // 개발 빌드는 target/debug 바이너리가 로그인 항목이 되지 않게 값만 저장한다.
+    if s.autostart != old.autostart && !cfg!(debug_assertions) {
         let launch = app.autolaunch();
         let r = if s.autostart {
             launch.enable()

@@ -69,11 +69,11 @@ impl ApiKind {
     }
 
     /// OpenAI는 기본값 없음 — 모델을 골라야 한다.
-    fn default_model(self) -> Option<&'static str> {
+    pub fn default_model(self) -> Option<&'static str> {
         match self {
             ApiKind::Anthropic => Some("claude-haiku-5-5"),
             ApiKind::OpenAi => None,
-            ApiKind::Gemini => Some("gemini-3.5-flash"),
+            ApiKind::Gemini => Some("gemini-3.8-flash"),
         }
     }
 

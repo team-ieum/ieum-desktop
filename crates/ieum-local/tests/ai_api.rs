@@ -285,7 +285,7 @@ async fn gemini_streams_text() {
     let seen = log.lock().unwrap()[0].clone();
     assert!(
         seen.request_line()
-            .starts_with("POST /v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse "),
+            .starts_with("POST /v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse "),
         "{}",
         seen.head
     );

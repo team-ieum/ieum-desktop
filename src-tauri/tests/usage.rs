@@ -70,6 +70,16 @@ fn estimate_uses_table_and_skips_subscription() {
     assert!(!shipped.as_of.is_empty());
 }
 
+#[test]
+fn api_default_models_are_priced() {
+    use ieum_local::ai::ApiKind;
+    let shipped = ieum_desktop_lib::pricing::table();
+    for k in [ApiKind::Anthropic, ApiKind::Gemini] {
+        let m = k.default_model().unwrap();
+        assert!(shipped.models.contains_key(m), "{m}");
+    }
+}
+
 /// 노드마다 사용량 하나씩 실은 실행 기록.
 fn run(workflow: &str, started: &str, usages: &[AiUsage]) -> StoredRun {
     let mut nodes = serde_json::Map::new();
