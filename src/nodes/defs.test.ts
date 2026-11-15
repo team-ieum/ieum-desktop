@@ -1,6 +1,17 @@
 import { expect, test } from "vitest";
 import type { WfNode } from "../api";
-import { newBranchKey, nextPosition } from "./defs";
+import { DEFS, newBranchKey, newNode, nextPosition, outputKeys } from "./defs";
+
+test("defs_has_30_and_transform_map_outputs_follow_mappings", () => {
+  expect(Object.keys(DEFS).length).toBe(30);
+  const map = (config: Record<string, unknown>): WfNode => ({ id: "t", event: "transform.map", type: "TRANSFORM", config });
+  expect(outputKeys(map({ mappings: { a: "1", b: "2" } }))).toEqual(["a", "b"]);
+  expect(outputKeys(map({}))).toEqual([]);
+  expect(outputKeys(map({ mappings: "x" }))).toEqual([]);
+  expect(outputKeys(map({ mappings: ["a"] }))).toEqual([]);
+  expect(newNode("http.request", { x: 0, y: 0 }, "h").type).toBe("HTTP");
+  expect(newNode("formatter.text_trim", { x: 0, y: 0 }, "t").type).toBe("TRANSFORM");
+});
 
 test("new_branch_key_format", () => {
   for (let i = 0; i < 20; i++) expect(newBranchKey()).toMatch(/^b_[0-9a-f]{8}$/);

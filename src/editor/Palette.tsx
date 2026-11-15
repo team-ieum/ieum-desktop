@@ -4,14 +4,24 @@ import { DEFS, isLocal, PALETTE } from "../nodes/defs";
 import { NodeIcon, nodeMeta, toneStyle } from "../nodes/meta";
 import { LocalBadge, nodeTitle } from "./Canvas";
 
+const kind = (k: string) => (e: string) => DEFS[e].node_type === k;
+// 포맷터는 모두 TRANSFORM이라 event 이름으로 나눈다(이음 클라우드 편집기와 같은 순서·이름).
+const fmt = (...prefixes: string[]) => (e: string) => prefixes.some((p) => e.startsWith(`formatter.${p}`));
+
 const GROUPS = [
-  { title: () => t("editor.kind.TRIGGER"), kinds: ["TRIGGER"] },
-  { title: () => t("editor.local"), kinds: ["ACTION"] },
-  { title: () => t("editor.group.ai"), kinds: ["AI"] },
-  { title: () => t("editor.group.flow"), kinds: ["CONDITION"] },
+  { id: "trigger", title: () => t("editor.kind.TRIGGER"), has: kind("TRIGGER") },
+  { id: "local", title: () => t("editor.local"), has: kind("ACTION") },
+  { id: "ai", title: () => t("editor.group.ai"), has: kind("AI") },
+  { id: "flow", title: () => t("editor.group.flow"), has: kind("CONDITION") },
+  { id: "transform", title: () => t("palette.group.transform"), has: (e: string) => e === "transform.map" },
+  { id: "text", title: () => t("palette.group.text"), has: fmt("text_") },
+  { id: "number", title: () => t("palette.group.number"), has: fmt("number_") },
+  { id: "date", title: () => t("palette.group.date"), has: fmt("date_") },
+  { id: "list", title: () => t("palette.group.list"), has: fmt("list_", "lookup_") },
+  { id: "http", title: () => t("palette.group.http"), has: kind("HTTP") },
 ];
 
-/** 노드 6개를 종류별로 — 누르면 캔버스에 추가. */
+/** 노드를 종류별로 — 누르면 캔버스에 추가. */
 export function Palette({ onAdd }: { onAdd: (event: string) => void }) {
   return (
     <div className="flex h-full flex-col gap-5">
@@ -20,10 +30,10 @@ export function Palette({ onAdd }: { onAdd: (event: string) => void }) {
         <p className="mt-0.5 typo-caption1_regular text-neutral-500">{t("editor.paletteHint")}</p>
       </div>
       {GROUPS.map((g) => {
-        const events = PALETTE.filter((e) => g.kinds.includes(DEFS[e].node_type));
+        const events = PALETTE.filter(g.has);
         if (!events.length) return null;
         return (
-          <section key={g.kinds[0]}>
+          <section key={g.id}>
             <h3 className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[.08em] text-main-gray">{g.title()}</h3>
             <div className="flex flex-col gap-1.5">
               {events.map((event) => (

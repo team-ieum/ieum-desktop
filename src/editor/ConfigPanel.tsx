@@ -2,7 +2,7 @@ import { FolderOpen, Plus, TriangleAlert, X } from "lucide-react";
 import { useEffect, useId } from "react";
 import { api, type Workflow, type WfNode } from "../api";
 import { ProviderLogo, type LogoId } from "../assets/providers";
-import { t, tDyn } from "../i18n";
+import { choiceLabel, t, tDyn } from "../i18n";
 import { credLabel } from "../screens/settings/AiPane";
 import { choicesFor, useCredentials } from "../stores/credentials";
 import { DEFS, fieldKey, FOLDER_FIELDS, newItem, outputKeys, upstream, type Field } from "../nodes/defs";
@@ -233,7 +233,7 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
           items={[
             // 비어 있으면 첫 선택지를 고른 것처럼 보이지 않게.
             ...(str ? [] : [{ id: "", name: t("editor.pickChoice"), icon: null }]),
-            ...field.choices.map((c) => ({ id: c.id, name: tDyn(`choice.${field.key}.${c.id}`) ?? c.name, icon: null })),
+            ...field.choices.map((c) => ({ id: c.id, name: choiceLabel(event, field.key, c.id) ?? c.name, icon: null })),
           ]}
           sel={str}
           onSel={(v) => v !== str && onChange(v)}
