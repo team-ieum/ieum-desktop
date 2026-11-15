@@ -1,6 +1,4 @@
 //! `formatter.*` 실행기 — BE `Formatter`. 포맷터는 런타임이 치환한 설정(`ctx.config`)만 읽는다.
-// 헬퍼를 쓸 범주 OPS가 아직 비어 있어서 둔다 — Task 8에서 OPS가 차면(또는 expect가 먼저 깨지면) 지운다.
-#![cfg_attr(not(test), expect(dead_code))]
 
 mod date;
 mod extract;

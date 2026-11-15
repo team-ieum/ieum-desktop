@@ -1,0 +1,6 @@
+{
+  "trigger": {"path": "/Users/me/Downloads/report.pdf", "name": "  quarterly REPORT.pdf\n", "extension": "pdf", "size": 2048},
+  "nodeOutputs": {
+    "m": {"path": "/Users/me/Sorted/Quarterly Report.pdf/report.pdf", "name": "report.pdf"}
+  }
+}

@@ -84,6 +84,39 @@ fn embedded_has_builtin_24() {
 }
 
 #[test]
+fn formatter_catalog_and_runners_match() {
+    let c = Catalog::embedded().unwrap();
+    let cat: BTreeSet<_> = c
+        .events()
+        .iter()
+        .filter(|e| e.event.starts_with("formatter."))
+        .map(|e| e.event.clone())
+        .collect();
+    let run: BTreeSet<_> = ieum_engine::formatter::events()
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(cat, run);
+    assert_eq!(run.len(), 22);
+    // title은 실패 메시지 머리로 확인 — 10만 자 넘는 input은 모든 포맷터가 실패시킨다.
+    let cfg = serde_json::json!({"input": "x".repeat(100_001)});
+    for event in &run {
+        let e = ieum_engine::formatter::apply(
+            event,
+            cfg.as_object().unwrap(),
+            "2026-11-07T04:30:00Z".parse().unwrap(),
+        )
+        .unwrap_err();
+        let title = &c.get(event).unwrap().title;
+        assert!(
+            e.message.starts_with(&format!("{title}: ")),
+            "{event}: {}",
+            e.message
+        );
+    }
+}
+
+#[test]
 fn config_null_and_missing_edges_parse() {
     let wf: Workflow = serde_json::from_value(serde_json::json!({
         "nodes": [

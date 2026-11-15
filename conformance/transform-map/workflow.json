@@ -1,0 +1,11 @@
+{
+  "nodes": [
+    {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "label": "새 파일", "config": {"folder": "/Users/me/Downloads"}},
+    {"id": "x", "type": "TRANSFORM", "event": "transform.map", "label": "변환", "config": {"mappings": {"title": "{{nodes.t.output.name}}", "label": "파일: {{nodes.t.output.extension}}", "nested": {"k": "{{nodes.t.output.name}}"}, "n": 3}}},
+    {"id": "c", "type": "CONDITION", "event": "branch.if", "label": "라벨 확인", "config": {"caseSensitive": true, "otherwise": "stop", "branches": [{"key": "b_00000001", "name": "PDF", "rules": [{"left": "{{nodes.x.output.label}}", "operator": "equals", "right": "파일: pdf"}]}]}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "t", "target": "x"},
+    {"id": "e2", "source": "x", "target": "c"}
+  ]
+}
