@@ -35,6 +35,10 @@ pub enum Code {
     AiModelListFailed,
     NodeFailed,
     UndoFailed,
+    TooLarge,
+    HttpStatus,
+    HttpUnreachable,
+    TestDeclined,
 }
 
 impl Code {
@@ -81,6 +85,12 @@ impl Code {
             }
             NodeFailed => "노드 실행이 실패함. 자세한 내용은 사용자 화면에만 보임",
             UndoFailed => "테스트가 옮긴 파일 일부를 되돌리지 못함. 경로는 사용자 화면에 표시됨",
+            TooLarge => "입력이나 결과가 허용 크기를 넘음",
+            HttpStatus => "요청은 갔지만 서버가 오류 상태를 돌려줌. field가 상태 코드",
+            HttpUnreachable => "요청을 보내지 못함(연결·시간 초과·리다이렉트)",
+            TestDeclined => {
+                "사용자가 확인하지 않아 테스트를 돌리지 않음. 다시 시도하지 말고 사용자에게 알릴 것"
+            }
         }
     }
 
@@ -91,10 +101,10 @@ impl Code {
             BadRequest | Unauthorized => 3,
             Internal | NoSampleFile | FolderMissing | FileMissing | DestOccupied | FieldEmpty
             | FieldInvalid | MoveFailed | AiNotConnected | AiFailed | AiModelListFailed
-            | NodeFailed | UndoFailed => 1,
+            | NodeFailed | UndoFailed | TooLarge | HttpStatus | HttpUnreachable => 1,
             Stale | UserEditing | NodeNotFound | EventUnknown | TriggerRule | FieldUnknown
             | FieldLocked | NotFolderField | PickCancelled | FolderNotAllowed | EdgeInvalid
-            | SaveRejected | Invalid | SampleNotAllowed | NotReady => 2,
+            | SaveRejected | Invalid | SampleNotAllowed | NotReady | TestDeclined => 2,
         }
     }
 }

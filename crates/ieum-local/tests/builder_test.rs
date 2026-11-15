@@ -254,6 +254,61 @@ async fn failure_codes_parse_field_and_fall_back() {
     }
 }
 
+/// 실제 포맷터 러너가 낸 실패가 코드·칸만 남고 문구 원문은 빠진다.
+#[tokio::test]
+async fn test_reports_formatter_failure_code() {
+    use ieum_engine::{BuiltinRunners, Catalog, Runners, run_workflow};
+    let t = tempfile::tempdir().unwrap();
+    let watch = t.path().canonicalize().unwrap();
+    std::fs::write(watch.join("비밀보고서.pdf"), "pdf").unwrap();
+    let wf = json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": watch}},
+            {"id": "f", "type": "TRANSFORM", "event": "formatter.text_default", "config": {"input": "{{nodes.t.output.name}}", "defaultValue": "{{nodes.t.output.extension}}"}}
+        ],
+        "edges": [{"source": "t", "target": "f"}]
+    });
+    let h = MemHost::with(W, wf.clone());
+    let b = Builder::new(h.clone()).unwrap();
+    // 확장자 없는 파일 → 필수 칸이 실행 때 빈다.
+    let trigger =
+        json!({"path": "/h/in/비밀보고서", "name": "비밀보고서", "extension": "", "size": 1});
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let result = run_workflow(
+        &serde_json::from_value::<Workflow>(wf).unwrap(),
+        &Catalog::embedded().unwrap(),
+        &Runners::with_builtin(),
+        trigger.as_object().unwrap().clone(),
+        tx,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await;
+    let raw = result.nodes["f"].error.clone().unwrap();
+    assert_eq!(
+        result.nodes["f"].error_code.as_deref(),
+        Some("FIELD_EMPTY defaultValue")
+    );
+    h.push_test_run(Ok(TestRun {
+        run_id: result.run_id,
+        status: result.status,
+        nodes: result.nodes,
+        undo: UndoReport::default(),
+    }));
+    let r = run(&b, test_op("f")).await;
+    assert_eq!(r.code, Some(Code::FieldEmpty));
+    assert_eq!(
+        r.data["nodes"][1],
+        json!({"id": "f", "status": "failed", "outputs": {}, "code": "FIELD_EMPTY", "message": "필수 칸이 비어 있음", "field": "defaultValue"})
+    );
+    let line = r.to_line();
+    for secret in [raw.as_str(), "기본값 넣기", "비어 있어요", "비밀보고서"] {
+        assert!(
+            !line.contains(secret),
+            "{secret} 이(가) 응답에 샜다: {line}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn undo_skip_makes_test_failed() {
     let (h, b, watch, _t) = setup();

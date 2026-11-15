@@ -279,3 +279,98 @@ async fn set_branches_replaces_reserved_and_duplicate_keys() {
     );
     assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
 }
+
+/// t → 자르기(tr)·대응표(lk)·HTTP(h)·AI(a)
+fn transforms() -> Value {
+    json!({
+        "nodes": [
+            trig(),
+            {"id": "tr", "type": "TRANSFORM", "event": "formatter.text_truncate", "config": {"input": "x"}},
+            {"id": "lk", "type": "TRANSFORM", "event": "formatter.lookup_table", "config": {"input": "x"}},
+            {"id": "h", "type": "HTTP", "event": "http.request", "config": {"method": "POST", "url": "https://example.com"}},
+            {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "outputFields": [{"key": "k", "type": "text"}]}}
+        ],
+        "edges": [
+            {"source": "t", "target": "tr"}, {"source": "t", "target": "lk"},
+            {"source": "t", "target": "h"}, {"source": "t", "target": "a"}
+        ]
+    })
+}
+
+#[tokio::test]
+async fn set_coerces_integer_dict_and_http_body() {
+    let h = MemHost::with(W, transforms());
+    let b = Builder::new(h.clone()).unwrap();
+    let cfg = |id: &str, key: &str| {
+        let doc = h.doc(W);
+        let node = doc.workflow.nodes.iter().find(|n| n.id == id).unwrap();
+        node.config.get(key).cloned().unwrap_or(Value::Null)
+    };
+    let ok = |values: Value, id: &'static str| {
+        let b = &b;
+        async move { assert!(run(b, set(id, values)).await.ok) }
+    };
+
+    ok(json!({"maxLength": "5"}), "tr").await;
+    assert_eq!(cfg("tr", "maxLength"), json!(5));
+    ok(json!({"maxLength": 7}), "tr").await; // --json 경로는 그대로
+    assert_eq!(cfg("tr", "maxLength"), json!(7));
+    ok(json!({"maxLength": "{{nodes.t.output.size}}"}), "tr").await; // 참조식은 글 그대로
+    assert_eq!(cfg("tr", "maxLength"), json!("{{nodes.t.output.size}}"));
+
+    ok(json!({"table": "{\"a\":\"b\"}"}), "lk").await;
+    assert_eq!(cfg("lk", "table"), json!({"a": "b"}));
+
+    ok(json!({"body": "{\"a\":1}"}), "h").await;
+    assert_eq!(cfg("h", "body"), json!({"a": 1}));
+    ok(json!({"body": "[1,2]"}), "h").await;
+    assert_eq!(cfg("h", "body"), json!([1, 2]));
+    for s in ["hi", "123", "\"q\""] {
+        ok(json!({"body": s}), "h").await;
+        assert_eq!(cfg("h", "body"), json!(s), "{s}");
+    }
+    ok(json!({"headers": "{\"X-A\":\"1\"}"}), "h").await;
+    assert_eq!(cfg("h", "headers"), json!({"X-A": "1"}));
+
+    // 다른 text 칸은 JSON처럼 보여도 글 그대로
+    ok(json!({"prompt": "{\"a\":1}"}), "a").await;
+    assert_eq!(cfg("a", "prompt"), json!("{\"a\":1}"));
+
+    for (id, values) in [
+        ("tr", json!({"maxLength": "5.5"})),
+        ("tr", json!({"maxLength": "다섯"})),
+        ("lk", json!({"table": "[1]"})),
+        ("lk", json!({"table": "a=b"})),
+        ("h", json!({"headers": "oops"})),
+    ] {
+        assert_eq!(
+            run(&b, set(id, values.clone())).await.code,
+            Some(Code::FieldInvalid),
+            "{values}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn webhook_credential_field_is_hidden_and_rejected() {
+    let h = MemHost::with(W, transforms());
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(&b, json!({"op": "fields", "args": {"id": "h"}})).await;
+    let keys: Vec<&str> = r.data["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["method", "url", "headers", "body"]);
+    for key in ["webhookCredentialId", "config.webhookCredentialId"] {
+        assert_eq!(
+            run(&b, set("h", json!({key: "w1", "url": "https://a.com"})))
+                .await
+                .code,
+            Some(Code::FieldUnknown),
+            "{key}"
+        );
+    }
+    assert_eq!(h.saves(), 0);
+}

@@ -168,3 +168,33 @@ impl Builder {
         Err(Reply::err_with(code, data))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failure_maps_new_codes() {
+        assert_eq!(
+            failure(Some("HTTP_STATUS 404")),
+            (Code::HttpStatus, Some("404"))
+        );
+        assert_eq!(
+            failure(Some("HTTP_UNREACHABLE")),
+            (Code::HttpUnreachable, None)
+        );
+        assert_eq!(failure(Some("TOO_LARGE")), (Code::TooLarge, None));
+        assert_eq!(
+            failure(Some("FIELD_INVALID pattern")),
+            (Code::FieldInvalid, Some("pattern"))
+        );
+        assert_eq!(
+            failure(Some("FIELD_EMPTY url")),
+            (Code::FieldEmpty, Some("url"))
+        );
+        assert_eq!(
+            failure(Some("FIELD_INVALID webhookCredentialId")),
+            (Code::FieldInvalid, Some("webhookCredentialId"))
+        );
+    }
+}
