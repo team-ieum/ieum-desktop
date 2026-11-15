@@ -145,7 +145,8 @@ const showBody = (v: unknown) => (typeof v === "object" && v !== null ? JSON.str
 
 function BodyInput({ id, value, onChange, refs }: { id: string; value: unknown; onChange: (v: unknown) => void; refs: Ref[] }) {
   const [text, edit] = useDraft(value, showBody, onChange);
-  const set = (s: string) => edit(s, { value: readBody(s) });
+  // 비우면 키를 뺀다 — 빈 글이 본문으로 나가지 않게.
+  const set = (s: string) => edit(s, { value: s.trim() === "" ? undefined : readBody(s) });
   return (
     <div className="flex flex-col gap-1.5">
       <textarea id={id} className={`${INPUT} min-h-20 resize-y`} value={text} onChange={(e) => set(e.target.value)} />

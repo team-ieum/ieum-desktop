@@ -482,6 +482,9 @@ test("http_body_json_is_saved_as_object", () => {
   expect(onChange.mock.lastCall![0].config.body).toBe("hi");
   typeIn(body, '{"a": {{nodes.b.output.x}}}');
   expect(onChange.mock.lastCall![0].config.body).toBe('{"a": {{nodes.b.output.x}}}');
+  // 비우면 키를 뺀다 — 빈 글을 본문으로 보내지 않게.
+  typeIn(body, "");
+  expect("body" in onChange.mock.lastCall![0].config).toBe(false);
   r.unmount();
 
   render(<Live start={{ ...node, config: { ...node.config, body: { a: [1] } } }} onChange={onChange} />);

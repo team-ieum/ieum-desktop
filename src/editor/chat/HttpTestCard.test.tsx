@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { api, type HttpTestConfirm, type StoredRun, type WfNode } from "../../api";
+import { api, type HttpLine, type HttpTestConfirm, type StoredRun, type WfNode } from "../../api";
 import { setLang } from "../../i18n";
 import { useTestRun } from "../useTestRun";
 import { TestCard } from "./ChatCards";
@@ -14,7 +14,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const LINES = [{ nodeId: "h", label: "주문 넣기", method: "POST", url: "https://x.test/o/{{nodes.a.output.id}}" }];
+const line = (o: Partial<HttpLine> = {}): HttpLine => ({
+  nodeId: "h",
+  label: "주문 넣기",
+  method: "POST",
+  url: "https://x.test/o/{{nodes.a.output.id}}",
+  headerKeys: [],
+  sends: [],
+  hasBody: false,
+  ...o,
+});
+const LINES = [line()];
+
+const requests = (card: HTMLElement) => within(card).getAllByTestId("http-request").map((e) => e.textContent);
 
 /** 이벤트 구독을 가로채 테스트가 직접 쏜다. */
 function captureEvent() {
@@ -34,7 +46,7 @@ test("http_card_shows_method_and_masked_url_and_answers", async () => {
   expect(screen.queryByRole("dialog")).toBeNull();
   await emit({ id: "w1", lines: LINES });
   const card = screen.getByRole("dialog", { name: "테스트로 실제 요청을 보낼까요?" });
-  expect(within(card).getByText("POST https://x.test/o/〈앞 노드 값〉")).toBeTruthy();
+  expect(requests(card)).toEqual(["POST https://x.test/o/〈앞 노드 값〉"]);
   expect(within(card).getByText("주문 넣기")).toBeTruthy();
   expect(within(card).getByText("요청은 되돌릴 수 없어요.")).toBeTruthy();
   // 실수로 Enter를 눌러도 요청이 나가지 않게.
@@ -60,10 +72,9 @@ test("http_card_ignores_other_workflow_and_replaces_with_new_event", async () =>
   await emit({ id: "w2", lines: LINES });
   expect(screen.queryByRole("dialog")).toBeNull();
   await emit({ id: "w1", lines: LINES });
-  await emit({ id: "w1", lines: [{ nodeId: "g", label: "", method: "DELETE", url: "https://y.test" }] });
+  await emit({ id: "w1", lines: [line({ nodeId: "g", label: "", method: "DELETE", url: "https://y.test" })] });
   const card = screen.getByRole("dialog");
-  expect(within(card).queryByText("POST https://x.test/o/〈앞 노드 값〉")).toBeNull();
-  expect(within(card).getByText("DELETE https://y.test")).toBeTruthy();
+  expect(requests(card)).toEqual(["DELETE https://y.test"]);
   // 이름이 없으면 노드 종류 이름.
   expect(within(card).getByText("HTTP 요청")).toBeTruthy();
 });
@@ -104,6 +115,19 @@ test("test_card_notes_real_request", async () => {
   expect(screen.queryByText("실제로 요청을 보냈어요")).toBeNull();
 });
 
+test("test_card_notes_clipped_output", async () => {
+  vi.spyOn(api, "getRun").mockResolvedValue({
+    run: {
+      nodes: {
+        h: { status: "succeeded", output: { body: "abc" }, error: null, outputClipped: true },
+        g: { status: "succeeded", output: { body: "x" }, error: null },
+      },
+    },
+  } as unknown as StoredRun);
+  await act(async () => render(<TestCard runId="r1" status="succeeded" />));
+  expect(screen.getAllByText("응답이 길어 기록에는 앞부분만 남겼어요.")).toHaveLength(1);
+});
+
 function Harness({ nodes }: { nodes: WfNode[] }) {
   const run = useTestRun("w1", nodes);
   return (
@@ -124,7 +148,7 @@ test("test_run_asks_before_non_get_http", async () => {
   const r = render(<Harness nodes={[http("g"), http("p", "post")]} />);
   await act(async () => fireEvent.click(screen.getByText("run")));
   const card = screen.getByRole("dialog", { name: "테스트로 실제 요청을 보낼까요?" });
-  expect(within(card).getByText("POST https://x.test")).toBeTruthy();
+  expect(requests(card)).toEqual(["GET https://x.test", "POST https://x.test"]);
   await act(async () => fireEvent.click(within(card).getByRole("button", { name: "취소" })));
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(runNow).not.toHaveBeenCalled();
@@ -139,4 +163,81 @@ test("test_run_asks_before_non_get_http", async () => {
   await act(async () => fireEvent.click(screen.getByText("run")));
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(runNow).toHaveBeenCalledTimes(2);
+});
+
+const SENDING = line({
+  headerKeys: ["Authorization", "X-Data"],
+  hasBody: true,
+  sends: [
+    { nodeId: "r", nodeLabel: "파일 읽기", output: "content" },
+    { nodeId: "ai", nodeLabel: "", output: "summary" },
+  ],
+});
+
+test("http_card_shows_headers_body_and_sent_values", async () => {
+  const emit = captureEvent();
+  await act(async () => render(<HttpTestCard workflowId="w1" />));
+  await emit({ id: "w1", lines: [SENDING, line({ nodeId: "g", method: "GET", url: "https://y.test" })] });
+  const card = screen.getByRole("dialog");
+  expect(within(card).getByText("머리말: Authorization, X-Data")).toBeTruthy();
+  expect(within(card).getByText("본문 있음")).toBeTruthy();
+  // 이름이 없는 노드는 id로.
+  const sends = within(card).getByText("함께 보내는 값: 파일 읽기 의 content, ai 의 summary");
+  expect(sends.className).toContain("text-danger-700");
+  // 머리말·본문·보내는 값이 없는 줄은 그 글이 없다.
+  expect(within(card).getAllByText(/머리말|본문 있음|함께 보내는 값/)).toHaveLength(3);
+});
+
+test("http_card_keeps_host_and_buttons_visible_for_long_url", async () => {
+  const emit = captureEvent();
+  await act(async () => render(<HttpTestCard workflowId="w1" />));
+  await emit({ id: "w1", lines: [line({ url: `https://evil.example.com/${"a".repeat(2000)}` })] });
+  const card = screen.getByRole("dialog");
+  expect(within(card).getByText("https://evil.example.com").tagName).toBe("STRONG");
+  expect(within(card).getByRole("button", { name: "보내기" })).toBeTruthy();
+  expect(within(card).getByRole("button", { name: "테스트 없이 넘어가기" })).toBeTruthy();
+  expect(card.className).toContain("max-h-");
+  expect(card.querySelector(".overflow-y-auto")).toBeTruthy();
+  // 버튼은 스크롤 밖.
+  expect(card.querySelector(".overflow-y-auto button")).toBeNull();
+});
+
+test("http_card_marks_changed_lines_and_blocks_send_for_a_second", async () => {
+  const emit = captureEvent();
+  const answer = vi.spyOn(api, "answerHttpConfirm").mockResolvedValue(true);
+  await act(async () => render(<HttpTestCard workflowId="w1" />));
+  vi.useFakeTimers();
+  await emit({ id: "w1", lines: LINES });
+  expect(screen.queryByText("요청 내용이 바뀌었어요")).toBeNull();
+  await emit({ id: "w1", lines: [SENDING] });
+  expect(screen.getByText("요청 내용이 바뀌었어요")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "보내기" }));
+  expect(answer).not.toHaveBeenCalled();
+  act(() => vi.advanceTimersByTime(1000));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "보내기" })));
+  expect(answer).toHaveBeenCalledWith("w1", true);
+});
+
+test("test_run_confirm_shows_headers_body_and_sent_values", async () => {
+  const nodes: WfNode[] = [
+    { id: "r", event: "local.file_read", label: "파일 읽기", config: {} },
+    { id: "ai", event: "local.ai", config: {} },
+    {
+      id: "p",
+      event: "http.request",
+      config: {
+        method: "post",
+        url: "https://x.test/{{nodes.ai.output.summary}}",
+        headers: { "X-Data": "{{nodes.ai.output.summary}}", Authorization: "Bearer t" },
+        body: { text: "{{nodes.r.output.content}}", list: ["{{nodes.r.output.items.0.name}}"] },
+      },
+    },
+  ];
+  render(<Harness nodes={nodes} />);
+  await act(async () => fireEvent.click(screen.getByText("run")));
+  const card = screen.getByRole("dialog");
+  expect(requests(card)).toEqual(["POST https://x.test/〈앞 노드 값〉"]);
+  expect(within(card).getByText("머리말: Authorization, X-Data")).toBeTruthy();
+  expect(within(card).getByText("본문 있음")).toBeTruthy();
+  expect(within(card).getByText("함께 보내는 값: ai 의 summary, 파일 읽기 의 content, 파일 읽기 의 items.0.name")).toBeTruthy();
 });

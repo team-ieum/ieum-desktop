@@ -58,6 +58,8 @@ export interface NodeRecord {
   error: string | null;
   /** AI에게 보여도 되는 오류 코드(`<CODE>` 또는 `<CODE> <칸 key>`). 옛 기록에는 없다. */
   errorCode?: string | null;
+  /** 응답이 길어 기록에는 앞부분만 남겼다. 옛 기록에는 없다. */
+  outputClipped?: boolean;
 }
 export type RejectReason =
   | { kind: "TOO_LARGE" }
@@ -383,7 +385,8 @@ export interface BuilderReply {
 export interface PendingFinish {
   hash: string;
   folder: string;
-  actions: { nodeId: string; event: string; label: string; target: string | null }[];
+  /** `http`는 HTTP 줄만 — 이 칸이 생기기 전에 저장된 확인 대기에는 없다. */
+  actions: { nodeId: string; event: string; label: string; target: string | null; http?: HttpLine }[];
   /** AI 노드마다 한 줄. 이 칸이 생기기 전에 저장된 확인 대기에는 없다. */
   ai?: { nodeId: string; label: string; provider: string; sendContent: boolean }[];
 }
@@ -394,6 +397,11 @@ export interface HttpLine {
   label: string;
   method: string;
   url: string;
+  /** 머리말 이름(이름순). 값은 오지 않는다. */
+  headerKeys: string[];
+  /** url·headers·body의 참조식이 가리키는 앞 노드 출력 — 값은 오지 않는다. */
+  sends: { nodeId: string; nodeLabel: string; output: string }[];
+  hasBody: boolean;
 }
 export interface HttpTestConfirm {
   id: string;
