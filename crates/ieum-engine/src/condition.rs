@@ -621,19 +621,32 @@ impl When {
     }
 }
 
-/// Java `LocalDateTime.atZone(KST)` — 겹치면 이른 쪽, 틈이면 틈 전 오프셋.
-pub(crate) fn kst(local: NaiveDateTime) -> Option<DateTime<Utc>> {
-    match Seoul.from_local_datetime(&local).earliest() {
+/// Java `LocalDateTime.atZone(zone)` — 겹치면 이른 쪽, 틈이면 틈 전 오프셋.
+pub(crate) fn at_zone<Z: TimeZone>(zone: &Z, local: NaiveDateTime) -> Option<DateTime<Utc>> {
+    match zone.from_local_datetime(&local).earliest() {
         Some(t) => Some(t.to_utc()),
         None => {
             let probe = local.checked_sub_signed(TimeDelta::hours(12))?;
-            let before = Seoul.offset_from_utc_datetime(&probe).fix();
+            let before = zone.offset_from_utc_datetime(&probe).fix();
             Some(local.checked_sub_offset(before)?.and_utc())
         }
     }
 }
 
+pub(crate) fn kst(local: NaiveDateTime) -> Option<DateTime<Utc>> {
+    at_zone(&Seoul, local)
+}
+
 pub(crate) fn date(value: &Value, now: DateTime<Utc>) -> Option<When> {
+    date_in(value, now, kst)
+}
+
+/// `zone` = 시간대 없는 날짜·시각 값을 읽는 규칙. 날짜만인 값·`오늘`은 그대로 KST 날짜다.
+pub(crate) fn date_in(
+    value: &Value,
+    now: DateTime<Utc>,
+    zone: impl Fn(NaiveDateTime) -> Option<DateTime<Utc>>,
+) -> Option<When> {
     if value.is_null() {
         return None;
     }
@@ -653,7 +666,7 @@ pub(crate) fn date(value: &Value, now: DateTime<Utc>) -> Option<When> {
     let mut p = Cursor::new(&t);
     if let Some(local) = p.local_date_time() {
         if p.done() {
-            return When::at(kst(local)?);
+            return When::at(zone(local)?);
         }
         if let Some(off) = p.offset_id()
             && p.done()
