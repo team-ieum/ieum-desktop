@@ -207,7 +207,7 @@ test("recent_web_item_opens_that_workflow", async () => {
   });
   await act(async () => fireEvent.click(screen.getByRole("button", { name: /웹 흐름/ })));
   expect(get).toHaveBeenCalledWith(id);
-  expect(screen.getByTestId("crumb").textContent).toBe("웹 이음");
+  expect(screen.getByTestId("crumb").textContent).toBe("이음 클라우드");
   expect(screen.getByRole("heading", { name: "웹 흐름" })).toBeTruthy();
 });
 
