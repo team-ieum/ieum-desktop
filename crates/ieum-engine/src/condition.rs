@@ -458,7 +458,7 @@ fn java_num(n: &Number) -> String {
 }
 
 /// Java `String.strip` — `Character.isWhitespace`(NBSP류 제외, U+001C–U+001F 포함).
-pub(crate) fn strip(s: &str) -> &str {
+pub fn strip(s: &str) -> &str {
     s.trim_matches(|c: char| {
         matches!(c, '\u{1C}'..='\u{1F}')
             || (c.is_whitespace() && !matches!(c, '\u{A0}' | '\u{2007}' | '\u{202F}' | '\u{85}'))

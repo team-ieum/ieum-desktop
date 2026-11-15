@@ -44,6 +44,41 @@ pub struct StoredRun {
     pub trigger: Option<RunTrigger>,
 }
 
+/// 기록 파일에 남기는 HTTP 응답 본문 상한(UTF-16 단위) — 기록을 지우는 정책이 없어 실행마다 최대 1MB씩 쌓이지 않게.
+pub const MAX_STORED_BODY_UNITS: usize = 100_000;
+
+/// 저장할 기록에서만 큰 `http.request` 응답 본문을 앞 10만 자 글 + 줄임 표시로 바꾼다(객체였어도 글이 된다).
+/// 실행 중 뒤 노드가 쓰는 값과 화면 이벤트는 이 복사본과 무관하다.
+pub fn clip_http_bodies(run: &mut RunResult, wf: &Workflow) {
+    for n in wf.nodes.iter().filter(|n| n.event == "http.request") {
+        let Some(rec) = run.nodes.get_mut(&n.id) else {
+            continue;
+        };
+        let Some(body) = rec.output.as_mut().and_then(|o| o.get_mut("body")) else {
+            continue;
+        };
+        let text = match &*body {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        };
+        let total = text.encode_utf16().count();
+        if total <= MAX_STORED_BODY_UNITS {
+            continue;
+        }
+        // 대리쌍을 가르지 않게 글자 단위로 센다.
+        let mut units = 0;
+        let end = text
+            .char_indices()
+            .find(|(_, c)| {
+                units += c.len_utf16();
+                units > MAX_STORED_BODY_UNITS
+            })
+            .map_or(text.len(), |(i, _)| i);
+        *body = format!("{}…(잘림, 전체 {total}자)", &text[..end]).into();
+        rec.output_clipped = true;
+    }
+}
+
 /// 채팅 패널의 AI 호출 한 건(채팅 파일의 `usage` 항목 + 어느 워크플로우의 채팅인지).
 #[derive(Debug, Clone)]
 pub struct ChatUsage {

@@ -3,14 +3,14 @@
 use std::fs;
 use std::path::Path;
 
-use ieum_engine::{Node, ValidationError, Workflow};
+use ieum_engine::{Node, ValidationError, Workflow, references};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::edit::{AI_EVENT, FOLDER_FIELDS};
 use super::{
-    Builder, ChatState, Code, Doc, FinishAction, FinishAi, HttpLine, NodeState, PendingFinish,
-    Reply, SaveError, node_state, workflow_hash,
+    Builder, ChatState, Code, Doc, FinishAction, FinishAi, HttpLine, HttpSend, NodeState,
+    PendingFinish, Reply, SaveError, node_state, workflow_hash,
 };
 
 /// 완료까지 남은 것 한 줄.
@@ -53,17 +53,51 @@ fn http_url(n: &Node) -> String {
         .to_string()
 }
 
+/// 확인 카드 한 줄. 머리말은 이름만, 참조식은 어느 노드의 어느 출력인지만 — 값은 싣지 않는다.
+fn http_line(wf: &Workflow, n: &Node) -> HttpLine {
+    let field = |key: &str| n.config.get(key).unwrap_or(&Value::Null);
+    let mut header_keys: Vec<String> = field("headers")
+        .as_object()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    header_keys.sort();
+    let mut sends: Vec<HttpSend> = Vec::new();
+    for (node_id, output) in ["url", "headers", "body"]
+        .into_iter()
+        .flat_map(|k| references(field(k)))
+    {
+        let node_label = wf
+            .nodes
+            .iter()
+            .find(|m| m.id == node_id)
+            .and_then(|m| m.label.clone())
+            .unwrap_or_default();
+        let send = HttpSend {
+            node_id,
+            node_label,
+            output,
+        };
+        if !sends.contains(&send) {
+            sends.push(send);
+        }
+    }
+    HttpLine {
+        node_id: n.id.clone(),
+        label: n.label.clone().unwrap_or_default(),
+        method: http_method(n),
+        url: http_url(n),
+        header_keys,
+        sends,
+        has_body: !field("body").is_null(),
+    }
+}
+
 /// HTTP 노드 — 배열 순서로. 테스트 확인 카드가 쓴다.
 pub(super) fn http_lines(wf: &Workflow) -> Vec<HttpLine> {
     wf.nodes
         .iter()
         .filter(|n| n.event == HTTP_EVENT)
-        .map(|n| HttpLine {
-            node_id: n.id.clone(),
-            label: n.label.clone().unwrap_or_default(),
-            method: http_method(n),
-            url: http_url(n),
-        })
+        .map(|n| http_line(wf, n))
         .collect()
 }
 
@@ -90,6 +124,7 @@ fn actions(wf: &Workflow) -> Vec<FinishAction> {
                 event: n.event.clone(),
                 label: n.label.clone().unwrap_or_default(),
                 target,
+                http: (n.event == HTTP_EVENT).then(|| http_line(wf, n)),
             })
         })
         .collect()

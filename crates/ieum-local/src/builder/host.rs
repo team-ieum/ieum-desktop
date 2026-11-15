@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use ieum_engine::{NodeRecord, RunStatus, Workflow};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::ChatFile;
 use crate::UndoReport;
@@ -42,9 +42,9 @@ pub struct TestRun {
     pub undo: UndoReport,
 }
 
-/// HTTP 테스트 확인 카드의 한 줄. 값이 밖으로 나가기 전에 사람이 주소를 본다.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
+/// HTTP 테스트 확인 카드·[켜기] 카드의 한 줄. 값이 밖으로 나가기 전에 사람이 주소와 실려 나가는 것을 본다.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct HttpLine {
     pub node_id: String,
     pub label: String,
@@ -52,6 +52,23 @@ pub struct HttpLine {
     pub method: String,
     /// `config.url` 원문(참조식 그대로) — 치환한 값은 싣지 않는다.
     pub url: String,
+    /// 머리말 이름(이름순). 값은 싣지 않는다.
+    pub header_keys: Vec<String>,
+    /// url·headers·body의 참조식이 가리키는 앞 노드 출력 — 등장 순서, 중복 없음.
+    pub sends: Vec<HttpSend>,
+    /// 본문이 있는가(null 아님).
+    pub has_body: bool,
+}
+
+/// 요청에 실려 나가는 앞 노드 값 하나 — 이름만, 값은 아니다.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct HttpSend {
+    pub node_id: String,
+    /// 그 워크플로우에서 그 노드의 label(없으면 빈 글).
+    pub node_label: String,
+    /// 참조식의 출력 경로(`summary`, `items.0.name`).
+    pub output: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

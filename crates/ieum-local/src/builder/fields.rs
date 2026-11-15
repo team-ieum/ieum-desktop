@@ -10,6 +10,8 @@ use serde_json::{Map, Value, json};
 
 use super::Code;
 use super::edit::{AI_EVENT, AI_LOCKED_FIELDS, find, find_mut, is_folder_field};
+use super::test::type_name;
+use crate::http::mask;
 
 /// 정적 검증 + 필수 칸·선택지. Builder는 늘 둘을 합쳐 쓴다.
 pub(crate) fn all_errors(wf: &Workflow, catalog: &Catalog) -> Vec<ValidationError> {
@@ -28,7 +30,26 @@ fn locked(event: &str, key: &str) -> bool {
     is_folder_field(event, key) || (event == AI_EVENT && AI_LOCKED_FIELDS.contains(&key))
 }
 
-fn field_json(event: &str, f: &InputField, path: String, value: Option<&Value>) -> Value {
+const HIDDEN: &str = "(숨김)";
+
+/// HTTP 노드에는 사람이 편집기에서 넣은 비밀(머리말 값·주소의 쿼리·계정·본문)이 있다 — AI에게 주지 않는다.
+/// 주소는 실패 문구와 같은 규칙으로 가린다(경로 속 참조식은 보인다).
+fn shown(event: &str, key: &str, value: Option<&Value>) -> Option<Value> {
+    let value = value?;
+    if event != "http.request" || value.is_null() {
+        return Some(value.clone());
+    }
+    Some(match (key, value) {
+        ("url", Value::String(s)) => mask(s).into(),
+        ("headers", Value::Object(m)) => m.keys().map(|k| (k.clone(), json!(HIDDEN))).collect(),
+        ("url" | "headers", _) => HIDDEN.into(),
+        // 본문은 있다는 것과 모양만.
+        ("body", v) => format!("(숨김: {})", type_name(v)).into(),
+        _ => value.clone(),
+    })
+}
+
+fn field_json(event: &str, f: &InputField, path: String, value: Option<Value>) -> Value {
     let children: Vec<Value> = f
         .children
         .iter()
@@ -61,7 +82,8 @@ pub(super) fn fields(catalog: &Catalog, wf: &Workflow, id: &str) -> Result<Value
                 .clone()
                 .filter(|p| !p.is_empty())
                 .unwrap_or_else(|| format!("config.{}", f.key));
-            field_json(&node.event, f, path, node.config.get(&f.key))
+            let value = shown(&node.event, &f.key, node.config.get(&f.key));
+            field_json(&node.event, f, path, value)
         })
         .collect();
     let up = upstream_ids(wf, id);
@@ -191,6 +213,14 @@ pub(super) fn set(
         match (node.event.as_str(), key.as_str()) {
             ("local.file_move", "destination") if !destination_ok(&value) => {
                 return Err(Code::FolderNotAllowed);
+            }
+            // BE는 머리말을 `Map<String,String>`으로 읽는다 — 글이 아닌 값은 거기서 실패한다.
+            ("http.request", "headers")
+                if value
+                    .as_object()
+                    .is_some_and(|m| m.values().any(|v| !v.is_string())) =>
+            {
+                return Err(Code::FieldInvalid);
             }
             ("branch.if", "branches") => branches = Some(fill_branch_keys(&mut value)),
             _ => {}

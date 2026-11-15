@@ -245,6 +245,47 @@ async fn output_shapes() {
     }
 }
 
+/// 빈 값 판정은 Java `isBlank` — NBSP·U+0085는 공백이 아니고 U+001C~U+001F는 공백.
+#[tokio::test]
+async fn blank_body_follows_java_is_blank() {
+    let cases: [(&str, Value); 3] = [
+        ("\u{A0}", json!("\u{A0}")),
+        ("\u{85}", json!("\u{85}")),
+        ("\u{1F}\u{1C} ", Value::Null),
+    ];
+    for (body, want) in cases {
+        let (base, _) = serve_one(ok(body)).await;
+        let out = run(json!({"url": base})).await.unwrap();
+        assert_eq!(out["body"], want, "본문 {body:?}");
+    }
+}
+
+#[tokio::test]
+async fn blank_url_follows_java_is_blank() {
+    let e = err(run(json!({"url": "\u{1F}"})).await);
+    assert_eq!(code(&e), "FIELD_EMPTY url");
+    let e = err(run(json!({"url": "\u{A0}"})).await);
+    assert_eq!(code(&e), "FIELD_INVALID url");
+}
+
+/// BE는 머리말을 `Map<String,String>`으로 읽는다 — 글이 아닌 값은 조용히 바꾸지 않고 실패.
+#[tokio::test]
+async fn non_string_header_value_fails() {
+    let (base, log) = serve_one(ok("{}")).await;
+    for v in [
+        json!(1),
+        json!(null),
+        json!({"a": "b"}),
+        json!(["x"]),
+        json!(true),
+    ] {
+        let e = err(run(json!({"url": base, "headers": {"X-N": v}})).await);
+        assert_eq!(code(&e), "FIELD_INVALID headers", "{v}");
+        assert_eq!(e.message, "헤더 형식이 올바르지 않아요: X-N");
+    }
+    assert!(log.lock().unwrap().is_empty());
+}
+
 // ── 리다이렉트 ─────────────────────────────────────────
 
 #[tokio::test]
@@ -352,8 +393,44 @@ async fn cross_origin_redirect_drops_auth_and_never_restores() {
         assert_eq!(r.header("authorization"), None, "{}", r.path);
         assert_eq!(r.header("cookie"), None);
         assert_eq!(r.header("proxy-authorization"), None);
-        assert_eq!(r.header("x-custom").as_deref(), Some("keep"));
+        // 다른 출처로 가면 사용자 머리말은 전부 뗀다.
+        assert_eq!(r.header("x-custom"), None);
     }
+}
+
+/// 출처가 바뀌면 Content-Type·Accept만 남기고 사용자 머리말을 뗀다(BE는 자격 머리말 셋만, GAPS.md).
+#[tokio::test]
+async fn cross_origin_redirect_drops_all_user_headers() {
+    let (lb, b) = bind().await;
+    let log_b = serve(lb, |_| ok("{}"));
+    let (base, _) = serve_one(redirect(302, &format!("{b}/next"))).await;
+    let headers = json!({
+        "X-API-Key": "SECRET123",
+        "X-Custom": "v",
+        "Content-Type": "text/plain",
+        "Accept": "text/csv",
+    });
+    run(json!({"url": base, "headers": headers})).await.unwrap();
+    let r = log_b.lock().unwrap()[0].clone();
+    assert_eq!(r.header("x-api-key"), None);
+    assert_eq!(r.header("x-custom"), None);
+    assert!(!r.head.contains("SECRET123"));
+    assert_eq!(r.header("content-type").as_deref(), Some("text/plain"));
+    assert_eq!(r.header("accept").as_deref(), Some("text/csv"));
+}
+
+#[tokio::test]
+async fn same_origin_redirect_keeps_user_headers() {
+    let (l, base) = bind().await;
+    let log = serve(l, |r| match r.path.as_str() {
+        "/" => redirect(302, "/next"),
+        _ => ok("{}"),
+    });
+    run(json!({"url": base, "headers": {"X-API-Key": "SECRET123"}}))
+        .await
+        .unwrap();
+    let hop = log.lock().unwrap()[1].clone();
+    assert_eq!(hop.header("x-api-key").as_deref(), Some("SECRET123"));
 }
 
 #[tokio::test]
@@ -760,7 +837,11 @@ async fn read_timeout_fails_as_unreachable() {
             socks.push(s);
         }
     });
-    let runner = HttpRunner::with_timeouts(Duration::from_secs(1), Duration::from_millis(300));
+    let runner = HttpRunner::with_timeouts(
+        Duration::from_secs(1),
+        Duration::from_millis(300),
+        Duration::from_secs(60),
+    );
     let e = tokio::time::timeout(
         Duration::from_secs(5),
         run_on(&runner, json!({"url": base}), CancellationToken::new()),
@@ -790,13 +871,56 @@ async fn slow_body_within_read_timeout_succeeds() {
             s.write_all(&[*b]).await.unwrap();
         }
     });
-    let runner = HttpRunner::with_timeouts(Duration::from_secs(1), Duration::from_millis(400));
+    // 전체 시간(약 1.3초)이 읽기 제한보다 길어도 전체 상한 안이면 성공.
+    let runner = HttpRunner::with_timeouts(
+        Duration::from_secs(1),
+        Duration::from_millis(400),
+        Duration::from_secs(60),
+    );
     let started = std::time::Instant::now();
     let out = run_on(&runner, json!({"url": base}), CancellationToken::new())
         .await
         .unwrap();
     assert!(started.elapsed() > Duration::from_millis(400));
     assert_eq!(out["body"], json!({"slow": true}));
+}
+
+/// 읽기 제한보다 촘촘히 1초마다 1바이트를 흘리는 서버 — 요청 전체 상한에서 끝난다.
+#[tokio::test]
+async fn trickling_body_hits_total_timeout() {
+    let (l, base) = bind().await;
+    tokio::spawn(async move {
+        let (mut s, _) = l.accept().await.unwrap();
+        read_request(&mut s).await;
+        let head = "HTTP/1.1 200 X\r\ncontent-length: 1000\r\nconnection: close\r\n\r\n";
+        s.write_all(head.as_bytes()).await.unwrap();
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if s.write_all(b"x").await.is_err() {
+                break;
+            }
+        }
+    });
+    let runner = HttpRunner::with_timeouts(
+        Duration::from_secs(1),
+        Duration::from_secs(2),
+        Duration::from_secs(3),
+    );
+    let started = std::time::Instant::now();
+    let e = tokio::time::timeout(
+        Duration::from_secs(10),
+        run_on(&runner, json!({"url": base}), CancellationToken::new()),
+    )
+    .await
+    .expect("전체 상한에서 끝나야 함")
+    .expect_err("실패해야 함");
+    let took = started.elapsed();
+    assert!(
+        took >= Duration::from_secs(3) && took < Duration::from_secs(5),
+        "{took:?}"
+    );
+    assert_eq!(e.message, "요청을 보내지 못했어요: 시간 초과");
+    assert_eq!(code(&e), "HTTP_UNREACHABLE");
 }
 
 #[tokio::test]

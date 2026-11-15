@@ -7,11 +7,8 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use ieum_engine::{NodeCtx, NodeError, NodeRunner};
-use reqwest::header::{
-    AUTHORIZATION, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName, HeaderValue, LOCATION,
-    PROXY_AUTHORIZATION,
-};
+use ieum_engine::{NodeCtx, NodeError, NodeRunner, java_strip};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, LOCATION};
 use reqwest::{Client, Method, Response, Url};
 use serde_json::{Map, Value, json};
 
@@ -38,6 +35,8 @@ fn unreachable(message: impl Into<String>) -> NodeError {
 /// BE와 같은 연결 10초·읽기 30초.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// 요청 하나(리다이렉트·본문 읽기 포함) 전체 상한 — 조금씩 흘리는 서버가 실행 줄을 막지 않게(BE에는 없다, GAPS.md).
+pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// 실행마다 TLS 루트·연결 풀을 새로 만들지 않게 프로세스에서 같이 쓴다.
 static SHARED: LazyLock<Client> = LazyLock::new(|| client(CONNECT_TIMEOUT, READ_TIMEOUT));
@@ -56,18 +55,21 @@ fn client(connect: Duration, read: Duration) -> Client {
 
 pub struct HttpRunner {
     client: Client,
+    total: Duration,
 }
 
 impl HttpRunner {
     pub fn new() -> Self {
         HttpRunner {
             client: SHARED.clone(),
+            total: TOTAL_TIMEOUT,
         }
     }
 
-    pub fn with_timeouts(connect: Duration, read: Duration) -> Self {
+    pub fn with_timeouts(connect: Duration, read: Duration, total: Duration) -> Self {
         HttpRunner {
             client: client(connect, read),
+            total,
         }
     }
 }
@@ -88,7 +90,7 @@ struct Request {
 fn request(cfg: &Map<String, Value>) -> Result<Request, NodeError> {
     let credential = match cfg.get("webhookCredentialId") {
         None | Some(Value::Null) => false,
-        Some(Value::String(s)) => !s.trim().is_empty(),
+        Some(Value::String(s)) => !java_strip(s).is_empty(),
         Some(_) => true,
     };
     if credential {
@@ -115,7 +117,7 @@ fn request(cfg: &Map<String, Value>) -> Result<Request, NodeError> {
         }
     };
     let url = match cfg.get("url") {
-        Some(Value::String(s)) if !s.trim().is_empty() => s,
+        Some(Value::String(s)) if !java_strip(s).is_empty() => s,
         _ => return Err(fail_code("FIELD_EMPTY url", "'URL' 칸이 비어 있어요")),
     };
     let url =
@@ -134,12 +136,12 @@ fn request(cfg: &Map<String, Value>) -> Result<Request, NodeError> {
         None | Some(Value::Null) => {}
         Some(Value::Object(m)) => {
             for (k, v) in m {
-                let v = match v {
-                    Value::String(s) => s.clone(),
-                    other => other.to_string(),
+                // BE는 `Map<String,String>`으로 읽어 글이 아닌 값에서 실패한다.
+                let Value::String(v) = v else {
+                    return Err(bad_header(k));
                 };
                 let name = HeaderName::from_bytes(k.as_bytes()).map_err(|_| bad_header(k))?;
-                let value = HeaderValue::from_str(&v).map_err(|_| bad_header(k))?;
+                let value = HeaderValue::from_str(v).map_err(|_| bad_header(k))?;
                 headers.insert(name, value);
             }
         }
@@ -215,8 +217,8 @@ fn after_scheme(text: &str) -> Option<&str> {
 }
 
 /// 실패 문구에 싣는 주소 — 쿼리·fragment·계정 정보는 토큰일 수 있어 가린다(BE는 원문, GAPS.md).
-/// 읽지 못한 글에도 쓰므로 파싱 없이 글자로만 자른다.
-fn mask(text: &str) -> String {
+/// 읽지 못한 글에도 쓰므로 파싱 없이 글자로만 자른다. 빌더 fields도 같은 규칙으로 가린다.
+pub(crate) fn mask(text: &str) -> String {
     let (head, cut) = match text.find(['?', '#']) {
         Some(i) => (&text[..i], format!("{}…", &text[i..=i])),
         None => (text, String::new()),
@@ -292,9 +294,9 @@ fn clip(text: &str) -> String {
     text.to_string()
 }
 
-/// BE `parseBody` — 비거나 공백뿐이면 null, JSON 객체면 객체, 그 밖(배열 포함)은 문자열.
+/// BE `parseBody` — 비거나 공백뿐이면(Java `isBlank`) null, JSON 객체면 객체, 그 밖(배열 포함)은 문자열.
 fn parse_body(text: String) -> Value {
-    if text.trim().is_empty() {
+    if java_strip(&text).is_empty() {
         return Value::Null;
     }
     match serde_json::from_str::<Map<String, Value>>(&text) {
@@ -338,11 +340,16 @@ impl HttpRunner {
                     Err(_) => Err(format!("{syntax}: {}", mask(&shown))),
                 }
                 .map_err(unreachable)?;
-                // 한 번 뗀 자격 헤더는 원래 출처로 돌아와도 되살리지 않는다.
+                // 다른 출처로는 사용자 머리말(키가 든 X-API-Key 등)을 보내지 않는다 — Content-Type·Accept만
+                // 남긴다(BE는 자격 머리말 셋만 뗀다, GAPS.md). 한 번 뗀 것은 원래 출처로 돌아와도 되살리지 않는다.
                 if !same_origin(&url, &next) {
-                    for h in [AUTHORIZATION, PROXY_AUTHORIZATION, COOKIE] {
-                        headers.remove(h);
+                    let mut kept = HeaderMap::new();
+                    for h in [CONTENT_TYPE, ACCEPT] {
+                        if let Some(v) = headers.remove(&h) {
+                            kept.insert(h, v);
+                        }
                     }
+                    headers = kept;
                 }
                 if status <= 303 {
                     method = Method::GET;
@@ -371,13 +378,15 @@ impl HttpRunner {
 impl NodeRunner for HttpRunner {
     async fn run(&self, ctx: NodeCtx<'_>) -> Result<Map<String, Value>, NodeError> {
         let req = request(&ctx.config)?;
-        // 취소는 홉·본문 읽기 어디서든 끊는다. 시간 제한은 클라이언트가 매 요청에 다시 건다.
+        // 취소·전체 상한은 홉·본문 읽기 어디서든 끊는다. 연결·읽기 제한은 클라이언트가 매 요청에 다시 건다.
         tokio::select! {
             _ = ctx.cancel.cancelled() => Err(NodeError {
                 message: "취소됐어요.".into(),
                 code: None,
             }),
-            r = self.execute(req) => r,
+            r = tokio::time::timeout(self.total, self.execute(req)) => {
+                r.unwrap_or_else(|_| Err(unreachable("요청을 보내지 못했어요: 시간 초과")))
+            }
         }
     }
 }

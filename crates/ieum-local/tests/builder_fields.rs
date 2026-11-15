@@ -374,3 +374,96 @@ async fn webhook_credential_field_is_hidden_and_rejected() {
     }
     assert_eq!(h.saves(), 0);
 }
+
+/// 사람이 편집기에서 넣은 머리말 값·주소 쿼리·본문은 AI에게 가지 않는다.
+#[tokio::test]
+async fn http_fields_hide_secrets() {
+    let h = MemHost::with(
+        W,
+        json!({
+            "nodes": [
+                trig(),
+                {"id": "h", "type": "HTTP", "event": "http.request", "config": {
+                    "method": "POST",
+                    "url": "https://u:SECRET123@hooks.example.com/{{nodes.t.output.name}}?token=SECRET123#SECRET123",
+                    "headers": {"Authorization": "Bearer SECRET123", "X-Ref": "{{nodes.t.output.name}}"},
+                    "body": {"k": "SECRET123"}
+                }}
+            ],
+            "edges": [{"source": "t", "target": "h"}]
+        }),
+    );
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(&b, json!({"op": "fields", "args": {"id": "h"}})).await;
+    assert!(r.ok, "{r:?}");
+    let text = serde_json::to_string(&r.data).unwrap();
+    assert!(!text.contains("SECRET123"), "{text}");
+    let value = |key: &str| {
+        r.data["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["key"] == key)
+            .unwrap()["value"]
+            .clone()
+    };
+    assert_eq!(value("method"), json!("POST"));
+    assert_eq!(
+        value("url"),
+        json!("https://…@hooks.example.com/{{nodes.t.output.name}}?…")
+    );
+    assert_eq!(
+        value("headers"),
+        json!({"Authorization": "(숨김)", "X-Ref": "(숨김)"})
+    );
+    assert_eq!(value("body"), json!("(숨김: object)"));
+
+    // 본문 모양과 없음.
+    for (body, want) in [
+        (json!([1]), json!("(숨김: array)")),
+        (json!("SECRET123"), json!("(숨김: string)")),
+    ] {
+        h.put_doc(W, |d| {
+            d.workflow.nodes[1]
+                .config
+                .insert("body".into(), body.clone());
+        });
+        let r = run(&b, json!({"op": "fields", "args": {"id": "h"}})).await;
+        let f = &r.data["fields"].as_array().unwrap()[3];
+        assert_eq!((&f["key"], &f["value"]), (&json!("body"), &want));
+    }
+    h.put_doc(W, |d| {
+        d.workflow.nodes[1].config.remove("body");
+    });
+    let r = run(&b, json!({"op": "fields", "args": {"id": "h"}})).await;
+    assert_eq!(r.data["fields"][3]["value"], Value::Null);
+}
+
+/// BE는 머리말을 `Map<String,String>`으로 읽는다 — 글이 아닌 값은 set에서 거절.
+#[tokio::test]
+async fn set_rejects_non_string_header_values() {
+    let h = MemHost::with(W, transforms());
+    let b = Builder::new(h.clone()).unwrap();
+    for headers in [
+        json!({"X-A": 1}),
+        json!({"X-A": null}),
+        json!({"X-A": {"b": "c"}}),
+        json!({"X-A": ["x"]}),
+        json!("{\"X-A\": 1}"),
+    ] {
+        assert_eq!(
+            run(&b, set("h", json!({"headers": headers.clone()})))
+                .await
+                .code,
+            Some(Code::FieldInvalid),
+            "{headers}"
+        );
+    }
+    assert_eq!(h.saves(), 0);
+    let r = run(
+        &b,
+        set("h", json!({"headers": {"X-A": "{{nodes.t.output.name}}"}})),
+    )
+    .await;
+    assert!(r.ok, "{r:?}");
+}

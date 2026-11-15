@@ -31,22 +31,34 @@ pub fn render_deep(value: &Value, outputs: &Outputs) -> Value {
 
 /// 문자열 값이 직접 참조하는 노드 id — 등장 순서, 중복 없음. Map 키는 훑지 않는다.
 pub fn referenced_node_ids(value: &Value) -> Vec<String> {
-    let mut ids = Vec::new();
-    collect(value, &mut ids);
+    let mut ids: Vec<String> = Vec::new();
+    for (id, _) in references(value) {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
     ids
 }
 
-fn collect(value: &Value, ids: &mut Vec<String>) {
+/// 문자열 값의 참조식 (노드 id, 출력 경로) — 등장 순서, 중복 없음. Map 키는 훑지 않는다.
+pub fn references(value: &Value) -> Vec<(String, String)> {
+    let mut refs = Vec::new();
+    collect(value, &mut refs);
+    refs
+}
+
+fn collect(value: &Value, refs: &mut Vec<(String, String)>) {
     match value {
         Value::String(s) => {
             for c in VARIABLE.captures_iter(s) {
-                if !ids.iter().any(|id| id == &c[1]) {
-                    ids.push(c[1].to_string());
+                let r = (c[1].to_string(), c[2].to_string());
+                if !refs.contains(&r) {
+                    refs.push(r);
                 }
             }
         }
-        Value::Object(map) => map.values().for_each(|v| collect(v, ids)),
-        Value::Array(list) => list.iter().for_each(|v| collect(v, ids)),
+        Value::Object(map) => map.values().for_each(|v| collect(v, refs)),
+        Value::Array(list) => list.iter().for_each(|v| collect(v, refs)),
         _ => {}
     }
 }

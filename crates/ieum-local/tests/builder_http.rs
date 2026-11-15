@@ -55,6 +55,7 @@ fn ok_run(ids: &[&str]) -> TestRun {
                 error: None,
                 usage: None,
                 error_code: None,
+                output_clipped: false,
             };
             (id.to_string(), rec)
         })
@@ -82,12 +83,61 @@ async fn test_with_http_asks_first_even_for_get() {
             label: "조회".into(),
             method: "GET".into(),
             url: URL.into(),
+            header_keys: vec![],
+            sends: vec![HttpSend {
+                node_id: "t".into(),
+                node_label: "".into(),
+                output: "name".into(),
+            }],
+            has_body: false,
         }]]
     );
     assert_eq!(
         serde_json::to_value(&h.http_asked()[0][0]).unwrap(),
-        json!({"nodeId": "h", "label": "조회", "method": "GET", "url": URL})
+        json!({
+            "nodeId": "h", "label": "조회", "method": "GET", "url": URL,
+            "headerKeys": [], "sends": [{"nodeId": "t", "nodeLabel": "", "output": "name"}],
+            "hasBody": false
+        })
     );
+}
+
+/// 본문·머리말로 나가는 앞 노드 값 — 이름만, 값은 없다. 확인 카드와 [켜기] 카드가 같다.
+#[tokio::test]
+async fn http_line_lists_what_body_and_headers_send() {
+    let t = tempfile::tempdir().unwrap();
+    let watch = t.path().canonicalize().unwrap();
+    std::fs::write(watch.join("a.txt"), "a").unwrap();
+    let h = MemHost::with(
+        W,
+        json!({
+            "nodes": [
+                {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "label": "새 파일", "config": {"folder": watch}},
+                {"id": "a", "type": "AI", "event": "local.ai", "label": "요약", "config": {"provider": "cli:claude", "prompt": "p", "outputFields": [{"key": "summary", "type": "text"}]}},
+                {"id": "p", "type": "HTTP", "event": "http.request", "label": "보내기", "config": {
+                    "method": "POST",
+                    "url": "https://api.example.com/log",
+                    "headers": {"X-Data": "{{nodes.a.output.summary}}", "Accept": "x"},
+                    "body": {"text": "{{nodes.t.output.path}}", "again": "{{nodes.a.output.summary}}"}
+                }}
+            ],
+            "edges": [{"source": "t", "target": "a"}, {"source": "a", "target": "p"}]
+        }),
+    );
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(&b, test_op("p")).await;
+    let want = json!({
+        "nodeId": "p", "label": "보내기", "method": "POST", "url": "https://api.example.com/log",
+        "headerKeys": ["Accept", "X-Data"],
+        "sends": [
+            {"nodeId": "a", "nodeLabel": "요약", "output": "summary"},
+            {"nodeId": "t", "nodeLabel": "새 파일", "output": "path"}
+        ],
+        "hasBody": true
+    });
+    let asked = h.http_asked();
+    assert_eq!(asked.len(), 1, "{r:?}");
+    assert_eq!(serde_json::to_value(&asked[0][0]).unwrap(), want);
 }
 
 #[tokio::test]
@@ -196,5 +246,28 @@ async fn finish_lists_http_action() {
             ("p", Some(format!("POST {URL}").as_str()))
         ]
     );
+    // [켜기] 카드도 확인 카드와 같은 줄을 싣는다. 파일·AI 동작 줄에는 없다.
+    let p = pending.actions.iter().find(|a| a.node_id == "p").unwrap();
+    assert_eq!(
+        serde_json::to_value(&p.http).unwrap(),
+        json!({
+            "nodeId": "p", "label": "알림", "method": "POST", "url": URL,
+            "headerKeys": [], "sends": [{"nodeId": "t", "nodeLabel": "", "output": "name"}],
+            "hasBody": false
+        })
+    );
+    assert!(
+        pending
+            .actions
+            .iter()
+            .filter(|a| a.event != "http.request")
+            .all(|a| a.http.is_none())
+    );
+    // 이 칸이 생기기 전 채팅 파일도 읽힌다.
+    let old: FinishAction = serde_json::from_value(
+        json!({"nodeId": "p", "event": "http.request", "label": "", "target": "GET x"}),
+    )
+    .unwrap();
+    assert_eq!(old.http, None);
     assert!(h.http_asked().is_empty());
 }

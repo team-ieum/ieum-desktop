@@ -53,7 +53,7 @@ pub fn pick_sample(folder: &Path, file: Option<&Path>) -> Result<PathBuf, Code> 
         .ok_or(Code::NoSampleFile)
 }
 
-fn type_name(v: &Value) -> &'static str {
+pub(super) fn type_name(v: &Value) -> &'static str {
     match v {
         Value::Null => "null",
         Value::Bool(_) => "boolean",

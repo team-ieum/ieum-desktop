@@ -918,3 +918,112 @@ async fn unfinished_test_run_undone_on_next_start() {
     assert!(env.store.get_run(&manual).unwrap().undo.is_none());
     assert!(out.join("sorted/c.pdf").exists());
 }
+
+/// 127.0.0.1 가짜 서버 — GET에는 `get_body`, 그 밖에는 `{}`. 받은 요청 본문을 남긴다.
+async fn http_server(get_body: Vec<u8>) -> (String, Arc<Mutex<Vec<Vec<u8>>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    let seen: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let log = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = l.accept().await.unwrap();
+            let (mut buf, mut tmp) = (Vec::new(), [0u8; 65536]);
+            let (head_end, len) = loop {
+                let n = s.read(&mut tmp).await.unwrap();
+                buf.extend_from_slice(&tmp[..n]);
+                if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..i]).to_ascii_lowercase();
+                    let len = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .map_or(0, |v| v.trim().parse().unwrap());
+                    break (i + 4, len);
+                }
+            };
+            while buf.len() < head_end + len {
+                let n = s.read(&mut tmp).await.unwrap();
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            let body = match buf.starts_with(b"GET") {
+                true => get_body.clone(),
+                false => b"{}".to_vec(),
+            };
+            log.lock().unwrap().push(buf[head_end..].to_vec());
+            let head = format!(
+                "HTTP/1.1 200 X\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            s.write_all(head.as_bytes()).await.unwrap();
+            s.write_all(&body).await.unwrap();
+        }
+    });
+    (base, seen)
+}
+
+/// 기록 파일에는 큰 응답 본문을 줄여 쓴다 — 실행 중 뒤 노드와 화면 이벤트는 전체를 받는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn large_http_body_is_clipped_only_in_stored_run() {
+    let env = env();
+    let inbox = env.dir("in");
+    let big = json!({"data": "x".repeat(300_000)});
+    let full = serde_json::to_string(&big).unwrap();
+    let full_units = full.encode_utf16().count();
+    let (base, seen) = http_server(full.clone().into_bytes()).await;
+    let wf: Workflow = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": inbox}},
+            {"id": "g", "type": "HTTP", "event": "http.request", "config": {"method": "GET", "url": base}},
+            {"id": "p", "type": "HTTP", "event": "http.request", "config": {"method": "POST", "url": base, "body": {"echo": "{{nodes.g.output.body}}"}}}
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "g"}, {"id": "e2", "source": "g", "target": "p"}]
+    }))
+    .unwrap();
+    let id = save(&env, wf, false);
+    fs::write(inbox.join("a.txt"), "a").unwrap();
+    let run_id = env.sup.run_now(&id, &inbox.join("a.txt")).await.unwrap();
+
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.run.status, RunStatus::Succeeded, "{:?}", run.run.nodes);
+    let g = &run.run.nodes["g"];
+    let body = g.output.as_ref().unwrap()["body"].as_str().unwrap();
+    let marker = format!("…(잘림, 전체 {full_units}자)");
+    assert!(body.ends_with(&marker), "{}", &body[body.len() - 40..]);
+    let kept = &body[..body.len() - marker.len()];
+    assert_eq!(kept.encode_utf16().count(), 100_000);
+    assert!(full.starts_with(kept));
+    assert!(g.output_clipped);
+    // 작은 응답은 그대로.
+    let p = &run.run.nodes["p"];
+    assert_eq!(p.output.as_ref().unwrap()["body"], json!({}));
+    assert!(!p.output_clipped);
+    // 파일에 표시가 남고, 작은 노드에는 칸이 없다.
+    let raw: serde_json::Value = serde_json::to_value(&run).unwrap();
+    assert_eq!(raw["run"]["nodes"]["g"]["outputClipped"], json!(true));
+    assert_eq!(raw["run"]["nodes"]["p"].get("outputClipped"), None);
+
+    // 실행 중 뒤 노드가 받은 값은 전체다.
+    let posted = seen.lock().unwrap()[1].clone();
+    let posted: serde_json::Value = serde_json::from_slice(&posted).unwrap();
+    assert_eq!(posted["echo"].as_str().unwrap(), full);
+    // 화면 이벤트도 전체다.
+    let shown = env.events.lock().unwrap().iter().find_map(|e| match e {
+        AppEvent::Exec {
+            event: ExecEvent::NodeSucceeded { node_id, output },
+            ..
+        } if node_id == "g" => Some(output["body"].clone()),
+        _ => None,
+    });
+    assert_eq!(shown, Some(big));
+}
+
+/// 줄임 표시 칸이 생기기 전 기록도 읽힌다.
+#[test]
+fn old_node_record_without_clip_flag_reads() {
+    let rec: ieum_engine::NodeRecord = serde_json::from_value(
+        json!({"status": "succeeded", "output": {"statusCode": 200, "body": "x"}, "error": null}),
+    )
+    .unwrap();
+    assert!(!rec.output_clipped);
+}

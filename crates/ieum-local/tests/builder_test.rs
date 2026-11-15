@@ -44,6 +44,7 @@ fn rec(
         error: error.map(String::from),
         usage: None,
         error_code: code.map(String::from),
+        output_clipped: false,
     }
 }
 

@@ -9,10 +9,10 @@ mod transform;
 mod validate;
 
 pub use catalog::{Catalog, CatalogError, Choice, EventDef, InputField, NodeType};
-pub use condition::{BuiltinRunners, ConditionRunner, Evaluation, evaluate};
+pub use condition::{BuiltinRunners, ConditionRunner, Evaluation, evaluate, strip as java_strip};
 pub use event::{EventSink, ExecEvent, RunStatus};
 pub use model::{Edge, Node, Workflow};
-pub use render::{Outputs, referenced_node_ids, render_deep};
+pub use render::{Outputs, referenced_node_ids, references, render_deep};
 pub use run::{
     NodeCtx, NodeError, NodeRecord, NodeRunner, NodeStatus, RejectReason, RunResult, Runners,
     run_workflow,

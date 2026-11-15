@@ -26,7 +26,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::http_confirm::HttpConfirmGate;
-use crate::store::{RunTrigger, Store, StoredRun, StoredWorkflow, now};
+use crate::store::{RunTrigger, Store, StoredRun, StoredWorkflow, clip_http_bodies, now};
 
 /// 워크플로우 하나의 대기 실행 상한. 넘으면 가장 오래된 것부터 버린다.
 pub const QUEUE_CAP: usize = 100;
@@ -759,6 +759,9 @@ impl Supervisor {
         if run_trigger == RunTrigger::Test {
             let _one_at_a_time = lock(&self.0.undo_lock);
             stored.undo = Some(self.undo_ops(&stored));
+        } else {
+            // 테스트 기록은 줄이지 않는다 — `run_test`가 이 기록에서 출력 타입(객체·글)을 읽어 빌더에 준다.
+            clip_http_bodies(&mut stored.run, &wf.workflow);
         }
         let saved = self.store().save_run(&stored);
         // 못 되돌린 경로는 화면이 기록에서 읽는다 — 기록을 쓴 뒤에 알린다.
