@@ -626,7 +626,8 @@ pub(crate) fn at_zone<Z: TimeZone>(zone: &Z, local: NaiveDateTime) -> Option<Dat
     match zone.from_local_datetime(&local).earliest() {
         Some(t) => Some(t.to_utc()),
         None => {
-            let probe = local.checked_sub_signed(TimeDelta::hours(12))?;
+            // 오프셋이 +14까지 있으니 24시간 앞이면 어느 시간대든 전환 전이다(전환은 몇 달 간격).
+            let probe = local.checked_sub_signed(TimeDelta::hours(24))?;
             let before = zone.offset_from_utc_datetime(&probe).fix();
             Some(local.checked_sub_offset(before)?.and_utc())
         }

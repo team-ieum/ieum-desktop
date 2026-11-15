@@ -89,12 +89,14 @@ BE 구현 위치(읽기 전용 참조): `ieum-backend/workflow-core/src/main/jav
 
 ### 5.3 차이를 허용하는 곳과 그 규칙
 
-- **`text_extract_pattern`(사용자 정규식)**: `fancy-regex`로 돌린다. 1초 마감 대신 역추적 상한(`backtrack_limit`)을 두고, 넘으면 BE와 같은 문구(`패턴 검사가 1초를 넘었어요` 대신 `패턴이 너무 복잡해요`)로 실패. 컴파일 안 되는 Java 전용 문법은 `정규식 패턴 오류예요: <설명>`. `\d`·`\w`·`\s`는 Java 기본값(ASCII)에 맞춘다.
+- **`text_extract_pattern`(사용자 정규식)**: `fancy-regex`로 돌린다. 역추적 상한(`backtrack_limit` 100만)에 **1초 마감**을 더한다(구현 중 실측: 상한만으로는 앞·뒤 확인이 든 패턴이 10만 자 글에서 10초를 넘는다). 정규식은 별도 스레드에서 돌리고 1초가 넘으면 버린다. 버려진 스레드가 쌓여 CPU를 다 쓰지 않게 **동시에 2개까지만** 돌리고, 넘으면 바로 실패. 실패 문구는 모두 `패턴이 너무 복잡해요`(BE의 `패턴 검사가 1초를 넘었어요`와 다르다). 컴파일 안 되는 Java 전용 문법은 `정규식 패턴 오류예요: <설명>`. `\d`·`\w`·`\s`는 Java 기본값(ASCII)에 맞춘다.
 - **`text_extract`(이메일·전화·URL·숫자)**: BE의 패턴과 URL 뒷정리(`trimUrl`)를 그대로 옮긴다. 여기는 차이를 허용하지 않는다 — BE 테스트 기대값을 전부 통과해야 한다.
 - **`date_format`의 `custom`**: Java `DateTimeFormatter` 패턴 중 `y M d E H h m s a`와 따옴표 글자·구두점만 지원한다. 그 밖의 패턴 문자는 `지원하지 않는 날짜 패턴 문자예요: <문자>`로 실패. 요일·오전/오후는 한국어(`Locale.KOREAN`) 표기. 미리 정해진 표기 5종(korean·korean_time·date·datetime·iso)은 BE와 같아야 한다.
-- **`text_markdown_to_html`**: 허용 태그·속성은 jsoup `Safelist.relaxed()`에 맞추고, 원문 HTML은 이스케이프, `javascript:` 등 위험한 주소는 제거. 공백·줄바꿈·속성 순서 차이는 허용. 주소 규칙은 BE(jsoup, baseUri 없음)에 맞춘다: `a[href]`는 ftp·http·https·mailto만, `img[src]`는 http·https만, **상대 주소는 속성째 지운다**(`ammonia` 기본값은 더 넓으니 좁혀야 한다 — BE 테스트에 이 케이스가 없어 빌더가 BE에서 직접 확인한다). 결과 앞뒤 공백 제거.
+- **`text_markdown_to_html`**: 허용 태그·속성은 jsoup `Safelist.relaxed()`에 맞추고, 원문 HTML은 이스케이프, `javascript:` 등 위험한 주소는 제거. 공백·줄바꿈·속성 순서 차이는 허용. 주소 규칙은 BE(jsoup, baseUri 없음)에 맞춘다: `a[href]`는 http·https·mailto만(jsoup 목록엔 ftp가 있지만 BE에서는 commonmark `sanitizeUrls`가 먼저 지운다 — 구현 중 BE 실행으로 확인), `img[src]`는 http·https만, **상대 주소는 속성째 지운다**(`ammonia` 기본값은 더 넓으니 좁혀야 한다 — BE 테스트에 이 케이스가 없어 빌더가 BE에서 직접 확인한다). 결과 앞뒤 공백 제거. Markdown 중첩이 101단계를 넘으면 BE는 내용을 잘라 다른 결과를 내므로 `Markdown 중첩이 너무 깊어요`(`TOO_LARGE`)로 실패시킨다.
 - **`text_strip_html`**: script·style 제거, 블록 요소·`<br>`에서 줄바꿈, 줄마다 앞뒤 공백 제거·빈 줄 제거. BE 테스트 기대값을 통과하는 선까지 맞춘다.
 - **대소문자 변환**: Java와 Rust의 특수 글자(ß 등) 차이는 허용.
+- **목록 안쪽에 중첩된 소수**(구현 중 추가): JSON 글에서 읽은 1단계 원소·표 값의 소수는 BE처럼 원문 표기(`1.50`)를 살리지만, 2단계 이하 중첩 값의 소수는 `1.5`가 된다. 이미 있던 참조식 실수 표기 차이와 같은 원인.
+- **날짜 범위**(구현 중 추가): Java는 약 ±10억 년, Rust(chrono)는 약 ±26만 년. 넘는 계산·입력은 다른 값을 내지 않고 실패한다.
 - 허용한 차이는 전부 `conformance/GAPS.md` "의도된 차이" 표에 한 줄씩 적는다.
 
 ### 5.4 HTTP 러너 (ieum-local)

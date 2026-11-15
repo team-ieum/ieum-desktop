@@ -247,6 +247,36 @@ fn dst_gap_and_overlap_do_not_panic() {
     );
 }
 
+// UTC+12 이상 — 오클랜드 2026-09-27 02:00 NZST(+12) → 03:00 NZDT(+13), 2026-04-05 03:00 NZDT → 02:00 NZST.
+#[test]
+fn dst_gap_and_overlap_east_of_plus_12() {
+    use chrono::{LocalResult, NaiveDate, TimeZone};
+    let at = |d: u32, m: u32| {
+        NaiveDate::from_ymd_opt(2026, m, d)
+            .unwrap()
+            .and_hms_opt(2, 30, 0)
+            .unwrap()
+    };
+    let nz = chrono_tz::Pacific::Auckland;
+    assert_eq!(nz.from_local_datetime(&at(27, 9)), LocalResult::None);
+    assert!(matches!(
+        nz.from_local_datetime(&at(5, 4)),
+        LocalResult::Ambiguous(..)
+    ));
+    assert_eq!(
+        fmt(
+            json!({"input":"2026-09-27 02:30","fromTimezone":"Pacific/Auckland","toTimezone":"UTC","format":"datetime"})
+        ),
+        "2026-09-26 14:30"
+    );
+    assert_eq!(
+        fmt(
+            json!({"input":"2026-04-05 02:30","fromTimezone":"Pacific/Auckland","toTimezone":"UTC","format":"datetime"})
+        ),
+        "2026-04-04 13:30"
+    );
+}
+
 #[test]
 fn date_add() {
     case(

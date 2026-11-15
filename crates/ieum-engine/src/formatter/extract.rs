@@ -1,5 +1,6 @@
 //! 뽑기 포맷터 2개 — BE `TextFormats.extract`·`extractPattern`.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -29,6 +30,29 @@ type Out = R<Map<String, Value>>;
 /// 사용자 패턴 역추적 상한(찾기 한 번에 누적) — 10만으로 낮추면 10만 자 글의 `(\w+)\s+\1` 같은 정상 패턴이 걸린다(실측).
 const BACKTRACK_LIMIT: usize = 1_000_000;
 const DEADLINE: Duration = Duration::from_secs(1);
+/// 동시에 도는 사용자 정규식 스레드 상한 — 마감에 버려진 스레드가 쌓여 CPU를 다 쓰지 않게.
+const MAX_RUNNING: usize = 2;
+static RUNNING: AtomicUsize = AtomicUsize::new(0);
+
+/// 정규식 스레드 하나 몫 — 스레드가 끝나면(패닉 포함) 놓인다.
+struct Running;
+
+impl Running {
+    fn start() -> Option<Self> {
+        RUNNING
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                (n < MAX_RUNNING).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Running)
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// 한국 전화 앞자리(0 뒤) — BE `TextFormats.AREA`.
 pub(crate) const AREA: &str = "(?:2|1[016789]|[3-6][1-5]|70|80|50[0-9]?)";
@@ -81,9 +105,14 @@ fn extract_pattern(i: &In, _: DateTime<Utc>) -> Out {
         .map_err(|e| invalid("pattern", format!("정규식 패턴 오류예요: {e}")))?;
     let (s, all) = (i.text("input")?, i.flag("all"));
     // 앞·뒤 확인이 역추적마다 글 끝까지 훑으면 상한 안에서도 10초를 넘는다 — BE처럼 1초에서 끊는다.
-    // ponytail: 끊긴 스레드는 역추적 상한까지 혼자 돌다 끝난다(최악 수십 초 CPU), 취소가 필요하면 엔진 교체.
+    // ponytail: 끊긴 스레드는 역추적 상한까지 혼자 돌다 끝난다(최악 십여 초 CPU) — 동시에 MAX_RUNNING개까지만 두고
+    // 넘으면 바로 실패시킨다. 취소가 필요하면 엔진 교체.
+    let guard = Running::start().ok_or_else(|| invalid("pattern", "패턴이 너무 복잡해요"))?;
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || tx.send(find_all(&re, &s, all, false, "pattern")));
+    thread::spawn(move || {
+        let _guard = guard;
+        tx.send(find_all(&re, &s, all, false, "pattern"))
+    });
     rx.recv_timeout(DEADLINE)
         .unwrap_or_else(|_| Err(invalid("pattern", "패턴이 너무 복잡해요")))
 }
@@ -183,4 +212,55 @@ fn trim_url(g: &str) -> Option<&str> {
     // Java는 UTF-16 한 칸을 보므로 BMP 밖 글자(서로게이트)는 글자로 치지 않는다.
     let first = rest.chars().next()?;
     (u32::from(first) <= 0xFFFF && LETTER_OR_DIGIT.is_match(rest)).then_some(g)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Instant;
+
+    use serde_json::json;
+
+    use super::*;
+
+    fn pat(input: String, pattern: &str) -> Out {
+        let m = json!({"input": input, "pattern": pattern});
+        extract_pattern(&In(m.as_object().unwrap()), Utc::now())
+    }
+
+    // 이 바이너리에서 extract_pattern을 부르는 테스트는 이것뿐이라 전역 카운터를 혼자 쓴다.
+    #[test]
+    fn abandoned_threads_are_capped() {
+        let runaway = || {
+            pat(
+                // 1초 마감은 넘기되 버려진 스레드가 몇 초 안에 끝나는 길이(디버그 빌드 실측).
+                format!("{}{}", "a".repeat(30), "b".repeat(1_000)),
+                "(a|aa)+(?![ab]*$)",
+            )
+        };
+        for n in 0..4 {
+            let t = Instant::now();
+            let e = runaway().unwrap_err();
+            assert_eq!(
+                (e.reason.as_str(), e.field),
+                ("패턴이 너무 복잡해요", Some("pattern"))
+            );
+            if n >= MAX_RUNNING {
+                assert!(
+                    t.elapsed() < Duration::from_millis(100),
+                    "{n}: {:?}",
+                    t.elapsed()
+                );
+            }
+            assert!(RUNNING.load(Ordering::SeqCst) <= MAX_RUNNING);
+        }
+        let t = Instant::now();
+        while RUNNING.load(Ordering::SeqCst) > 0 {
+            assert!(
+                t.elapsed() < Duration::from_secs(120),
+                "버려진 스레드가 끝나지 않아요"
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(pat("a1b22".into(), "[0-9]+").unwrap()["output"], json!("1"));
+    }
 }

@@ -1,5 +1,6 @@
 //! BE `TextFormatsTest`의 뽑기 포맷터 2개 케이스.
 
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -32,6 +33,12 @@ fn fails(event: &str, input: Value, reason: &str, code: &str) {
     let e = apply(event, &cfg(input.clone()), now()).unwrap_err();
     assert!(e.message.contains(reason), "{event} {input}: {}", e.message);
     assert_eq!(e.code.as_deref(), Some(code), "{event} {input}");
+}
+
+/// 사용자 정규식은 동시에 2개까지만 돈다(버려진 스레드 포함) — 패턴 테스트끼리 겹치지 않게 줄 세운다.
+fn serial() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn timed(limit: Duration, f: impl FnOnce()) -> Duration {
@@ -171,6 +178,7 @@ fn url_trailing_parens_linear() {
 
 #[test]
 fn text_extract_pattern() {
+    let _g = serial();
     let s = "a 123-4567 b 765-4321";
     case(
         PAT,
@@ -198,6 +206,7 @@ fn text_extract_pattern() {
 
 #[test]
 fn bad_pattern_message() {
+    let _g = serial();
     let e = apply(PAT, &cfg(json!({"input": "a", "pattern": "("})), now()).unwrap_err();
     assert!(
         e.message
@@ -210,6 +219,7 @@ fn bad_pattern_message() {
 
 #[test]
 fn ascii_digit_class() {
+    let _g = serial();
     case(
         PAT,
         json!({"input": "１２3", "pattern": r"\d+"}),
@@ -235,6 +245,7 @@ fn ascii_digit_class() {
 /// BE(JDK 9+)는 `(a+)+$`를 메모이제이션으로 바로 끝내 빈 값을 낸다 — 러스트는 선형 엔진이라 같은 값.
 #[test]
 fn nested_quantifier_ends_fast_with_be_result() {
+    let _g = serial();
     timed(Duration::from_secs(1), || {
         let input = format!("{}!", "a".repeat(30));
         case(PAT, json!({"input": input, "pattern": "(a+)+$"}), json!(""));
@@ -244,6 +255,7 @@ fn nested_quantifier_ends_fast_with_be_result() {
 /// 역추적 엔진이 도는 패턴(뒤 확인)에서 폭주하면 상한에 걸려 1초 안에 실패한다.
 #[test]
 fn runaway_pattern_ends_fast() {
+    let _g = serial();
     let d = timed(Duration::from_secs(1), || {
         let input = format!("{}!", "a".repeat(30));
         fails(
@@ -259,6 +271,7 @@ fn runaway_pattern_ends_fast() {
 /// 앞 확인이 역추적마다 글 끝까지 훑는 폭주는 역추적 상한 전에 1초 마감으로 끊긴다.
 #[test]
 fn runaway_lookahead_scan_hits_deadline() {
+    let _g = serial();
     let d = timed(Duration::from_millis(1_500), || {
         let input = format!("{}{}", "a".repeat(30), "b".repeat(99_970));
         fails(
@@ -274,6 +287,7 @@ fn runaway_lookahead_scan_hits_deadline() {
 /// 정상 패턴은 10만 자 글에서도 상한에 걸리지 않는다.
 #[test]
 fn normal_pattern_on_large_input() {
+    let _g = serial();
     let d = timed(Duration::from_secs(5), || {
         let s = "123456789 ".repeat(10_000);
         for p in ["[0-9]+", r"(?<![0-9])[0-9]+(?![0-9])", r"(?<=\s|^)\d+"] {
@@ -299,6 +313,7 @@ fn normal_pattern_on_large_input() {
 
 #[test]
 fn result_list_cap() {
+    let _g = serial();
     fails(
         PAT,
         json!({"input": "a".repeat(10_001), "pattern": "a", "all": true}),
@@ -315,6 +330,7 @@ fn result_list_cap() {
 /// Java `Matcher.find`처럼 빈 일치 다음 칸에서도 다시 찾는다.
 #[test]
 fn empty_matches_like_java() {
+    let _g = serial();
     case(
         PAT,
         json!({"input": "baa", "pattern": "a*", "all": true}),
@@ -325,6 +341,7 @@ fn empty_matches_like_java() {
 /// BE는 Java 스택 넘침으로 실패하지만, 러스트는 선형 엔진이라 전체가 일치한다(GAPS).
 #[test]
 fn gap_java_stack_overflow_pattern_matches() {
+    let _g = serial();
     let s = "ab".repeat(50_000);
     case(
         PAT,
@@ -336,6 +353,7 @@ fn gap_java_stack_overflow_pattern_matches() {
 /// BE는 1초 마감으로 실패하지만, 러스트는 선형 엔진이라 빈 값으로 끝난다(GAPS).
 #[test]
 fn gap_java_timeout_pattern_ends() {
+    let _g = serial();
     timed(Duration::from_secs(1), || {
         let input = format!("{}!", "a".repeat(40));
         case(
@@ -348,6 +366,7 @@ fn gap_java_timeout_pattern_ends() {
 
 #[test]
 fn empty_input() {
+    let _g = serial();
     case(EX, json!({"input": "", "kind": "email"}), json!(""));
     case(
         EX,
