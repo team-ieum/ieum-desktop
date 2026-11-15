@@ -27,6 +27,8 @@ pub struct NodeCtx<'a> {
     pub node: &'a Node,
     /// 참조식을 치환한 사본.
     pub config: Map<String, Value>,
+    /// 치환 전 상류 출력 — `transform.map`이 원본 설정을 직접 치환할 때 쓴다.
+    pub outputs: &'a Outputs,
     pub events: &'a EventSink,
     pub cancel: &'a CancellationToken,
 }
@@ -270,6 +272,7 @@ pub async fn run_workflow(
             let ctx = NodeCtx {
                 node,
                 config,
+                outputs: &outputs,
                 events: &events,
                 cancel: &cancel,
             };

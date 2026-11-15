@@ -1,9 +1,11 @@
 mod catalog;
 mod condition;
 mod event;
+pub mod formatter;
 mod model;
 mod render;
 mod run;
+mod transform;
 mod validate;
 
 pub use catalog::{Catalog, CatalogError, Choice, EventDef, InputField, NodeType};
@@ -15,6 +17,7 @@ pub use run::{
     NodeCtx, NodeError, NodeRecord, NodeRunner, NodeStatus, RejectReason, RunResult, Runners,
     run_workflow,
 };
+pub use transform::TransformMapRunner;
 pub use validate::{
     ErrorCode, ValidationError, condition_branches, declared_outputs, upstream_ids, validate,
     validate_fields,

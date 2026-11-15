@@ -15,7 +15,9 @@ use chrono_tz::Asia::Seoul;
 use regex::Regex;
 use serde_json::{Map, Number, Value};
 
+use crate::formatter::{self, FormatterRunner};
 use crate::run::{NodeCtx, NodeError, NodeRunner, Runners};
+use crate::transform::TransformMapRunner;
 
 const MAX_BRANCHES: usize = 10;
 const MAX_RULES: usize = 10;
@@ -81,7 +83,18 @@ pub trait BuiltinRunners {
 impl BuiltinRunners for Runners {
     fn with_builtin() -> Self {
         let cond: Arc<dyn NodeRunner> = Arc::new(ConditionRunner::default());
-        Runners::from([("branch.if".to_string(), cond)])
+        let fmt: Arc<dyn NodeRunner> = Arc::new(FormatterRunner::default());
+        let mut runners = Runners::from([
+            ("branch.if".to_string(), cond),
+            (
+                "transform.map".to_string(),
+                Arc::new(TransformMapRunner) as _,
+            ),
+        ]);
+        for event in formatter::events() {
+            runners.insert(event.to_string(), fmt.clone());
+        }
+        runners
     }
 }
 
@@ -408,7 +421,7 @@ fn shown(value: &Value) -> String {
 // ──────────────────────────────────────────────────────────────────────
 
 /// Java `String.valueOf`.
-fn java_str(value: &Value) -> String {
+pub(crate) fn java_str(value: &Value) -> String {
     match value {
         Value::Null => "null".into(),
         Value::String(s) => s.clone(),
@@ -445,7 +458,7 @@ fn java_num(n: &Number) -> String {
 }
 
 /// Java `String.strip` — `Character.isWhitespace`(NBSP류 제외, U+001C–U+001F 포함).
-fn strip(s: &str) -> &str {
+pub(crate) fn strip(s: &str) -> &str {
     s.trim_matches(|c: char| {
         matches!(c, '\u{1C}'..='\u{1F}')
             || (c.is_whitespace() && !matches!(c, '\u{A0}' | '\u{2007}' | '\u{202F}' | '\u{85}'))
@@ -490,10 +503,10 @@ fn list_items(value: &Value, cs: bool) -> Vec<String> {
 }
 
 /// `BigDecimal` 값 비교용 — 0.d₁d₂… × 10^pos, 앞뒤 0 없는 숫자열(빈 = 0).
-struct Decimal {
-    neg: bool,
-    digits: Vec<u8>,
-    pos: i64,
+pub(crate) struct Decimal {
+    pub(crate) neg: bool,
+    pub(crate) digits: Vec<u8>,
+    pub(crate) pos: i64,
 }
 
 impl Decimal {
@@ -521,7 +534,12 @@ impl Decimal {
 }
 
 fn number(value: &Value) -> Option<Decimal> {
-    let s = match value {
+    decimal(&clean_number(value)?)
+}
+
+/// 숫자로 읽을 글 — 공백·쉼표·원·% 제거. 빈 값·1000자 초과는 None.
+pub(crate) fn clean_number(value: &Value) -> Option<String> {
+    let s: String = match value {
         Value::Number(n) => java_num(n),
         // Java `(?U)[\s,원%]` 제거 — `\s` = 유니코드 White_Space
         Value::String(s) => s
@@ -534,11 +552,11 @@ fn number(value: &Value) -> Option<Decimal> {
     if s.is_empty() || s.encode_utf16().count() > 1000 {
         return None;
     }
-    decimal(&s)
+    Some(s)
 }
 
 /// `new BigDecimal(String)` 문법: 부호? (숫자+ ('.' 숫자*)? | '.' 숫자+) ([eE] 부호? 숫자+)?
-fn decimal(s: &str) -> Option<Decimal> {
+pub(crate) fn decimal(s: &str) -> Option<Decimal> {
     let (neg, body) = match s.as_bytes().first() {
         Some(b'-') => (true, &s[1..]),
         Some(b'+') => (false, &s[1..]),
@@ -568,10 +586,10 @@ fn decimal(s: &str) -> Option<Decimal> {
 }
 
 /// `day`는 KST 날짜. 날짜만 읽힌 값은 `instant` = 그날 KST 00:00.
-struct When {
-    instant: DateTime<Utc>,
-    day: NaiveDate,
-    date_only: bool,
+pub(crate) struct When {
+    pub(crate) instant: DateTime<Utc>,
+    pub(crate) day: NaiveDate,
+    pub(crate) date_only: bool,
 }
 
 impl When {
@@ -604,7 +622,7 @@ impl When {
 }
 
 /// Java `LocalDateTime.atZone(KST)` — 겹치면 이른 쪽, 틈이면 틈 전 오프셋.
-fn kst(local: NaiveDateTime) -> Option<DateTime<Utc>> {
+pub(crate) fn kst(local: NaiveDateTime) -> Option<DateTime<Utc>> {
     match Seoul.from_local_datetime(&local).earliest() {
         Some(t) => Some(t.to_utc()),
         None => {
@@ -615,7 +633,7 @@ fn kst(local: NaiveDateTime) -> Option<DateTime<Utc>> {
     }
 }
 
-fn date(value: &Value, now: DateTime<Utc>) -> Option<When> {
+pub(crate) fn date(value: &Value, now: DateTime<Utc>) -> Option<When> {
     if value.is_null() {
         return None;
     }
@@ -850,7 +868,7 @@ fn rfc_1123(s: &str) -> Option<DateTime<Utc>> {
     Some(local.checked_sub_offset(off)?.and_utc())
 }
 
-fn bool_of(value: &Value) -> Option<bool> {
+pub(crate) fn bool_of(value: &Value) -> Option<bool> {
     match text(value, false).as_str() {
         "true" | "yes" | "y" | "예" | "1" => Some(true),
         "false" | "no" | "n" | "아니오" | "0" => Some(false),
@@ -858,7 +876,7 @@ fn bool_of(value: &Value) -> Option<bool> {
     }
 }
 
-fn is_empty(value: &Value) -> bool {
+pub(crate) fn is_empty(value: &Value) -> bool {
     match value {
         Value::Null => true,
         Value::Array(a) => a.is_empty(),

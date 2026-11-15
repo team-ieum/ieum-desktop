@@ -569,6 +569,7 @@ async fn builtin_runner_registered() {
         .run(NodeCtx {
             node: &node,
             config,
+            outputs: &Default::default(),
             events: &tx,
             cancel: &cancel,
         })
@@ -586,6 +587,7 @@ async fn builtin_runner_registered() {
         .run(NodeCtx {
             node: &node,
             config,
+            outputs: &Default::default(),
             events: &tx,
             cancel: &cancel,
         })
@@ -598,6 +600,7 @@ async fn builtin_runner_registered() {
         .run(NodeCtx {
             node: &node,
             config,
+            outputs: &Default::default(),
             events: &tx,
             cancel: &cancel,
         })
@@ -656,6 +659,7 @@ async fn gap_runner_drops_warnings() {
         .run(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
+            outputs: &Default::default(),
             events: &tx,
             cancel: &cancel,
         })

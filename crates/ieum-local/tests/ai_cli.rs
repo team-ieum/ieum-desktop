@@ -133,6 +133,7 @@ async fn run_with(
         .run(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
+            outputs: &Default::default(),
             events: &tx,
             cancel,
         })
@@ -1191,6 +1192,7 @@ async fn run_with_usage(
         .run_metered(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
+            outputs: &Default::default(),
             events: &tx,
             cancel: &CancellationToken::new(),
         })
