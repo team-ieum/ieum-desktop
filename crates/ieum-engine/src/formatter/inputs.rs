@@ -37,6 +37,15 @@ pub(crate) fn too_large(reason: impl Into<String>) -> Fail {
     }
 }
 
+/// 입력·설정 잘못이 아닌 실패 — 코드 없음(빌더는 NODE_FAILED로 본다).
+pub(crate) fn no_code(reason: impl Into<String>) -> Fail {
+    Fail {
+        reason: reason.into(),
+        code: "",
+        field: None,
+    }
+}
+
 fn empty(field: &'static str, reason: String) -> Fail {
     Fail {
         reason,
@@ -69,15 +78,19 @@ pub(crate) fn summary(s: &str) -> String {
     cut + "…"
 }
 
-/// JSON 글 읽기. f64 범위 밖 숫자 때문에 못 읽으면 BE(BigDecimal)와 다른 값을 내지 않게 실패,
+/// JSON 글 읽기. f64 범위 밖 숫자·깊은 중첩 때문에 못 읽으면 BE(BigDecimal·Jackson)와 다른 값을 내지 않게 실패,
 /// 그 밖의 실패는 `None`(호출부가 BE처럼 다른 방법으로 읽는다).
-/// serde_json은 이 오류를 Category::Syntax로만 묶어 공개하므로 문구로 가린다 —
-/// 문구가 바뀌면 `out_of_range_message_is_pinned` 테스트가 깨진다.
+/// serde_json은 이 오류들을 Category::Syntax로만 묶어 공개하므로 문구로 가린다 —
+/// 문구가 바뀌면 `out_of_range_message_is_pinned`·`recursion_limit_message_is_pinned` 테스트가 깨진다.
 pub(crate) fn parse_json<T: serde::de::DeserializeOwned>(t: &str) -> R<Option<T>> {
     match serde_json::from_str(t) {
         Ok(v) => Ok(Some(v)),
         Err(e) if e.is_syntax() && e.to_string().starts_with("number out of range") => {
             Err(too_large("목록 속 숫자가 너무 커요"))
+        }
+        // 중첩 128단 넘음 — BE(Jackson 1000단)는 목록으로 읽으므로 쉼표 나누기로 가지 않게.
+        Err(e) if e.is_syntax() && e.to_string().starts_with("recursion limit exceeded") => {
+            Err(too_large("목록이 너무 깊어요"))
         }
         Err(_) => Ok(None),
     }
@@ -199,6 +212,21 @@ mod tests {
         assert!(e.to_string().starts_with("number out of range"), "{e}");
         assert!(parse_json::<Value>("[-1e400]").is_err());
         assert!(matches!(parse_json::<Value>("[1] x"), Ok(None)));
+    }
+
+    #[test]
+    fn recursion_limit_message_is_pinned() {
+        let deep = format!("{}1{}", "[".repeat(128), "]".repeat(128));
+        let e = serde_json::from_str::<Value>(&deep).unwrap_err();
+        assert!(e.is_syntax(), "{e}");
+        assert!(e.to_string().starts_with("recursion limit exceeded"), "{e}");
+        let e = parse_json::<Vec<Value>>(&deep).unwrap_err();
+        assert_eq!(
+            (e.reason.as_str(), e.code),
+            ("목록이 너무 깊어요", "TOO_LARGE")
+        );
+        let ok = format!("{}1{}", "[".repeat(100), "]".repeat(100));
+        assert!(matches!(parse_json::<Vec<Value>>(&ok), Ok(Some(_))));
     }
 
     #[test]

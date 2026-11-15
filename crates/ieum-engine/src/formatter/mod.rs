@@ -57,7 +57,7 @@ pub fn apply(
         let input = config.get("input").map_or(String::new(), json);
         NodeError {
             message: format!("{title}: {} (입력: '{}')", f.reason, summary(&input)),
-            code: Some(match f.field {
+            code: (!f.code.is_empty()).then(|| match f.field {
                 Some(field) => format!("{} {field}", f.code),
                 None => f.code.to_string(),
             }),

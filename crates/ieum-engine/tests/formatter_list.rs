@@ -363,6 +363,39 @@ fn huge_exponents_fail_fast() {
     );
 }
 
+/// serde_json 재귀 상한(128)을 넘는 중첩 — BE(Jackson 1000단)는 목록으로 읽는다. 쉼표 나누기로 가지 않고 실패(GAPS).
+#[test]
+fn deep_nesting_fails() {
+    let deep = format!("{}1{}", "[".repeat(128), "]".repeat(128));
+    fails(
+        PICK,
+        json!({"input":deep,"position":"first"}),
+        "목록이 너무 깊어요",
+        "TOO_LARGE",
+    );
+    fails(
+        TO_TEXT,
+        json!({"input":deep}),
+        "목록이 너무 깊어요",
+        "TOO_LARGE",
+    );
+    let ok = format!("{}1{}", "[".repeat(100), "]".repeat(100));
+    let inner = format!("{}1{}", "[".repeat(99), "]".repeat(99));
+    case(TO_TEXT, json!({"input":ok}), &inner);
+}
+
+/// u64·i64 밖 정수 원소: BE는 BigInteger(JSON 숫자) — 러스트는 글로 낸다(GAPS).
+#[test]
+fn gap_integer_beyond_u64_is_text() {
+    for n in ["18446744073709551616", "-9223372036854775809"] {
+        case(
+            PICK,
+            json!({"input":format!("[{n}, 2]"),"position":"first"}),
+            n,
+        );
+    }
+}
+
 #[test]
 fn numbers_beyond_f64_fail() {
     const TOO_BIG: &str = "목록 속 숫자가 너무 커요";

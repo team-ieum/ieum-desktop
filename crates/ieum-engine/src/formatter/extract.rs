@@ -3,13 +3,13 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use fancy_regex::{Regex, RegexBuilder};
 use serde_json::{Map, Value};
 
-use super::inputs::{In, MAX_ITEMS, MAX_PATTERN, R, invalid, too_large};
+use super::inputs::{In, MAX_ITEMS, MAX_PATTERN, R, invalid, no_code, too_large};
 use super::{Entry, out};
 
 pub(crate) const OPS: &[Entry] = &[
@@ -91,7 +91,7 @@ fn extract(i: &In, _: DateTime<Utc>) -> Out {
         _ => &*NUMBER,
     };
     let url = std::ptr::eq(re, &*URL);
-    find_all(re, &i.text("input")?, i.flag("all"), url, "input")
+    find_all(re, &i.text("input")?, i.flag("all"), url, "input", None)
 }
 
 fn extract_pattern(i: &In, _: DateTime<Utc>) -> Out {
@@ -99,56 +99,347 @@ fn extract_pattern(i: &In, _: DateTime<Utc>) -> Out {
     if pattern.encode_utf16().count() > MAX_PATTERN {
         return Err(too_large("정규식 패턴이 200자를 넘어요"));
     }
-    let re = RegexBuilder::new(&java_ascii(&pattern))
+    let (s, all) = (i.text("input")?, i.flag("all"));
+    let bad = |e: String| invalid("pattern", format!("정규식 패턴 오류예요: {e}"));
+    let re = RegexBuilder::new(&java_regex(&pattern, &s).map_err(bad)?)
         .backtrack_limit(BACKTRACK_LIMIT)
         .build()
-        .map_err(|e| invalid("pattern", format!("정규식 패턴 오류예요: {e}")))?;
-    let (s, all) = (i.text("input")?, i.flag("all"));
-    capped(move || find_all(&re, &s, all, false, "pattern"))
+        .map_err(|e| bad(e.to_string()))?;
+    capped(move |deadline| find_all(&re, &s, all, false, "pattern", Some(deadline)))
 }
 
 /// 앞·뒤 확인이 역추적마다 글 끝까지 훑으면 상한 안에서도 10초를 넘는다 — BE처럼 1초에서 끊는다.
-// ponytail: 끊긴 스레드는 역추적 상한까지 혼자 돌다 끝난다(최악 십여 초 CPU) — 동시에 MAX_RUNNING개까지만 두고
-// 넘으면 바로 실패시킨다. 취소가 필요하면 엔진 교체.
-fn capped(job: impl FnOnce() -> Out + Send + 'static) -> Out {
-    let guard = Running::start().ok_or_else(|| invalid("pattern", "패턴이 너무 복잡해요"))?;
+/// 작업은 마감 시각을 받아 찾기 사이마다 확인한다.
+// ponytail: 끊긴 스레드는 진행 중인 찾기 한 번을 끝까지 돈다(역추적 상한까지, 최악 십여 초 CPU) —
+// 동시에 MAX_RUNNING개까지만 두고 넘으면 바로 실패시킨다. 찾기 도중 취소가 필요하면 엔진 교체.
+fn capped(job: impl FnOnce(Instant) -> Out + Send + 'static) -> Out {
+    // 패턴 잘못이 아니다 — 코드를 비워 AI 빌더가 멀쩡한 패턴을 고치려 들지 않게.
+    let guard = Running::start().ok_or_else(|| {
+        no_code("다른 패턴 검사가 아직 끝나지 않았어요. 잠시 뒤 다시 실행해 주세요.")
+    })?;
+    let deadline = Instant::now() + DEADLINE;
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _guard = guard;
-        tx.send(job())
+        tx.send(job(deadline))
     });
     rx.recv_timeout(DEADLINE)
         .unwrap_or_else(|_| Err(invalid("pattern", "패턴이 너무 복잡해요")))
 }
 
-/// Java 기본값처럼 `\d`·`\w`·`\s`(와 부정)를 ASCII 클래스로 바꾼다. 글자 클래스 안에서도 중첩 클래스로 쓰인다.
-fn java_ascii(p: &str) -> String {
-    let mut res = String::with_capacity(p.len());
-    let mut cs = p.chars();
-    while let Some(c) = cs.next() {
-        if c != '\\' {
-            res.push(c);
+const W: &str = "[0-9A-Za-z_]";
+const NOT_LINE_END: &str = r"[^\n\r\x{85}\x{2028}\x{2029}]";
+/// 멀티라인이 아닌 `$`·`\Z` — 글 끝, 또는 마지막 줄 끝 문자 앞(CRLF 가운데는 아님).
+const END: &str = r"(?=\r\n\z|[\r\x{85}\x{2028}\x{2029}]?\z|(?<!\r)\n\z)";
+const LINE_END: &str = r"(?=[\r\x{85}\x{2028}\x{2029}]|(?<!\r)\n|\z)";
+/// Java는 글 끝에서 `^`가 맞지 않는다(빈 글 포함).
+const LINE_START: &str = r"(?:\A|(?<=[\n\x{85}\x{2028}\x{2029}])|(?<=\r)(?!\n))(?!\z)";
+/// 유니코드 일반 범주 — Java `\p{..}`와 뜻이 같다.
+const CATEGORIES: &[&str] = &[
+    "L", "Lu", "Ll", "Lt", "Lm", "Lo", "LC", "M", "Mn", "Mc", "Me", "N", "Nd", "Nl", "No", "P",
+    "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "S", "Sm", "Sc", "Sk", "So", "Z", "Zs", "Zl", "Zp",
+    "C", "Cc", "Cf", "Co", "Cs", "Cn",
+];
+/// `\p{Is..}`에서 러스트와 뜻이 같은 Java 이진 속성(대문자).
+const SAME_BINARY: &[&str] = &[
+    "ALPHABETIC",
+    "LETTER",
+    "LOWERCASE",
+    "UPPERCASE",
+    "WHITESPACE",
+    "WHITE_SPACE",
+    "IDEOGRAPHIC",
+    "PUNCTUATION",
+];
+/// 그 밖에 Java가 아는 속성 이름(대문자) — POSIX(ASCII)·Java 고유 정의라 뜻이 다를 수 있다.
+const JAVA_NAMES: &[&str] = &[
+    "ALPHA",
+    "LOWER",
+    "UPPER",
+    "SPACE",
+    "PUNCT",
+    "XDIGIT",
+    "ALNUM",
+    "CNTRL",
+    "DIGIT",
+    "BLANK",
+    "GRAPH",
+    "PRINT",
+    "ASSIGNED",
+    "CONTROL",
+    "EMOJI",
+    "EMOJI_PRESENTATION",
+    "EMOJI_MODIFIER",
+    "EMOJI_MODIFIER_BASE",
+    "EMOJI_COMPONENT",
+    "EXTENDED_PICTOGRAPHIC",
+    "HEXDIGIT",
+    "HEX_DIGIT",
+    "JOINCONTROL",
+    "JOIN_CONTROL",
+    "NONCHARACTERCODEPOINT",
+    "NONCHARACTER_CODE_POINT",
+    "TITLECASE",
+    "WORD",
+    "L1",
+    "LD",
+    "ALL",
+    "ASCII",
+];
+
+/// Java `Pattern` 문법을 fancy-regex로 옮긴다 — 뜻이 다른 문법은 `Err(설명)`.
+/// 줄 끝·단어 경계를 둘러보기로 옮기면 역추적 엔진으로 돌아 느려지므로, 입력에 그 차이가 드러날 때만 옮긴다.
+fn java_regex(p: &str, input: &str) -> Result<String, String> {
+    // 줄 끝 문자가 LF뿐이고 글이 LF로 끝나지 않으면 fancy-regex의 ^·$와 같다.
+    let plain = !input.is_empty()
+        && !input.ends_with('\n')
+        && !input.contains(['\r', '\u{85}', '\u{2028}', '\u{2029}']);
+    let ascii = input.is_ascii();
+    let cs: Vec<char> = p.chars().collect();
+    let mut res = String::with_capacity(p.len() * 2);
+    // 그룹마다 (멀티라인, DOTALL).
+    let mut flags = vec![(false, false)];
+    let mut class = 0usize;
+    let mut i = 0;
+    while i < cs.len() {
+        let c = cs[i];
+        i += 1;
+        let (multi, dotall) = *flags.last().unwrap();
+        if c == '\\' {
+            let Some(&n) = cs.get(i) else {
+                return Err("패턴이 역슬래시로 끝나요".into());
+            };
+            i += 1;
+            match n {
+                'd' => res.push_str("[0-9]"),
+                'D' => res.push_str("[^0-9]"),
+                'w' => res.push_str(W),
+                'W' => res.push_str("[^0-9A-Za-z_]"),
+                's' => res.push_str(r"[\t-\r ]"),
+                'S' => res.push_str(r"[^\t-\r ]"),
+                'p' | 'P' => {
+                    let end = if cs.get(i) == Some(&'{') {
+                        cs[i..].iter().position(|&c| c == '}').map(|e| i + e + 1)
+                    } else {
+                        cs.get(i).map(|_| i + 1)
+                    };
+                    let Some(end) = end else {
+                        return Err(format!("\\{n} 뒤 속성 이름이 없어요"));
+                    };
+                    let name: String = cs[i..end]
+                        .iter()
+                        .filter(|&&c| c != '{' && c != '}')
+                        .collect();
+                    if !same_property(&name) {
+                        return Err(format!("Java와 뜻이 다른 속성이에요: \\{n}{{{name}}}"));
+                    }
+                    res.push('\\');
+                    res.extend(&cs[i - 1..end]);
+                    i = end;
+                }
+                '0' => {
+                    let oct = |k: usize| cs.get(k).and_then(|c| c.to_digit(8));
+                    let Some(a) = oct(i) else {
+                        return Err("\\0 뒤 8진수가 없어요".into());
+                    };
+                    let (mut v, mut k) = (a, i + 1);
+                    if let Some(b) = oct(k) {
+                        v = v * 8 + b;
+                        k += 1;
+                        if let Some(c) = oct(k).filter(|_| a <= 3) {
+                            v = v * 8 + c;
+                            k += 1;
+                        }
+                    }
+                    res.push_str(&format!(r"\x{{{v:x}}}"));
+                    i = k;
+                }
+                'x' if cs.get(i) == Some(&'{') => {
+                    let end = cs[i..]
+                        .iter()
+                        .position(|&c| c == '}')
+                        .map_or(cs.len(), |e| i + e + 1);
+                    res.push_str(r"\x");
+                    res.extend(&cs[i..end]);
+                    i = end;
+                }
+                '1'..='9' | 't' | 'n' | 'r' | 'f' | 'a' | 'e' | 'x' | 'u' => {
+                    res.push('\\');
+                    res.push(n);
+                }
+                'A' | 'z' | 'k' if class == 0 => {
+                    res.push('\\');
+                    res.push(n);
+                }
+                'Z' if class == 0 => res.push_str(if plain { r"\z" } else { END }),
+                'b' if class == 0 => res.push_str(if ascii {
+                    r"\b"
+                } else {
+                    "(?:(?<=[0-9A-Za-z_])(?![0-9A-Za-z_])|(?<![0-9A-Za-z_])(?=[0-9A-Za-z_]))"
+                }),
+                'B' if class == 0 => res.push_str(if ascii {
+                    r"\B"
+                } else {
+                    "(?:(?<=[0-9A-Za-z_])(?=[0-9A-Za-z_])|(?<![0-9A-Za-z_])(?![0-9A-Za-z_]))"
+                }),
+                n if n.is_ascii_alphanumeric() => {
+                    return Err(format!("지원하지 않는 이스케이프예요: \\{n}"));
+                }
+                // 글자 그대로 — `\<` 같은 fancy-regex 고유 뜻을 피한다.
+                n => res.push_str(&format!(r"\x{{{:x}}}", u32::from(n))),
+            }
             continue;
         }
-        match cs.next() {
-            Some('d') => res.push_str("[0-9]"),
-            Some('D') => res.push_str("[^0-9]"),
-            Some('w') => res.push_str("[0-9A-Za-z_]"),
-            Some('W') => res.push_str("[^0-9A-Za-z_]"),
-            Some('s') => res.push_str(r"[\t-\r ]"),
-            Some('S') => res.push_str(r"[^\t-\r ]"),
-            Some(n) => {
-                res.push('\\');
-                res.push(n);
+        if class > 0 {
+            match c {
+                '[' => {
+                    class += 1;
+                    res.push('[');
+                    if cs.get(i) == Some(&'^') {
+                        res.push('^');
+                        i += 1;
+                    }
+                    // 여는 괄호 바로 뒤 `]`는 글자다.
+                    if cs.get(i) == Some(&']') {
+                        res.push_str(r"\x{5d}");
+                        i += 1;
+                    }
+                    // Java의 `[:alpha:]`는 글자 묶음 — 러스트가 POSIX 클래스로 읽지 않게 첫 `:`를 범위로 쓴다
+                    // (fancy-regex가 클래스 안 이스케이프를 풀어 다시 쓰므로 `\x{3a}`로는 안 된다).
+                    let posix = cs[i..]
+                        .iter()
+                        .skip(1)
+                        .position(|&c| !c.is_ascii_alphabetic() && c != '^');
+                    if cs.get(i) == Some(&':')
+                        && posix.is_some_and(|k| cs[i + 1 + k..].starts_with(&[':', ']']))
+                    {
+                        res.push_str(":-:");
+                        i += 1;
+                    }
+                }
+                ']' => {
+                    class -= 1;
+                    res.push(']');
+                }
+                '-' if cs.get(i) == Some(&'-') => {
+                    return Err("문자 클래스 안의 --는 지원하지 않아요".into());
+                }
+                '^' | '-' | '&' => res.push(c),
+                // `[:alpha:]`·`~~`처럼 러스트에서만 뜻이 있는 글자를 글자 그대로.
+                c if c.is_ascii_punctuation() => {
+                    res.push_str(&format!(r"\x{{{:x}}}", u32::from(c)));
+                }
+                c => res.push(c),
             }
-            None => res.push('\\'),
+            continue;
+        }
+        match c {
+            '[' => {
+                class = 1;
+                res.push('[');
+                if cs.get(i) == Some(&'^') {
+                    res.push('^');
+                    i += 1;
+                }
+                if cs.get(i) == Some(&']') {
+                    res.push_str(r"\x{5d}");
+                    i += 1;
+                }
+            }
+            '(' => {
+                let mut f = (multi, dotall);
+                if cs.get(i) == Some(&'?')
+                    && cs
+                        .get(i + 1)
+                        .is_some_and(|c| c.is_ascii_alphabetic() || *c == '-')
+                {
+                    let mut k = i + 1;
+                    let mut on = true;
+                    while let Some(&c) = cs.get(k).filter(|c| !matches!(c, ')' | ':')) {
+                        match c {
+                            '-' => on = false,
+                            'm' => f.0 = on,
+                            's' => f.1 = on,
+                            'i' | 'u' => {}
+                            c => return Err(format!("지원하지 않는 플래그예요: {c}")),
+                        }
+                        k += 1;
+                    }
+                    res.extend(&cs[i - 1..k]);
+                    i = k;
+                    if cs.get(k) == Some(&')') {
+                        *flags.last_mut().unwrap() = f;
+                        res.push(')');
+                        i += 1;
+                        continue;
+                    }
+                } else {
+                    res.push('(');
+                }
+                flags.push(f);
+            }
+            ')' => {
+                if flags.len() > 1 {
+                    flags.pop();
+                }
+                res.push(')');
+            }
+            '.' => res.push_str(if dotall { "." } else { NOT_LINE_END }),
+            '^' => res.push_str(if multi && !plain { LINE_START } else { "^" }),
+            '$' => res.push_str(match (plain, multi) {
+                (true, _) => "$",
+                (false, true) => LINE_END,
+                (false, false) => END,
+            }),
+            '{' => {
+                let end = cs[i..].iter().position(|&c| c == '}').map(|e| i + e);
+                let body: String = end.map_or_else(String::new, |e| cs[i..e].iter().collect());
+                let (lo, hi) = body.split_once(',').unwrap_or((&body, "0"));
+                let digits = |s: &str| s.chars().all(|c| c.is_ascii_digit());
+                if lo.is_empty() || !digits(lo) || !digits(hi) {
+                    return Err("{ 뒤는 반복 횟수({n}·{n,}·{n,m})여야 해요".into());
+                }
+                res.push('{');
+                res.push_str(&body);
+                res.push('}');
+                i = end.unwrap() + 1;
+            }
+            c => res.push(c),
         }
     }
-    res
+    Ok(res)
+}
+
+/// `\p{name}`이 Java와 같은 글자를 고르는가 — 일반 범주·문자 체계·뜻이 같은 이진 속성만.
+fn same_property(name: &str) -> bool {
+    if let Some((key, value)) = name.split_once('=') {
+        return match key.to_ascii_lowercase().as_str() {
+            "gc" | "general_category" => CATEGORIES.contains(&value),
+            _ => true,
+        };
+    }
+    if CATEGORIES.contains(&name) {
+        return true;
+    }
+    let Some(rest) = name.strip_prefix("Is") else {
+        // 접두사 없는 이름은 일반 범주 말고는 POSIX(ASCII)·java 이름이다. `In..`(블록)은 러스트가 거절한다.
+        return name.starts_with("In");
+    };
+    let up = rest.to_uppercase();
+    CATEGORIES.contains(&rest)
+        || SAME_BINARY.contains(&up.as_str())
+        || !(JAVA_NAMES.contains(&up.as_str()) || up.starts_with("JAVA"))
 }
 
 /// Java `Matcher.find` 반복 — 빈 일치 뒤에는 한 글자 건너 다시 찾는다(바로 뒤 빈 일치도 센다).
-fn find_all(re: &Regex, s: &str, all: bool, url: bool, field: &'static str) -> Out {
+fn find_all(
+    re: &Regex,
+    s: &str,
+    all: bool,
+    url: bool,
+    field: &'static str,
+    deadline: Option<Instant>,
+) -> Out {
     let mut found = Vec::new();
     let mut pos = 0;
     while pos <= s.len() {
@@ -158,6 +449,10 @@ fn find_all(re: &Regex, s: &str, all: bool, url: bool, field: &'static str) -> O
         else {
             break;
         };
+        // 마감에 버려진 스레드가 남은 찾기를 끝까지 돌지 않게.
+        if deadline.is_some_and(|d| Instant::now() > d) {
+            return Err(invalid(field, "패턴이 너무 복잡해요"));
+        }
         pos = m.end()
             + if m.start() == m.end() {
                 s[m.end()..].chars().next().map_or(1, char::len_utf8)
@@ -231,41 +526,87 @@ mod tests {
         extract_pattern(&In(m.as_object().unwrap()), Utc::now())
     }
 
-    // 이 바이너리에서 capped를 부르는 테스트는 이것뿐이라 전역 카운터를 혼자 쓴다.
+    /// 이 바이너리에서 capped를 부르는 테스트끼리 전역 카운터를 나눠 쓰지 않게 줄 세운다.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn wait_idle(limit: Duration) -> Duration {
+        let t = Instant::now();
+        while RUNNING.load(Ordering::SeqCst) > 0 {
+            assert!(t.elapsed() < limit, "버려진 스레드가 끝나지 않아요");
+            thread::sleep(Duration::from_millis(10));
+        }
+        t.elapsed()
+    }
+
     // 정규식 폭주 대신 채널로 막아 둔 가짜 작업을 써서 빌드 방식(디버그·release) 속도와 무관하다.
     #[test]
     fn abandoned_threads_are_capped() {
+        let _g = serial();
         let mut releases = Vec::new();
         for n in 0..4 {
             let (release, wait) = mpsc::channel::<()>();
             releases.push(release);
             let t = Instant::now();
-            let e = capped(move || {
+            let e = capped(move |_| {
                 let _ = wait.recv();
                 Ok(Map::new())
             })
             .unwrap_err();
-            assert_eq!(
-                (e.reason.as_str(), e.field),
-                ("패턴이 너무 복잡해요", Some("pattern"))
-            );
             let elapsed = t.elapsed();
             if n < MAX_RUNNING {
+                assert_eq!(
+                    (e.reason.as_str(), e.code, e.field),
+                    ("패턴이 너무 복잡해요", "FIELD_INVALID", Some("pattern"))
+                );
                 assert!(elapsed >= DEADLINE, "{n}: {elapsed:?}");
             } else {
+                assert_eq!(
+                    (e.reason.as_str(), e.code, e.field),
+                    (
+                        "다른 패턴 검사가 아직 끝나지 않았어요. 잠시 뒤 다시 실행해 주세요.",
+                        "",
+                        None
+                    )
+                );
                 assert!(elapsed < Duration::from_millis(100), "{n}: {elapsed:?}");
             }
             assert_eq!(RUNNING.load(Ordering::SeqCst), (n + 1).min(MAX_RUNNING));
         }
+        // 자리가 찼을 때 노드 실패에는 코드가 없다(빌더가 패턴을 고치려 들지 않게).
+        let cfg = json!({"input": "a", "pattern": "a"});
+        let e = crate::formatter::apply(
+            "formatter.text_extract_pattern",
+            cfg.as_object().unwrap(),
+            Utc::now(),
+        )
+        .unwrap_err();
+        assert!(e.message.contains("다른 패턴 검사가"), "{}", e.message);
+        assert_eq!(e.code, None);
         drop(releases);
+        wait_idle(Duration::from_secs(10));
+        assert_eq!(pat("a1b22".into(), "[0-9]+").unwrap()["output"], json!("1"));
+    }
+
+    /// 찾기 한 번은 상한 안이지만 찾기가 수천 번인 폭주(all 켬) — 마감 뒤 버려진 스레드는 찾기 한 번 안에 멈춘다.
+    #[test]
+    fn abandoned_find_loop_stops_at_deadline() {
+        let _g = serial();
+        let input = format!("{}x", "a".repeat(18)).repeat(5_263);
         let t = Instant::now();
-        while RUNNING.load(Ordering::SeqCst) > 0 {
-            assert!(
-                t.elapsed() < Duration::from_secs(10),
-                "버려진 스레드가 끝나지 않아요"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
+        let m = json!({"input": input, "pattern": "(?:(a|aa)+(?![ax]*$)|x)", "all": true});
+        let e = extract_pattern(&In(m.as_object().unwrap()), Utc::now()).unwrap_err();
+        let failed = t.elapsed();
+        assert_eq!(
+            (e.reason.as_str(), e.field),
+            ("패턴이 너무 복잡해요", Some("pattern"))
+        );
+        assert!(failed < Duration::from_secs(3), "{failed:?}");
+        // 찾기 한 번이 release 약 0.7초, 디버그 약 30초(실측) — 넉넉히 기다리되 수십 분은 아니다.
+        let idle = wait_idle(Duration::from_secs(120));
+        eprintln!("abandoned_find_loop_stops_at_deadline: 실패 {failed:?}, 스레드 정리 {idle:?}");
         assert_eq!(pat("a1b22".into(), "[0-9]+").unwrap()["output"], json!("1"));
     }
 }

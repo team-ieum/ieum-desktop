@@ -127,7 +127,8 @@ fn strip_html(i: &In, _: DateTime<Utc>) -> Out {
             Node::Text(t) => push_text(&mut sb, &t.text),
             Node::Element(_) if close => sb.push('\n'),
             Node::Element(e) => {
-                if matches!(e.name(), "script" | "style") {
+                // jsoup이 내용을 DataNode로 두는 요소 — 글에서 빠진다.
+                if matches!(e.name(), "script" | "style" | "iframe" | "xmp" | "noembed") {
                     continue;
                 }
                 let block = is_block(e);

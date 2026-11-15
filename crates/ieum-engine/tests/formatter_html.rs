@@ -66,6 +66,10 @@ fn strip_html_matches_jsoup() {
     assert_eq!(strip("plain < text & more"), "plain < text & more");
     assert_eq!(strip("<p>one</p>  <p>two</p><hr>three"), "one\ntwo\nthree");
     assert_eq!(strip("x&#x3000;y z"), "x\u{3000}y z");
+    // jsoup은 이 요소들의 내용을 DataNode로 두어 글에서 뺀다(BE 실측).
+    assert_eq!(strip("<iframe>if</iframe>z"), "z");
+    assert_eq!(strip("<xmp><b>x</b></xmp>"), "");
+    assert_eq!(strip("<noembed>ne</noembed>z"), "z");
 }
 
 #[test]
@@ -150,6 +154,15 @@ fn markdown_urls_match_be() {
     same_html(
         &md("<https://auto.link> <a@b.co>"),
         "<p><a href=\"https://auto.link\">https://auto.link</a> <a href=\"mailto:a@b.co\">a@b.co</a></p>",
+    );
+}
+
+/// 주소의 공백·비 ASCII 글자: BE는 원문 그대로(`http://x/a b`·`€`) — 러스트는 퍼센트 인코딩(같은 주소, GAPS).
+#[test]
+fn gap_markdown_url_percent_encoded() {
+    same_html(
+        &md("[a](<http://x/a b>) https://x.com/€ [e](https://x.com/€)"),
+        "<p><a href=\"http://x/a%20b\">a</a> https://x.com/€ <a href=\"https://x.com/%E2%82%AC\">e</a></p>",
     );
 }
 
