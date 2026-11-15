@@ -104,14 +104,18 @@ fn extract_pattern(i: &In, _: DateTime<Utc>) -> Out {
         .build()
         .map_err(|e| invalid("pattern", format!("정규식 패턴 오류예요: {e}")))?;
     let (s, all) = (i.text("input")?, i.flag("all"));
-    // 앞·뒤 확인이 역추적마다 글 끝까지 훑으면 상한 안에서도 10초를 넘는다 — BE처럼 1초에서 끊는다.
-    // ponytail: 끊긴 스레드는 역추적 상한까지 혼자 돌다 끝난다(최악 십여 초 CPU) — 동시에 MAX_RUNNING개까지만 두고
-    // 넘으면 바로 실패시킨다. 취소가 필요하면 엔진 교체.
+    capped(move || find_all(&re, &s, all, false, "pattern"))
+}
+
+/// 앞·뒤 확인이 역추적마다 글 끝까지 훑으면 상한 안에서도 10초를 넘는다 — BE처럼 1초에서 끊는다.
+// ponytail: 끊긴 스레드는 역추적 상한까지 혼자 돌다 끝난다(최악 십여 초 CPU) — 동시에 MAX_RUNNING개까지만 두고
+// 넘으면 바로 실패시킨다. 취소가 필요하면 엔진 교체.
+fn capped(job: impl FnOnce() -> Out + Send + 'static) -> Out {
     let guard = Running::start().ok_or_else(|| invalid("pattern", "패턴이 너무 복잡해요"))?;
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let _guard = guard;
-        tx.send(find_all(&re, &s, all, false, "pattern"))
+        tx.send(job())
     });
     rx.recv_timeout(DEADLINE)
         .unwrap_or_else(|_| Err(invalid("pattern", "패턴이 너무 복잡해요")))
@@ -227,39 +231,40 @@ mod tests {
         extract_pattern(&In(m.as_object().unwrap()), Utc::now())
     }
 
-    // 이 바이너리에서 extract_pattern을 부르는 테스트는 이것뿐이라 전역 카운터를 혼자 쓴다.
+    // 이 바이너리에서 capped를 부르는 테스트는 이것뿐이라 전역 카운터를 혼자 쓴다.
+    // 정규식 폭주 대신 채널로 막아 둔 가짜 작업을 써서 빌드 방식(디버그·release) 속도와 무관하다.
     #[test]
     fn abandoned_threads_are_capped() {
-        let runaway = || {
-            pat(
-                // 1초 마감은 넘기되 버려진 스레드가 몇 초 안에 끝나는 길이(디버그 빌드 실측).
-                format!("{}{}", "a".repeat(30), "b".repeat(1_000)),
-                "(a|aa)+(?![ab]*$)",
-            )
-        };
+        let mut releases = Vec::new();
         for n in 0..4 {
+            let (release, wait) = mpsc::channel::<()>();
+            releases.push(release);
             let t = Instant::now();
-            let e = runaway().unwrap_err();
+            let e = capped(move || {
+                let _ = wait.recv();
+                Ok(Map::new())
+            })
+            .unwrap_err();
             assert_eq!(
                 (e.reason.as_str(), e.field),
                 ("패턴이 너무 복잡해요", Some("pattern"))
             );
-            if n >= MAX_RUNNING {
-                assert!(
-                    t.elapsed() < Duration::from_millis(100),
-                    "{n}: {:?}",
-                    t.elapsed()
-                );
+            let elapsed = t.elapsed();
+            if n < MAX_RUNNING {
+                assert!(elapsed >= DEADLINE, "{n}: {elapsed:?}");
+            } else {
+                assert!(elapsed < Duration::from_millis(100), "{n}: {elapsed:?}");
             }
-            assert!(RUNNING.load(Ordering::SeqCst) <= MAX_RUNNING);
+            assert_eq!(RUNNING.load(Ordering::SeqCst), (n + 1).min(MAX_RUNNING));
         }
+        drop(releases);
         let t = Instant::now();
         while RUNNING.load(Ordering::SeqCst) > 0 {
             assert!(
-                t.elapsed() < Duration::from_secs(120),
+                t.elapsed() < Duration::from_secs(10),
                 "버려진 스레드가 끝나지 않아요"
             );
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(pat("a1b22".into(), "[0-9]+").unwrap()["output"], json!("1"));
     }

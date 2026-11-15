@@ -289,6 +289,80 @@ fn reference_json_strings() {
     case_v(PICK, json!({"input":[1.5]}), json!(1.5));
 }
 
+/// 0의 여러 표기 — BE(Java 21, Jackson BigDecimal → toPlainString) 실측 결과.
+#[test]
+fn zero_notations() {
+    case(
+        TO_TEXT,
+        json!({"input":"[0e5, 0e-5, 0.0, -0.0, 0E+3]"}),
+        "0, 0.00000, 0.0, 0.0, 0",
+    );
+    case(
+        LOOKUP,
+        json!({"input":"a","table":r#"{"a": 0e-5}"#}),
+        "0.00000",
+    );
+}
+
+/// 지수가 큰 원소는 펴기 전에 길이를 재고, 목록 전체 합계도 잰다.
+/// `1e99999`는 f64 범위를 넘어 JSON 목록으로 읽히지 않으므로 같은 크기로 펴지는 음의 지수로 잰다.
+#[test]
+fn huge_exponents_fail_fast() {
+    let entries = |lit: &str, n: usize| {
+        let list = format!("[{}]", vec![lit; n].join(","));
+        let table = format!(
+            "{{{}}}",
+            (0..n)
+                .map(|k| format!("\"k{k}\": {lit}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        [
+            (PICK, json!({"input":list})),
+            (TO_TEXT, json!({"input":list.clone()})),
+            (LOOKUP, json!({"input":"k0","table":table})),
+        ]
+    };
+    // 원소 하나가 `0.` + 99999자리 = 10만1자.
+    for (event, input) in entries("1e-99999", 20) {
+        let t = std::time::Instant::now();
+        fails(event, input, "목록 속 숫자가 10만 자를 넘어요", "TOO_LARGE");
+        assert!(
+            t.elapsed().as_secs_f64() < 1.0,
+            "{event}: {:?}",
+            t.elapsed()
+        );
+    }
+    // 원소 하나는 10만 자 안(99999자)이지만 합계가 100만 자를 넘는다.
+    for (event, input) in entries("1e-99997", 11) {
+        let t = std::time::Instant::now();
+        fails(
+            event,
+            input,
+            "목록 속 숫자가 모두 합해 100만 자를 넘어요",
+            "TOO_LARGE",
+        );
+        assert!(
+            t.elapsed().as_secs_f64() < 1.0,
+            "{event}: {:?}",
+            t.elapsed()
+        );
+    }
+    fails(
+        PICK,
+        json!({"input":"[-1e-99998]"}),
+        "목록 속 숫자가 10만 자를 넘어요",
+        "TOO_LARGE",
+    );
+    let fits = out(PICK, json!({"input":"[1e-99998]"}));
+    assert_eq!(fits.as_str().unwrap().len(), MAX_TEXT);
+    case(
+        TO_TEXT,
+        json!({"input":"[1e5, 1.50, 100000000000000000000.5]"}),
+        "100000, 1.50, 100000000000000000000.5",
+    );
+}
+
 #[test]
 fn table_string_over_limit() {
     let t = format!("{{\"a\":\"{}\"}}", "x".repeat(MAX_TEXT));

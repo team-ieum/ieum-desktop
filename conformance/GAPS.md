@@ -33,6 +33,7 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `branch.if` | `rules` | chrono 범위 밖 날짜(연도 262143+): ±999999999년까지 읽음 → 판단 불가(거짓), panic 없음 | `condition.rs` `far_future_rfc_date_does_not_panic` |
 | `branch.if` | — | 분기 경고 문구: 실행 detail에 실음 → 러너가 버림(`evaluate`에서만 보임) | `condition.rs` `gap_runner_drops_warnings` |
 | `local.ai` | `outputFields` | `ref: false` 목록 속 참조: 검증(agent)이 건너뜀 → 부모 `ref: false`를 자식에 전파해 `REF_NOT_ALLOWED`(보안 강화, 데스크톱 로컬 워크플로우 전용) | `crates/ieum-engine/tests/validate.rs` `ai_output_fields_refuse_refs` |
+| `formatter.text_markdown_to_html` | `input` | Markdown 중첩이 101단계를 넘으면: commonmark-java가 열린 블록 100개에서 잘라 낸 결과 → `Markdown 중첩이 너무 깊어요`(TOO_LARGE)로 실패 | 없음(`formatter/html.rs` `MAX_DEPTH` 주석) |
 | `formatter.text_case` | `input` | `capitalize`·`title`에서 대문자가 여러 글자인 특수 글자(`ᾳ` 등 그리스 iota 하첨자): Java 한 글자 대응(`ᾼ`) → 원문 유지(`ᾳ`). `upper`·`lower`(`ß` → `SS`)는 같다 | 없음(`formatter/text.rs` `upper` 주석) |
 | `formatter.text_extract_pattern` | `pattern` | Java 백트래킹이 시간·스택으로 무너지는 패턴(`(a{1,30}){1,30}$`, `(a\|b)*` 긴 입력): `패턴 검사가 1초를 넘었어요`·`패턴이 너무 복잡해요`로 실패 → 뒤·앞 확인·역참조가 없으면 선형 엔진이라 정상 결과(빈 값·전체 일치) | `crates/ieum-engine/tests/formatter_extract.rs` `gap_java_timeout_pattern_ends`·`gap_java_stack_overflow_pattern_matches` |
 | `formatter.text_extract_pattern` | `pattern` | 1초 마감 문구: `패턴 검사가 1초를 넘었어요` → 역추적 상한(100만)·1초 마감 모두 `패턴이 너무 복잡해요` | `formatter_extract.rs` `runaway_pattern_ends_fast`·`runaway_lookahead_scan_hits_deadline` |
@@ -40,6 +41,8 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `formatter.date_format`·`formatter.date_add`·`formatter.date_compare` | `input`·`other` | 날짜 범위: Java는 ±999999999년까지 계산 → chrono는 약 ±26만 년까지라 그 범위를 넘는 `date_add` 결과는 `계산한 날짜가 표기할 수 있는 범위를 넘었어요`(TOO_LARGE), 그런 입력은 `날짜로 읽지 못했어요`(FIELD_INVALID)로 실패 | `formatter_date.rs` `out_of_range`·`read_out_of_range` |
 | `formatter.date_format` | `customPattern` | `y M d E H h m s a`·따옴표·구두점 밖의 Java 패턴(`QQ`·`MMM`·`SSS`·`VV`·`[ ]` 등): `DateTimeFormatter`로 표기(`yyyy-QQ` → `2026-04`) → `지원하지 않는 날짜 패턴 문자예요: <문자>`로 실패 | `crates/ieum-engine/tests/formatter_date.rs` `date_format_plan_cases`·`custom_pattern_letters` |
 | `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | JSON 글 속 객체·배열 안쪽(2단계 이하)의 소수: `BigDecimal` 원문 자릿수(`[1.50]` → `[1.50]`) → f64 표기(`[1.5]`). 1단계 원소·값은 원문에서 다시 읽어 BE와 같다 | `crates/ieum-engine/tests/formatter_list.rs` `decimals_keep_source_digits` |
-| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 원문이 10만 자릿수를 넘는 소수(`0e-999999999`): 수억 자 글을 만듦 → `목록 속 숫자가 10만 자를 넘어요`(TOO_LARGE)로 실패 | `formatter_list.rs` `decimals_keep_source_digits` |
+| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 펴면 10만 자를 넘는 소수(`0e-999999999`·`1e-99999`): 수억 자 글을 만듦 → `목록 속 숫자가 10만 자를 넘어요`(TOO_LARGE)로 실패 | `formatter_list.rs` `decimals_keep_source_digits`·`huge_exponents_fail_fast` |
+| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 한 목록·표에서 편 소수 글의 합계가 100만 자를 넘으면(`1e-99997` × 11): 그대로 폄 → `목록 속 숫자가 모두 합해 100만 자를 넘어요`(TOO_LARGE)로 실패 | `formatter_list.rs` `huge_exponents_fail_fast` |
+| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | f64 범위를 넘는 소수가 든 JSON 글(`[1e99999]`): `BigDecimal`로 읽어 폄 → JSON으로 읽지 못해 쉼표로 나눈 글(`[1e99999`). 표는 `대응표 모양이 아니에요`로 실패 | 없음 |
 
 실수 표기·이스케이프 차이는 참조식 치환 결과 문자열에만 나타난다(조건 비교는 `java_num`으로 Java 표기를 따른다). u64를 넘는 정수는 읽는 순간 f64가 되므로 조건 비교에도 나타난다.

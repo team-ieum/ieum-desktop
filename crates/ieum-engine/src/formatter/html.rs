@@ -239,7 +239,7 @@ fn sanitizer() -> Builder<'static> {
     b
 }
 
-/// jsoup은 요소 100단계(+안쪽 문단)를 넘는 중첩을 잘라 내 결과가 달라지고,
+/// commonmark-java는 열린 블록 파서 상한(maxOpenBlockParsers 100)을 넘는 중첩을 잘라 내(+안쪽 문단) 결과가 달라지고,
 /// html5ever는 깊을수록 크게 느려진다 — 그 전에 실패.
 const MAX_DEPTH: usize = 101;
 

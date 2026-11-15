@@ -2,7 +2,7 @@
 
 use std::str::FromStr;
 
-use bigdecimal::BigDecimal;
+use bigdecimal::{BigDecimal, Signed, Zero};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 
@@ -51,18 +51,36 @@ fn top_level(t: &str) -> Vec<&str> {
     parts
 }
 
+/// 한 목록·표에서 펴는 숫자 글의 합계 상한 — 짧은 `1e-99999`를 1만 개 넣으면 1GB가 되지 않게.
+const MAX_DECIMALS_TOTAL: u64 = MAX_TEXT as u64 * 10;
+
 /// BE는 JSON 글 속 소수를 `BigDecimal`로 읽어 원문 자릿수 그대로 plain 글자로 쓴다(`1.50`, `1e5` → `100000`).
-/// f64를 거치면 끝 0·정밀도가 사라지므로 원문에서 다시 읽는다.
-fn decimal(v: &Value, literal: &str) -> R<Value> {
+/// f64를 거치면 끝 0·정밀도가 사라지므로 원문에서 다시 읽는다. `total`은 지금까지 편 글자 수.
+fn decimal(v: &Value, literal: &str, total: &mut u64) -> R<Value> {
     if !v.is_f64() {
         return Ok(v.clone());
     }
     let Ok(d) = BigDecimal::from_str(literal) else {
         return Ok(v.clone());
     };
-    // `0e-999999999` 같은 표기가 수억 자 글이 되지 않게.
-    if d.fractional_digit_count().unsigned_abs() > MAX_TEXT as u64 {
+    // Java처럼 음의 scale인 0(`0e5`)은 `0`.
+    if d.is_zero() && d.fractional_digit_count() < 0 {
+        return Ok("0".into());
+    }
+    // 펴기 전에 길이를 잰다 — `0e-999999999` 같은 표기가 수억 자 글이 되지 않게.
+    let (n, scale) = (d.digits(), d.fractional_digit_count());
+    let len = u64::from(d.is_negative())
+        + match scale {
+            ..=0 => n + scale.unsigned_abs(),
+            s if n > s as u64 => n + 1,
+            s => 2 + s as u64,
+        };
+    if len > MAX_TEXT as u64 {
         return Err(too_large("목록 속 숫자가 10만 자를 넘어요"));
+    }
+    *total += len;
+    if *total > MAX_DECIMALS_TOTAL {
+        return Err(too_large("목록 속 숫자가 모두 합해 100만 자를 넘어요"));
     }
     Ok(d.to_plain_string().into())
 }
@@ -80,6 +98,7 @@ fn lookup_table(i: &In, _: DateTime<Utc>) -> Out {
             match serde_json::from_str::<Map<String, Value>>(t) {
                 Ok(mut m) => {
                     if m.values().any(Value::is_f64) {
+                        let mut total = 0;
                         // 뒤에서부터 — 겹친 키는 마지막 값이 남고, 바꾼 값은 더는 소수가 아니라 건너뛴다.
                         for entry in top_level(t).into_iter().rev() {
                             let mut de =
@@ -88,7 +107,7 @@ fn lookup_table(i: &In, _: DateTime<Utc>) -> Out {
                             let literal = entry[de.byte_offset()..].trim_start();
                             let literal = literal.strip_prefix(':').unwrap_or(literal).trim();
                             if let Some(v) = m.get_mut::<String>(&key) {
-                                *v = decimal(v, literal)?;
+                                *v = decimal(v, literal, &mut total)?;
                             }
                         }
                     }
@@ -132,10 +151,11 @@ fn items(i: &In) -> R<Vec<Value>> {
     if !items.iter().any(Value::is_f64) {
         return Ok(items);
     }
+    let mut total = 0;
     items
         .iter()
         .zip(top_level(strip(&s)))
-        .map(|(v, literal)| decimal(v, literal))
+        .map(|(v, literal)| decimal(v, literal, &mut total))
         .collect()
 }
 

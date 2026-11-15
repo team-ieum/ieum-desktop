@@ -202,6 +202,24 @@ fn currency_rounding_and_zero() {
     case(CURRENCY, json!({"input":"-0"}), "0원");
 }
 
+/// 0의 여러 표기 — BE(Java 21) 실측 결과.
+#[test]
+fn zero_notations() {
+    for (v, formatted) in [
+        ("0e5", "0"),
+        ("0e-5", "0.00000"),
+        ("0.0", "0.0"),
+        ("-0.0", "0.0"),
+        ("0E+3", "0"),
+    ] {
+        case(MATH, json!({"input":v,"operation":"negate"}), "0");
+        case(MATH, json!({"input":v,"operation":"add","value":"0"}), "0");
+        case(FORMAT, json!({"input":v}), formatted);
+        case(CURRENCY, json!({"input":v,"currency":"USD"}), "$0.00");
+        case(CURRENCY, json!({"input":v}), "0원");
+    }
+}
+
 #[test]
 fn phone_edges() {
     fails(
