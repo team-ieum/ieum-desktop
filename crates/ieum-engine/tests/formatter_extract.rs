@@ -426,6 +426,11 @@ fn java_regex_table() {
     one("a{2,}", "aaa", "aaa");
     all("a{1,2}", "aaa", json!(["aa", "a"]));
     one(r"[a&&[^b]]+", "ab", "a");
+    all(
+        "[a-z&&[^aeiou]]+",
+        "hello world",
+        json!(["h", "ll", "w", "rld"]),
+    );
     // 뜻이 같은 문법.
     one("(?u)a", "a", "a");
     one("(?iu)é", "É", "É");
@@ -498,6 +503,13 @@ fn java_regex_unsupported() {
         "(?x)a b",
         "(?U)a",
         "(?R)a",
+        // Java는 빈 쪽을 무시하고, 연속 수량자는 겹쳐 반복한다 — 러스트는 다른 값을 낸다.
+        "[&&a]+",
+        "[a&&]+",
+        "[^&&a]",
+        "x{1}{2}",
+        "a{2}{3}",
+        "a*{2}",
     ] {
         let e = apply(PAT, &cfg(json!({"input": "a", "pattern": p})), now()).unwrap_err();
         assert!(
@@ -554,6 +566,78 @@ fn gap_word_boundary_combining_mark() {
         json!({"input": "e\u{301}x", "pattern": r"\b", "all": true}),
         json!(["", "", "", ""]),
     );
+}
+
+/// 수량자가 붙은 줄 끝 기호 — 입력에 따라 번역되어도 뜻·컴파일이 같다(JDK 21 값).
+#[test]
+fn quantified_line_anchors_like_java() {
+    let _g = serial();
+    let all = |p: &str, s: &str, n: usize| {
+        case(
+            PAT,
+            json!({"input": s, "pattern": p, "all": true}),
+            json!(vec![""; n]),
+        );
+    };
+    for (s, n) in [("", 1), ("a\n", 3), ("a\r\n", 4)] {
+        all("$?", s, n);
+        all("(?m)$?", s, n);
+        all("(?m)^?", s, n);
+    }
+    all(r"\Z?", "a\n", 3);
+    for (s, want) in [
+        ("", json!([])),
+        ("a\n", json!(["a"])),
+        ("a\r\n", json!(["a"])),
+    ] {
+        case(
+            PAT,
+            json!({"input": s, "pattern": "(?m)^?a", "all": true}),
+            want,
+        );
+    }
+}
+
+/// 여러 줄 글의 흔한 줄 끝 패턴은 Java와 같은 값을 1초 안에 낸다(JDK 21: 마지막 줄·끝 단어).
+#[test]
+fn line_end_patterns_on_multiline_text() {
+    let _g = serial();
+    for line_len in [40, 80] {
+        let line: String = format!("{} 12", "가나 abc".repeat(line_len / 6))
+            .chars()
+            .take(line_len - 3)
+            .chain("x 9".chars())
+            .collect();
+        // 번역된 줄 끝은 역추적 엔진으로 돌아 debug에서 열 배 넘게 느리다 — 큰 글은 release에서만.
+        let sizes: &[usize] = if cfg!(debug_assertions) {
+            &[10_000]
+        } else {
+            &[10_000, 20_000, 100_000]
+        };
+        for nl in ["\n", "\r\n"] {
+            for &size in sizes {
+                let mut s = String::new();
+                while s.chars().count() + line_len + 2 < size {
+                    s.push_str(&line);
+                    s.push_str(nl);
+                }
+                for text in [s.as_str(), s.strip_suffix(nl).unwrap()] {
+                    for (p, want) in [
+                        (".+$", line.as_str()),
+                        (".*$", &line),
+                        (r"\w+$", "9"),
+                        (r"\S+$", "9"),
+                        (r"\d+$", "9"),
+                    ] {
+                        let d = timed(Duration::from_secs(1), || {
+                            case(PAT, json!({"input": text, "pattern": p}), json!(want));
+                        });
+                        eprintln!("{line_len} {nl:?} {size} {p}: {d:?}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[test]

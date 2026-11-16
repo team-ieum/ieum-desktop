@@ -70,6 +70,10 @@ fn strip_html_matches_jsoup() {
     assert_eq!(strip("<iframe>if</iframe>z"), "z");
     assert_eq!(strip("<xmp><b>x</b></xmp>"), "");
     assert_eq!(strip("<noembed>ne</noembed>z"), "z");
+    // svg·math 안의 같은 이름 요소와 select 안 iframe은 보통 요소라 글이 남는다(jsoup 1.23.2).
+    assert_eq!(strip("<svg><iframe>x</iframe></svg>y"), "x\ny");
+    assert_eq!(strip("<math><xmp>x</xmp></math>y"), "x\ny");
+    assert_eq!(strip("<select><option>a<iframe>x</iframe></select>"), "ax");
 }
 
 #[test]

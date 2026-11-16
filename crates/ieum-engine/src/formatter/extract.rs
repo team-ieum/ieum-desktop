@@ -101,8 +101,13 @@ fn extract_pattern(i: &In, _: DateTime<Utc>) -> Out {
     }
     let (s, all) = (i.text("input")?, i.flag("all"));
     let bad = |e: String| invalid("pattern", format!("정규식 패턴 오류예요: {e}"));
-    let re = RegexBuilder::new(&java_regex(&pattern, &s).map_err(bad)?)
-        .backtrack_limit(BACKTRACK_LIMIT)
+    let (p, hard) = java_regex(&pattern, &s).map_err(bad)?;
+    let re = RegexBuilder::new(&p)
+        .backtrack_limit(if hard {
+            BACKTRACK_LIMIT
+        } else {
+            EASY_BACKTRACK_LIMIT
+        })
         .build()
         .map_err(|e| bad(e.to_string()))?;
     capped(move |deadline| find_all(&re, &s, all, false, "pattern", Some(deadline)))
@@ -129,11 +134,16 @@ fn capped(job: impl FnOnce(Instant) -> Out + Send + 'static) -> Out {
 
 const W: &str = "[0-9A-Za-z_]";
 const NOT_LINE_END: &str = r"[^\n\r\x{85}\x{2028}\x{2029}]";
+// 줄 끝 기호 번역은 늘 비캡처 그룹 하나 — 뒤에 수량자가 붙어도 기호 전체에 붙게.
+// 그룹 안이 둘러보기 하나뿐이면 fancy-regex가 반복을 거절하므로 둘러보기를 갈래로 나눈다.
 /// 멀티라인이 아닌 `$`·`\Z` — 글 끝, 또는 마지막 줄 끝 문자 앞(CRLF 가운데는 아님).
-const END: &str = r"(?=\r\n\z|[\r\x{85}\x{2028}\x{2029}]?\z|(?<!\r)\n\z)";
-const LINE_END: &str = r"(?=[\r\x{85}\x{2028}\x{2029}]|(?<!\r)\n|\z)";
+const END: &str = r"(?:(?=\r\n\z)|(?=[\r\x{85}\x{2028}\x{2029}]?\z)|(?<!\r)(?=\n\z))";
+const LINE_END: &str = r"(?:(?=[\r\x{85}\x{2028}\x{2029}])|(?<!\r)(?=\n)|\z)";
 /// Java는 글 끝에서 `^`가 맞지 않는다(빈 글 포함).
-const LINE_START: &str = r"(?:\A|(?<=[\n\x{85}\x{2028}\x{2029}])|(?<=\r)(?!\n))(?!\z)";
+const LINE_START: &str = r"(?:(?:\A|(?<=[\n\x{85}\x{2028}\x{2029}])|(?<=\r)(?!\n))(?!\z))";
+/// 사용자 패턴에 역추적 문법이 없을 때의 상한 — 우리 번역(상수 폭 둘러보기)만으로는 폭주하지 않는다.
+/// 10만 자 여러 줄 글(줄 80자)의 번역된 `.+$`가 release 약 0.18초(실측), 1천만은 부족.
+const EASY_BACKTRACK_LIMIT: usize = 50_000_000;
 /// 유니코드 일반 범주 — Java `\p{..}`와 뜻이 같다.
 const CATEGORIES: &[&str] = &[
     "L", "Lu", "Ll", "Lt", "Lm", "Lo", "LC", "M", "Mn", "Mc", "Me", "N", "Nd", "Nl", "No", "P",
@@ -189,22 +199,32 @@ const JAVA_NAMES: &[&str] = &[
 
 /// Java `Pattern` 문법을 fancy-regex로 옮긴다 — 뜻이 다른 문법은 `Err(설명)`.
 /// 줄 끝·단어 경계를 둘러보기로 옮기면 역추적 엔진으로 돌아 느려지므로, 입력에 그 차이가 드러날 때만 옮긴다.
-fn java_regex(p: &str, input: &str) -> Result<String, String> {
-    // 줄 끝 문자가 LF뿐이고 글이 LF로 끝나지 않으면 fancy-regex의 ^·$와 같다.
-    let plain = !input.is_empty()
-        && !input.ends_with('\n')
-        && !input.contains(['\r', '\u{85}', '\u{2028}', '\u{2029}']);
+/// 둘째 값: 사용자 패턴 자체에 역추적 문법(둘러보기·역참조·원자 그룹·소유격)이 있는가.
+fn java_regex(p: &str, input: &str) -> Result<(String, bool), String> {
+    let other_end = input.contains(['\r', '\u{85}', '\u{2028}', '\u{2029}']);
+    // 비 멀티라인 `$`·`\Z`: Java만 마지막 줄 끝 문자 앞에서도 맞는다 — 글이 줄 끝 문자로 끝날 때만 다르다.
+    let end_differs = input.ends_with(['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}']);
+    // 멀티라인 `$`: Java는 LF 말고 CR·U+0085·U+2028·U+2029 앞에서도 맞고 CRLF 가운데에선 안 맞는다.
+    let line_end_differs = other_end;
+    // 멀티라인 `^`: 그 줄 끝 문자 뒤에서도 맞고, 글 끝(빈 글·LF로 끝난 글)에선 Java만 안 맞는다.
+    let line_start_differs = other_end || input.is_empty() || input.ends_with('\n');
+    // 점(DOTALL 아님)은 늘 클래스로 옮긴다 — 둘러보기가 아니라 비용이 없다(줄 끝 문자 4개가 있을 때만 값이 다르다).
     let ascii = input.is_ascii();
     let cs: Vec<char> = p.chars().collect();
     let mut res = String::with_capacity(p.len() * 2);
     // 그룹마다 (멀티라인, DOTALL).
     let mut flags = vec![(false, false)];
     let mut class = 0usize;
+    let mut hard = false;
+    // 바로 앞 토큰이 수량자인가 / 클래스에서 지금 `&&`의 한쪽이 비었는가(여는 괄호·`&&` 바로 뒤).
+    let (mut quant, mut side_empty) = (false, false);
     let mut i = 0;
     while i < cs.len() {
         let c = cs[i];
         i += 1;
         let (multi, dotall) = *flags.last().unwrap();
+        let after_quant = std::mem::take(&mut quant);
+        let empty = std::mem::take(&mut side_empty);
         if c == '\\' {
             let Some(&n) = cs.get(i) else {
                 return Err("패턴이 역슬래시로 끝나요".into());
@@ -264,14 +284,16 @@ fn java_regex(p: &str, input: &str) -> Result<String, String> {
                     i = end;
                 }
                 '1'..='9' | 't' | 'n' | 'r' | 'f' | 'a' | 'e' | 'x' | 'u' => {
+                    hard |= n.is_ascii_digit() && class == 0;
                     res.push('\\');
                     res.push(n);
                 }
                 'A' | 'z' | 'k' if class == 0 => {
+                    hard |= n == 'k';
                     res.push('\\');
                     res.push(n);
                 }
-                'Z' if class == 0 => res.push_str(if plain { r"\z" } else { END }),
+                'Z' if class == 0 => res.push_str(if end_differs { END } else { r"\z" }),
                 'b' if class == 0 => res.push_str(if ascii {
                     r"\b"
                 } else {
@@ -300,7 +322,8 @@ fn java_regex(p: &str, input: &str) -> Result<String, String> {
                         i += 1;
                     }
                     // 여는 괄호 바로 뒤 `]`는 글자다.
-                    if cs.get(i) == Some(&']') {
+                    side_empty = cs.get(i) != Some(&']');
+                    if !side_empty {
                         res.push_str(r"\x{5d}");
                         i += 1;
                     }
@@ -314,12 +337,22 @@ fn java_regex(p: &str, input: &str) -> Result<String, String> {
                         && posix.is_some_and(|k| cs[i + 1 + k..].starts_with(&[':', ']']))
                     {
                         res.push_str(":-:");
+                        side_empty = false;
                         i += 1;
                     }
+                }
+                // Java는 `&&`의 빈 쪽을 무시한다(`[a&&]` = `[a]`) — 러스트와 값이 달라 거절.
+                ']' | '&' if empty && (c == ']' || cs.get(i) == Some(&'&')) => {
+                    return Err("문자 클래스의 && 양쪽에 글자가 있어야 해요".into());
                 }
                 ']' => {
                     class -= 1;
                     res.push(']');
+                }
+                '&' if cs.get(i) == Some(&'&') => {
+                    res.push_str("&&");
+                    side_empty = true;
+                    i += 1;
                 }
                 '-' if cs.get(i) == Some(&'-') => {
                     return Err("문자 클래스 안의 --는 지원하지 않아요".into());
@@ -341,7 +374,8 @@ fn java_regex(p: &str, input: &str) -> Result<String, String> {
                     res.push('^');
                     i += 1;
                 }
-                if cs.get(i) == Some(&']') {
+                side_empty = cs.get(i) != Some(&']');
+                if !side_empty {
                     res.push_str(r"\x{5d}");
                     i += 1;
                 }
@@ -373,6 +407,12 @@ fn java_regex(p: &str, input: &str) -> Result<String, String> {
                         i += 1;
                         continue;
                     }
+                } else if cs.get(i) == Some(&'?') {
+                    // `(?=` `(?!` `(?<=` `(?<!` `(?>` — 사용자 둘러보기·원자 그룹.
+                    let k: String = cs[i + 1..].iter().take(2).collect();
+                    hard |= k.starts_with(['=', '!', '>']) || k == "<=" || k == "<!";
+                    res.push_str("(?");
+                    i += 1;
                 } else {
                     res.push('(');
                 }
@@ -385,12 +425,18 @@ fn java_regex(p: &str, input: &str) -> Result<String, String> {
                 res.push(')');
             }
             '.' => res.push_str(if dotall { "." } else { NOT_LINE_END }),
-            '^' => res.push_str(if multi && !plain { LINE_START } else { "^" }),
-            '$' => res.push_str(match (plain, multi) {
-                (true, _) => "$",
-                (false, true) => LINE_END,
-                (false, false) => END,
+            '^' => res.push_str(if multi && line_start_differs {
+                LINE_START
+            } else {
+                "^"
             }),
+            '$' => res.push_str(match multi {
+                true if line_end_differs => LINE_END,
+                false if end_differs => END,
+                _ => "$",
+            }),
+            // Java는 `x{1}{2}`·`a*{2}`를 겹쳐 반복한다 — 러스트와 값이 달라 거절.
+            '{' if after_quant => return Err("반복 횟수 앞에 다른 수량자가 있어요".into()),
             '{' => {
                 let end = cs[i..].iter().position(|&c| c == '}').map(|e| i + e);
                 let body: String = end.map_or_else(String::new, |e| cs[i..e].iter().collect());
@@ -403,11 +449,18 @@ fn java_regex(p: &str, input: &str) -> Result<String, String> {
                 res.push_str(&body);
                 res.push('}');
                 i = end.unwrap() + 1;
+                quant = true;
+            }
+            '*' | '+' | '?' => {
+                // 수량자 바로 뒤 `+`는 소유격.
+                hard |= after_quant && c == '+';
+                quant = true;
+                res.push(c);
             }
             c => res.push(c),
         }
     }
-    Ok(res)
+    Ok((res, hard))
 }
 
 /// `\p{name}`이 Java와 같은 글자를 고르는가 — 일반 범주·문자 체계·뜻이 같은 이진 속성만.
@@ -594,7 +647,8 @@ mod tests {
     #[test]
     fn abandoned_find_loop_stops_at_deadline() {
         let _g = serial();
-        let input = format!("{}x", "a".repeat(18)).repeat(5_263);
+        // 블록이 짧아 찾기 한 번은 짧고(debug 1초 안팎), 찾기 수천 번을 다 돌면 release에서도 수십 초다.
+        let input = format!("{}x", "a".repeat(10)).repeat(9_090);
         let t = Instant::now();
         let m = json!({"input": input, "pattern": "(?:(a|aa)+(?![ax]*$)|x)", "all": true});
         let e = extract_pattern(&In(m.as_object().unwrap()), Utc::now()).unwrap_err();
@@ -604,8 +658,7 @@ mod tests {
             ("패턴이 너무 복잡해요", Some("pattern"))
         );
         assert!(failed < Duration::from_secs(3), "{failed:?}");
-        // 찾기 한 번이 release 약 0.7초, 디버그 약 30초(실측) — 넉넉히 기다리되 수십 분은 아니다.
-        let idle = wait_idle(Duration::from_secs(120));
+        let idle = wait_idle(Duration::from_secs(10));
         eprintln!("abandoned_find_loop_stops_at_deadline: 실패 {failed:?}, 스레드 정리 {idle:?}");
         assert_eq!(pat("a1b22".into(), "[0-9]+").unwrap()["output"], json!("1"));
     }

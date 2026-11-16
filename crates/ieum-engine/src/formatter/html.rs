@@ -91,9 +91,13 @@ const BLOCK: &[&str] = &[
     "ul",
 ];
 
+fn is_html(e: &scraper::node::Element) -> bool {
+    &*e.name.ns == "http://www.w3.org/1999/xhtml"
+}
+
 fn is_block(e: &scraper::node::Element) -> bool {
     let name = e.name();
-    if &*e.name.ns == "http://www.w3.org/1999/xhtml" {
+    if is_html(e) {
         BLOCK.contains(&name)
     } else {
         matches!(name, "svg" | "math")
@@ -127,8 +131,19 @@ fn strip_html(i: &In, _: DateTime<Utc>) -> Out {
             Node::Text(t) => push_text(&mut sb, &t.text),
             Node::Element(_) if close => sb.push('\n'),
             Node::Element(e) => {
-                // jsoup이 내용을 DataNode로 두는 요소 — 글에서 빠진다.
-                if matches!(e.name(), "script" | "style" | "iframe" | "xmp" | "noembed") {
+                // jsoup이 내용을 DataNode로 두는 요소 — 글에서 빠진다. iframe·xmp·noembed는 HTML 요소일 때만
+                // (svg·math 안의 같은 이름은 보통 요소). select 안에선 jsoup이 그 태그를 무시해 글이 남는다.
+                // script·style은 jsoup이 어디서든 DataNode로 둔다.
+                let in_select = || {
+                    n.ancestors()
+                        .filter_map(|a| a.value().as_element())
+                        .any(|a| is_html(a) && a.name() == "select")
+                };
+                if matches!(e.name(), "script" | "style")
+                    || is_html(e)
+                        && matches!(e.name(), "iframe" | "xmp" | "noembed")
+                        && !in_select()
+                {
                     continue;
                 }
                 let block = is_block(e);
