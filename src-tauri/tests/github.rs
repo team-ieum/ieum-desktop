@@ -3,10 +3,94 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
 use ieum_desktop_lib::github::{
-    GhAccount, GhAuth, GhFound, GithubStatus, MIN_GH, clear_record, derive_status, gh_auth,
-    parse_auth_status, parse_device_code, parse_gh_version, pick_gh, read_record, write_record,
+    GhAccount, GhAuth, GhFound, GithubStatus, LOGIN_CMD_ARGS, MIN_GH, clear_record, derive_status,
+    gh_auth, parse_auth_status, parse_device_code, parse_gh_version, pick_gh, read_record,
+    run_login, write_record,
 };
+
+const CODE_LINE: &str = "! One-time code (AB12-CD34) copied to clipboard";
+
+/// `run_login`을 돌려 결과와 받은 코드들.
+fn login(gh: &Path, cancel: &AtomicBool, code_wait: Duration) -> (Result<(), String>, Vec<String>) {
+    let mut codes = Vec::new();
+    let r = run_login(gh, cancel, code_wait, Duration::from_secs(30), &mut |c| {
+        codes.push(c.to_string())
+    });
+    (r, codes)
+}
+
+#[test]
+fn login_emits_code_then_ok() {
+    let dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(
+        dir.path(),
+        &format!("echo '{CODE_LINE}' 1>&2\necho '{CODE_LINE}' 1>&2\nsleep 0.3\nexit 0"),
+    );
+    let (r, codes) = login(&gh, &AtomicBool::new(false), Duration::from_secs(5));
+    assert_eq!(r, Ok(()));
+    assert_eq!(codes, ["AB12-CD34"]);
+}
+
+#[test]
+fn login_no_code_fails_fast() {
+    let dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(dir.path(), "sleep 30");
+    let start = Instant::now();
+    let (r, codes) = login(&gh, &AtomicBool::new(false), Duration::from_millis(300));
+    assert!(r.unwrap_err().contains("gh 출력을 읽지 못했어요"));
+    assert!(codes.is_empty());
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn login_cancel_kills() {
+    let dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(dir.path(), &format!("echo '{CODE_LINE}' 1>&2\nsleep 30"));
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        c.store(true, Ordering::SeqCst);
+    });
+    let start = Instant::now();
+    let (r, _) = login(&gh, &cancel, Duration::from_secs(5));
+    assert_eq!(r, Err("취소됨".to_string()));
+    assert!(start.elapsed() < Duration::from_secs(2));
+}
+
+#[test]
+fn login_failure_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(
+        dir.path(),
+        &format!(
+            "echo '{CODE_LINE}' 1>&2\necho 'error: device flow expired' 1>&2\necho 1>&2\nexit 1"
+        ),
+    );
+    let (r, _) = login(&gh, &AtomicBool::new(false), Duration::from_secs(5));
+    assert_eq!(r, Err("error: device flow expired".to_string()));
+}
+
+#[test]
+fn login_args_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("args.log");
+    let gh = fake_gh(
+        dir.path(),
+        &format!(
+            "printf '%s' \"$*\" > '{}'\necho '{CODE_LINE}' 1>&2\nexit 0",
+            log.display()
+        ),
+    );
+    let (r, _) = login(&gh, &AtomicBool::new(false), Duration::from_secs(5));
+    assert_eq!(r, Ok(()));
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), LOGIN_CMD_ARGS);
+}
 
 const STATUS_JSON: &str = r#"{"hosts":{"github.com":[{"state":"success","active":true,"login":"hodoon","tokenSource":"keyring"}]}}"#;
 

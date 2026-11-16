@@ -2,13 +2,13 @@
 //! gh는 사용자 로그인 셸로 부른다. IEUM은 gh에서 로그아웃시키지 않는다 — 해제 = 기록 삭제.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ieum_local::ai::{sh_quote, shell_output, shell_run};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::active::Active;
 
@@ -262,4 +262,167 @@ pub async fn github_status(active: State<'_, Active>) -> Result<GithubStatus, St
 pub async fn github_disconnect(active: State<'_, Active>) -> Result<GithubStatus, String> {
     clear_record(&active.account_dir().await?)?;
     status_of(&active).await
+}
+
+/// [브라우저 열기]가 여는 고정 주소. gh 출력의 주소는 쓰지 않는다.
+pub const DEVICE_URL: &str = "https://github.com/login/device";
+pub const LOGIN_CMD_ARGS: &str =
+    "auth login --web --hostname github.com --git-protocol https --skip-ssh-key";
+const NO_CODE: &str = "gh 출력을 읽지 못했어요";
+/// 로그인 코드를 기다리는 시간·로그인 전체 상한(device code 만료).
+const CODE_WAIT: Duration = Duration::from_secs(10);
+const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// device 로그인. stderr에서 처음 읽은 코드로 `on_code`를 한 번 부른다.
+/// `code_wait` 안에 코드가 없으면 `cancel`을 세우고 실패.
+pub fn run_login(
+    gh: &Path,
+    cancel: &AtomicBool,
+    code_wait: Duration,
+    limit: Duration,
+    on_code: &mut dyn FnMut(&str),
+) -> Result<(), String> {
+    let cmd = format!("{} {LOGIN_CMD_ARGS}", sh_quote(&gh.to_string_lossy()));
+    let (got, done, expired) = (
+        AtomicBool::new(false),
+        AtomicBool::new(false),
+        AtomicBool::new(false),
+    );
+    let mut last = String::new();
+    let r = std::thread::scope(|s| {
+        s.spawn(|| {
+            let end = Instant::now() + code_wait;
+            while !done.load(Ordering::SeqCst) && !got.load(Ordering::SeqCst) {
+                if Instant::now() >= end {
+                    expired.store(true, Ordering::SeqCst);
+                    cancel.store(true, Ordering::SeqCst);
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let r = shell_run(&cmd, limit, cancel, &mut |line| {
+            if !line.trim().is_empty() {
+                last = line.trim().to_string();
+            }
+            if !got.load(Ordering::SeqCst)
+                && let Some(code) = parse_device_code(line)
+            {
+                got.store(true, Ordering::SeqCst);
+                on_code(&code);
+            }
+        });
+        done.store(true, Ordering::SeqCst);
+        r
+    })
+    .map_err(|e| format!("gh를 실행하지 못했어요: {e}"))?;
+    if expired.load(Ordering::SeqCst) {
+        Err(NO_CODE.into())
+    } else if r.cancelled {
+        Err("취소됨".into())
+    } else if r.timed_out {
+        Err("로그인 시간이 끝났어요(15분). 다시 시도해 주세요.".into())
+    } else if r.code == Some(0) {
+        Ok(())
+    } else if last.is_empty() {
+        Err(format!("gh 로그인이 실패했어요(종료 코드 {:?}).", r.code))
+    } else {
+        Err(last)
+    }
+}
+
+/// 활성이고 로그인이 살아 있는 계정.
+fn ready_login(auth: &GhAuth) -> Option<String> {
+    match auth {
+        GhAuth::Accounts(a) => a
+            .iter()
+            .find(|a| a.active && a.state == "success")
+            .map(|a| a.login.clone()),
+        GhAuth::LoggedOut => None,
+    }
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// jobs 슬롯을 차지하고, 버려질 때(성공·실패·취소) 비운다.
+struct JobGuard<'a>(&'a GithubJobs);
+
+impl<'a> JobGuard<'a> {
+    fn start(jobs: &'a GithubJobs, kind: JobKind, cancel: Arc<AtomicBool>) -> Result<Self, String> {
+        let mut cur = jobs.current.lock().map_err(|e| e.to_string())?;
+        if cur.is_some() {
+            return Err("이미 진행 중이에요".into());
+        }
+        *cur = Some(GithubJob { kind, cancel });
+        Ok(Self(jobs))
+    }
+}
+
+impl Drop for JobGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut cur) = self.0.current.lock() {
+            *cur = None;
+        }
+    }
+}
+
+/// [연결]. gh가 이미 로그인돼 있으면(환경변수 토큰 포함) 바로 기록, 아니면 device 로그인 뒤 기록.
+#[tauri::command]
+pub async fn github_connect(
+    app: AppHandle,
+    active: State<'_, Active>,
+    jobs: State<'_, GithubJobs>,
+) -> Result<GithubStatus, String> {
+    let dir = active.account_dir().await?;
+    let app_data = active.app_data().to_path_buf();
+    let gh = match blocking(move || find_gh(&app_data)).await? {
+        Ok(g) => g,
+        Err(s) => return Ok(s),
+    };
+    let path = gh.path.clone();
+    let login = match ready_login(&blocking(move || gh_auth(&path)).await??) {
+        Some(l) => l,
+        None => {
+            let cancel = Arc::new(AtomicBool::new(false));
+            let _job = JobGuard::start(&jobs, JobKind::Login, cancel.clone())?;
+            let (v0, v1, v2) = gh.version;
+            let path = gh.path.clone();
+            blocking(move || {
+                run_login(&path, &cancel, CODE_WAIT, LOGIN_TIMEOUT, &mut |code| {
+                    let _ = app.emit("github-login-code", serde_json::json!({ "code": code }));
+                })
+            })
+            .await?
+            .map_err(|e| {
+                if e == NO_CODE {
+                    format!("{e} (gh {v0}.{v1}.{v2})")
+                } else {
+                    e
+                }
+            })?;
+            let path = gh.path.clone();
+            ready_login(&blocking(move || gh_auth(&path)).await??)
+                .ok_or("로그인 뒤에도 gh 계정을 찾지 못했어요.")?
+        }
+    };
+    write_record(&dir, &login)?;
+    status_of(&active).await
+}
+
+/// 진행 중인 gh 작업(로그인·설치)을 멈춘다.
+#[tauri::command]
+pub async fn github_cancel(jobs: State<'_, GithubJobs>) -> Result<(), String> {
+    if let Some(j) = jobs.current.lock().map_err(|e| e.to_string())?.as_ref() {
+        j.cancel.store(true, Ordering::SeqCst);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn github_open_device() -> Result<(), String> {
+    crate::commands::open_url(DEVICE_URL)
 }
