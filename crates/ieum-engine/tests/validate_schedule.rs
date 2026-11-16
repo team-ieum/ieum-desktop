@@ -84,7 +84,7 @@ fn cron_code_serializes() {
 #[test]
 fn cron_quartz_start_step_valid() {
     let catalog = Catalog::embedded().unwrap();
-    for cron in ["0 0/5 * * * ?", "0/5 * * * *", "0 0 9 ? * MON/2"] {
+    for cron in ["0 0/5 * * * ?", "0/5 * * * *", "0 0 9 ? * 2/2"] {
         let errors = validate(&wf("schedule.every", json!({"cron": cron})), &catalog);
         assert!(errors.is_empty(), "{cron}: {errors:?}");
     }

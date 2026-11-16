@@ -282,6 +282,8 @@ struct Inner {
     schedule_errors: Mutex<HashMap<String, String>>,
     /// 스케줄 확인을 차례로 — 루프·저장이 같은 차례를 두 번 넣지 않게.
     tick_lock: Mutex<()>,
+    /// 저장소(`schedule.json`)에 쓰지 못한 차례(워크플로우 id → 차례). 저장소 값보다 앞선다.
+    slots: Mutex<HashMap<String, DateTime<Utc>>>,
 }
 
 #[derive(Clone)]
@@ -325,6 +327,7 @@ impl Supervisor {
             stopped: CancellationToken::new(),
             schedule_errors: Mutex::default(),
             tick_lock: Mutex::default(),
+            slots: Mutex::default(),
         }));
         // 감시(`sync`)보다 먼저 — 되돌려진 파일이 새 파일로 잡히지 않는다.
         if close_unfinished {
@@ -484,13 +487,8 @@ impl Supervisor {
             // 꺼짐→켜짐, 트리거 칸이 바뀜 = 지난 차례를 놓친 것으로 치지 않고 지금부터.
             let restart =
                 before.is_none_or(|b| !b.enabled || trigger_sig(&b) != trigger_sig(&saved));
-            if restart
-                && enabled_schedule(&saved).is_some()
-                && let Err(e) = self
-                    .store()
-                    .set_schedule_slot(&saved.id, (self.0.deps.now)())
-            {
-                eprintln!("[ieum] 스케줄 기록을 쓰지 못했어요: {e}");
+            if restart && enabled_schedule(&saved).is_some() {
+                self.set_slot(&saved.id, (self.0.deps.now)());
             }
             saved
         };
@@ -547,6 +545,13 @@ impl Supervisor {
     pub fn delete_workflow(&self, id: &str) -> Result<(), String> {
         let _g = lock(&self.0.save_lock);
         self.store().delete_workflow(id)?;
+        {
+            let _one = lock(&self.0.tick_lock);
+            lock(&self.0.slots).remove(id);
+            if let Err(e) = self.store().remove_schedule_slot(id) {
+                eprintln!("[ieum] 스케줄 기록을 지우지 못했어요: {e}");
+            }
+        }
         self.sync();
         Ok(())
     }
@@ -687,6 +692,20 @@ impl Supervisor {
         }
     }
 
+    /// 차례 기록: 메모리에 먼저 넘기고 저장소에 쓴다. 쓰기가 되면 메모리 값은 지운다(저장소가 기준).
+    /// 쓰기가 실패하면 메모리 값이 남아 같은 프로세스 안에선 같은 차례를 다시 돌지 않는다 — 재시작하면
+    /// 그 차례가 한 번 더 돌 수 있다(로그만 남긴다). `tick_lock`을 잡은 채 부른다.
+    fn set_slot(&self, workflow_id: &str, slot: DateTime<Utc>) {
+        let mut pending = lock(&self.0.slots);
+        pending.insert(workflow_id.to_string(), slot);
+        match self.store().set_schedule_slot(workflow_id, slot) {
+            Ok(()) => {
+                pending.remove(workflow_id);
+            }
+            Err(e) => eprintln!("[ieum] 스케줄 기록을 쓰지 못했어요: {e}"),
+        }
+    }
+
     #[doc(hidden)]
     pub fn tick_for_test(&self) {
         self.schedule_tick();
@@ -699,7 +718,7 @@ impl Supervisor {
         if self.is_stopped() {
             return;
         }
-        let (list, slots) = match (
+        let (list, mut slots) = match (
             self.store().list_workflows(),
             self.store().get_schedule_slots(),
         ) {
@@ -708,6 +727,8 @@ impl Supervisor {
                 return eprintln!("[ieum] 스케줄을 확인하지 못했어요: {e}");
             }
         };
+        // 저장소에 쓰지 못한 차례가 이긴다 — 같은 차례를 다시 돌지 않게.
+        slots.extend(lock(&self.0.slots).iter().map(|(k, v)| (k.clone(), *v)));
         let now = (self.0.deps.now)();
         let mut errors = HashMap::new();
         for wf in &list {
@@ -721,11 +742,7 @@ impl Supervisor {
                     continue;
                 }
             };
-            let set = |slot| {
-                if let Err(e) = self.store().set_schedule_slot(&wf.id, slot) {
-                    eprintln!("[ieum] 스케줄 기록을 쓰지 못했어요: {e}");
-                }
-            };
+            let set = |slot| self.set_slot(&wf.id, slot);
             let decision = match slots.get(&wf.id) {
                 None => {
                     set(now);

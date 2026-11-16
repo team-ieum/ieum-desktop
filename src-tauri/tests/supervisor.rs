@@ -1419,3 +1419,32 @@ async fn run_now_by_kind() {
     assert_eq!(run.trigger, Some(RunTrigger::Manual));
     assert_eq!(run.run.nodes["t"].output.as_ref().unwrap().len(), 0);
 }
+
+/// 차례 기록(schedule.json)을 못 써도 같은 프로세스에선 같은 차례를 다시 돌리지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn slot_write_failure_runs_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = env();
+    let id = hourly(&env);
+    let data = env.root.join("data");
+    fs::create_dir_all(data.join("runs")).unwrap();
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o555)).unwrap();
+    set_clock(&env, "2026-11-16T02:00:10Z");
+    for _ in 0..5 {
+        env.sup.tick_for_test();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let got = settle(&env, &id).await;
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(got, 1);
+}
+
+/// 지운 워크플로우의 차례 기록은 schedule.json에서 빠진다.
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_removes_slot() {
+    let env = env();
+    let id = hourly(&env);
+    assert!(slot(&env, &id).is_some());
+    env.sup.delete_workflow(&id).unwrap();
+    assert_eq!(slot(&env, &id), None);
+}

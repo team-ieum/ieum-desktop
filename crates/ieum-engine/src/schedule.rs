@@ -227,6 +227,11 @@ impl Schedule {
         if fields[3].contains("L-") {
             return Err(unsupported());
         }
+        // 월·요일 이름 뒤 간격(`MON/2`·`JAN-DEC/3`): Quartz는 간격을 버리고 croner는 적용해 다른 시각에 돈다.
+        let name_step = |f: &str| f.contains('/') && f.chars().any(|c| c.is_ascii_alphabetic());
+        if name_step(fields[4]) || name_step(fields[5]) {
+            return Err(unsupported());
+        }
         let mut fields: Vec<String> = fields.iter().map(|f| f.to_uppercase()).collect();
         fields[5] = quartz_dow(&fields[5]).ok_or_else(unsupported)?;
         let cron = CronParser::builder()

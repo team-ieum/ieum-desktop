@@ -340,3 +340,20 @@ fn unix_weekday_single_digit_only() {
     assert!(to_quartz("0 9 * * 07").is_err());
     assert!(to_quartz("0 9 * * 00").is_err());
 }
+
+/// 월·요일 이름 뒤 간격: Quartz는 간격을 버리고 croner는 적용해 다른 시각에 돈다 → 거절. 숫자 간격은 같다.
+#[test]
+fn name_with_step_rejected() {
+    for q in [
+        "0 0 9 ? * MON-FRI/2",
+        "0 0 9 ? * MON/2",
+        "0 0 9 ? * SUN/3",
+        "0 0 9 1 JAN/3 ?",
+        "0 0 9 1 JAN-DEC/3 ?",
+    ] {
+        assert!(Schedule::parse(q).is_err(), "{q}");
+    }
+    for q in ["0 0 9 ? * 2/2", "0 0 9 1 1/3 ?"] {
+        assert!(Schedule::parse(q).is_ok(), "{q}");
+    }
+}

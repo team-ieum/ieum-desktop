@@ -454,6 +454,16 @@ impl Store {
         write_atomic(&self.root.join("schedule.json"), &slots)
     }
 
+    /// 지운 워크플로우의 차례 기록을 뺀다. 없으면 그대로.
+    pub fn remove_schedule_slot(&self, workflow_id: &str) -> Result<(), String> {
+        let _g = SCHEDULE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slots = self.read_schedule_file()?;
+        if slots.remove(workflow_id).is_none() {
+            return Ok(());
+        }
+        write_atomic(&self.root.join("schedule.json"), &slots)
+    }
+
     fn read_schedule_file(&self) -> Result<HashMap<String, String>, String> {
         let path = self.root.join("schedule.json");
         if !path.exists() {
