@@ -19,8 +19,8 @@ use crate::paths::AllowedRoots;
 pub use api::{API_TIMEOUT, ApiKind, ApiProvider};
 pub use cli::{
     AGY_EFFORTS, AGY_GATE, AGY_LIST_FAILED, AGY_SETTINGS, CliKind, CliProvider, DetectedCli,
-    EFFORT_NOT_SUPPORTED, agy_listed_ids, agy_run_id, agy_split, detect_clis, lock_codex_catalog,
-    parse_stream, shell_output,
+    EFFORT_NOT_SUPPORTED, ShellRun, agy_listed_ids, agy_run_id, agy_split, detect_clis,
+    lock_codex_catalog, parse_stream, sh_quote, shell_output, shell_run,
 };
 pub use content::{MAX_CHARS, MAX_PDF_BYTES, Skip, file_text, file_text_bounded, read_file_text};
 pub use keys::{ApiKey, KeyStore, Keychain};
