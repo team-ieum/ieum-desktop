@@ -8,6 +8,13 @@ body,
 	height: 100%;
 }
 
+/* 창 전체가 고무줄처럼 튕기지 않게 — 스크롤은 안쪽 목록만. */
+html,
+body {
+	overflow: hidden;
+	overscroll-behavior: none;
+}
+
 body {
 	margin: 0;
 	font-family: var(--font-family-pretendard);

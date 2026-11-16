@@ -154,7 +154,7 @@ export function Sidebar({
           {t("nav.recent")}
           <MoreHorizontal className="size-[14px]" aria-hidden="true" />
         </div>
-        <div className="flex min-h-0 flex-col gap-px overflow-y-auto">
+        <div className="flex min-h-0 flex-col gap-px overflow-y-auto overscroll-contain">
           {recent.length === 0 && <p className="px-2.5 py-2 text-[12px] text-main-gray">{t("nav.recentEmpty")}</p>}
           {recent.map((r) => (
             <button
