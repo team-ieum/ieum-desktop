@@ -50,6 +50,8 @@ test("schedule_card_summaries", () => {
   expect(sched("schedule.hourly", { weekends: false }).triggerDetail).toBe("평일 매시 정각");
   expect(sched("schedule.daily", { hour: "9", weekends: true }).triggerDetail).toBe("매일 오전 9시");
   expect(sched("schedule.daily", { hour: "9", weekends: false }).triggerDetail).toBe("평일 매일 오전 9시");
+  expect(sched("schedule.daily", { hour: "9", weekends: "false" }).triggerDetail).toBe("평일 매일 오전 9시");
+  expect(sched("schedule.hourly", { weekends: "false" }).triggerDetail).toBe("평일 매시 정각");
   expect(sched("schedule.weekly", { weekday: "MON", hour: "9" }).triggerDetail).toBe("매주 월요일 오전 9시");
   expect(sched("schedule.monthly", { day: "15", hour: "0" }).triggerDetail).toBe("매월 15일 자정");
   expect(sched("schedule.monthly", { day: "L", hour: "9" }).triggerDetail).toBe("매월 마지막 날 오전 9시");

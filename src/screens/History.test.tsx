@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, expect, onTestFinished, test, vi } from "vitest";
 import { api, type RunSummary, type StoredRun } from "../api";
 import { setLang } from "../i18n";
 import { History, RunPill } from "./History";
@@ -56,7 +56,24 @@ test("history_filter_failed_label_no_match_and_undone", async () => {
   vi.restoreAllMocks();
 });
 
+test("history_table_names_schedule_trigger", async () => {
+  vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
+  vi.spyOn(api, "listRuns").mockResolvedValue([
+    { runId: "s1", workflowId: "w1", status: "succeeded", startedAt: "2026-11-17T00:00:00Z", finishedAt: "2026-11-17T00:00:01Z", fileOps: 0, undone: false, trigger: "schedule" },
+  ]);
+  await act(async () => {
+    render(<History />);
+  });
+  expect(screen.getAllByText("스케줄").length).toBeGreaterThan(0);
+  expect(screen.queryByText("schedule")).toBeNull();
+  vi.restoreAllMocks();
+});
+
 test("history_detail_shows_late_schedule_run", async () => {
+  // 차례(scheduledFor)는 Asia/Seoul 로컬 — 기기 시간대가 달라도 같은 판정이어야 한다.
+  vi.stubEnv("TZ", "America/New_York");
+  onTestFinished(() => void vi.unstubAllEnvs());
+  expect(new Date("2026-11-17T00:00:00Z").getHours()).toBe(19);
   vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
   vi.spyOn(api, "listRuns").mockResolvedValue([]);
   const stored = (startedAt: string) => ({

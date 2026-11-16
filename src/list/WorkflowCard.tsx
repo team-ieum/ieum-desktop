@@ -31,7 +31,7 @@ const FOLDER_TRIGGER = "local.folder_new_file";
 function scheduleSummary(n: WfNode): string {
   const c = n.config;
   const pick = (field: string) => choiceLabel(n.event, field, String(c[field] ?? "")) ?? String(c[field] ?? "");
-  const weekdays = c.weekends === false;
+  const weekdays = c.weekends === false || c.weekends === "false";
   switch (n.event) {
     case "schedule.hourly":
       return t(weekdays ? "list.schedule.hourlyWeekdays" : "list.schedule.hourly");
