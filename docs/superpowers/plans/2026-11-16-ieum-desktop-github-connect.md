@@ -18,7 +18,7 @@
 - 상태 명령은 `gh auth status --active --json hosts --hostname github.com`, 상한 10초. 로그인 안 됨도 종료 0 + `{"hosts":{}}`. (최종 리뷰 후 변경)
 - **IEUM은 gh에서 로그아웃시키지 않는다.** 연결 해제 = 계정 폴더 `github.json` 삭제만. 토큰은 저장하지 않는다.
 - 브라우저는 고정값 `https://github.com/login/device`만 연다(기존 `open_url`).
-- 시간 상한: 상태·찾기 5초, 로그인 코드 대기 10초, 로그인 전체 15분, 설치·업데이트 10분.
+- 시간 상한: gh 찾기 5초, 상태 10초, 로그인 코드 대기 30초(최종 리뷰 후 변경), 로그인 전체 15분, 설치·업데이트 10분.
 - 앱 폴더 gh = `<app_data>/bin/gh`.
 - 커밋 메시지: 한국어, 제목 `feat: …`, 본문에 `이슈 #9`. `Co-Authored-By` 넣지 않음. 워커는 커밋하지 않고 코디네이터가 커밋한다.
 - Rust 파일은 perl·sed로 고치지 않는다(`cargo fmt` 어긋남). 끝에 `cargo fmt --all`.

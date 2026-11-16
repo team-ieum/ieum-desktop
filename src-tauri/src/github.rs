@@ -84,7 +84,10 @@ pub enum GithubStatus {
     Outdated {
         version: String,
     },
-    NotConnected,
+    /// `relogin` = gh 활성 계정 토큰이 죽어 있어 [연결]이 터미널 gh 로그인을 새로 바꾼다.
+    NotConnected {
+        relogin: bool,
+    },
     /// 기록 있음 + gh 로그아웃 또는 state≠"success".
     NeedsLogin {
         recorded: String,
@@ -120,7 +123,10 @@ pub fn derive_status(recorded: Option<&str>, auth: &GhAuth) -> GithubStatus {
         return GithubStatus::Unreachable { error };
     }
     let Some(recorded) = recorded else {
-        return GithubStatus::NotConnected;
+        // 위에서 네트워크 오류는 걸렀으니 남은 오류 상태는 토큰 무효.
+        let relogin = matches!(auth, GhAuth::Accounts(a)
+            if a.iter().any(|a| a.active && a.state != "success"));
+        return GithubStatus::NotConnected { relogin };
     };
     let needs = || GithubStatus::NeedsLogin {
         recorded: recorded.into(),
@@ -368,9 +374,9 @@ pub const LOGIN_CMD_ARGS: &str =
     "auth login --web --hostname github.com --skip-ssh-key --scopes workflow";
 /// gh에 github.com 계정 항목이 없을 때만 붙인다 — 있으면 사용자의 git_protocol을 덮지 않는다.
 pub const GIT_PROTOCOL_ARG: &str = " --git-protocol https";
-const NO_CODE: &str = "gh 출력을 읽지 못했어요";
-/// 로그인 코드를 기다리는 시간·로그인 전체 상한(device code 만료).
-const CODE_WAIT: Duration = Duration::from_secs(10);
+const NO_CODE: &str = "GitHub 응답이 늦어요. 다시 시도해 주세요.";
+/// 로그인 코드를 기다리는 시간(실측 0.4~7.8초)·로그인 전체 상한(device code 만료).
+const CODE_WAIT: Duration = Duration::from_secs(30);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 /// device 로그인. stderr 줄마다 `on_line`, 처음 읽은 코드로 `on_code`를 한 번 부른다.
@@ -438,12 +444,12 @@ pub fn run_login(
     }
 }
 
-/// 활성이고 로그인이 살아 있는 계정.
-fn ready_login(auth: &GhAuth) -> Option<String> {
+/// 활성이고 로그인이 살아 있는 계정. login이 비면(사용자 없는 호스트 항목) 준비 안 됨.
+pub fn ready_login(auth: &GhAuth) -> Option<String> {
     match auth {
         GhAuth::Accounts(a) => a
             .iter()
-            .find(|a| a.active && a.state == "success")
+            .find(|a| a.active && a.state == "success" && !a.login.is_empty())
             .map(|a| a.login.clone()),
         GhAuth::LoggedOut => None,
     }
@@ -533,7 +539,6 @@ pub async fn github_connect(
     let login = match ready_login(&auth) {
         Some(l) => l,
         None => {
-            let (v0, v1, v2) = gh.version;
             let path = gh.path.clone();
             let cancel = cancel.clone();
             // github.com 계정 항목이 이미 있으면(state 무관) 프로토콜은 그대로 둔다.
@@ -553,14 +558,7 @@ pub async fn github_connect(
                     &mut emit_line,
                 )
             })
-            .await?
-            .map_err(|e| {
-                if e == NO_CODE {
-                    format!("{e} (gh {v0}.{v1}.{v2})")
-                } else {
-                    e
-                }
-            })?;
+            .await??;
             let path = gh.path.clone();
             ready_login(&blocking(move || gh_auth(&path)).await??)
                 .ok_or("로그인 뒤에도 gh 계정을 찾지 못했어요.")?
@@ -586,6 +584,7 @@ pub async fn github_open_device() -> Result<(), String> {
 
 /// 설치·업데이트 전체 상한.
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const INSTALL_TIMED_OUT: &str = "설치 시간이 끝났어요(10분).";
 /// 받는 zip 크기 상한. checksums·릴리스 JSON은 훨씬 작다.
 const MAX_ZIP: usize = 50 * 1024 * 1024;
 const MAX_SMALL: usize = 1024 * 1024;
@@ -777,7 +776,7 @@ fn run_brew(cmd: &str, cancel: &AtomicBool, app: &AppHandle) -> Result<(), Strin
     if r.cancelled {
         Err("취소됨".into())
     } else if r.timed_out {
-        Err("설치 시간이 끝났어요(10분).".into())
+        Err(INSTALL_TIMED_OUT.into())
     } else if r.code == Some(0) {
         Ok(())
     } else if last.is_empty() {
@@ -838,7 +837,7 @@ async fn install_release(
 ) -> Result<(), String> {
     let (zip, sha) = tokio::time::timeout(INSTALL_TIMEOUT, download_release(app, cancel))
         .await
-        .map_err(|_| "설치 시간이 끝났어요(10분).".to_string())??;
+        .map_err(|_| INSTALL_TIMED_OUT.to_string())??;
     let (app_data, cancel) = (app_data.to_path_buf(), cancel.clone());
     blocking(move || install_from_zip(&zip, &sha, &app_data, &cancel)).await??;
     progress(app, "설치 완료");
@@ -900,7 +899,8 @@ pub async fn github_install(
         let (app2, c) = (app.clone(), cancel.clone());
         let brewed = blocking(move || run_brew(cmd, &c, &app2)).await?;
         match brewed {
-            Err(e) if e == "취소됨" => return Err(e),
+            // 취소·시간 초과는 그대로 끝낸다(재시도하면 최대 20분이 된다).
+            Err(e) if e == "취소됨" || e == INSTALL_TIMED_OUT => return Err(e),
             // brew가 안 되면(다른 계정 소유·"not installed" 등) 공식 릴리스로 한 번 더.
             Err(e) => {
                 progress(&app, &format!("brew 실패({e}) — 공식 릴리스로 설치해요."));

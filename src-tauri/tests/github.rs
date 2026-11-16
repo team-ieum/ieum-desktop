@@ -11,8 +11,8 @@ use ieum_desktop_lib::github::{
     GIT_PROTOCOL_ARG, GhAccount, GhAuth, GhFound, GithubJobView, GithubJobs, GithubStatus,
     InstallRoute, JobGuard, JobKind, LOGIN_CMD_ARGS, MIN_GH, checksum_for, choose_route,
     clear_record, derive_status, disconnect, fetch, gh_auth, install_from_zip, parse_auth_status,
-    parse_device_code, parse_gh_version, pick_gh, read_record, release_assets, run_login,
-    write_record,
+    parse_device_code, parse_gh_version, pick_gh, read_record, ready_login, release_assets,
+    run_login, write_record,
 };
 
 fn no_cancel() -> AtomicBool {
@@ -115,7 +115,11 @@ fn derive_unreachable_vs_bad_token() {
             recorded: "hodoon".into()
         }
     );
-    assert_eq!(derive_status(None, &auth), GithubStatus::NotConnected);
+    // 기록 없음 + 토큰 무효 → [연결]이 터미널 gh 로그인을 바꾼다고 알린다.
+    assert_eq!(
+        derive_status(None, &auth),
+        GithubStatus::NotConnected { relogin: true }
+    );
     assert_eq!(
         serde_json::to_string(&GithubStatus::Unreachable { error: "e".into() }).unwrap(),
         r#"{"kind":"unreachable","error":"e"}"#
@@ -371,7 +375,10 @@ fn login_no_code_fails_fast() {
     let gh = fake_gh(dir.path(), "sleep 30");
     let start = Instant::now();
     let (r, codes) = login(&gh, &AtomicBool::new(false), Duration::from_millis(300));
-    assert!(r.unwrap_err().contains("gh 출력을 읽지 못했어요"));
+    assert_eq!(
+        r,
+        Err("GitHub 응답이 늦어요. 다시 시도해 주세요.".to_string())
+    );
     assert!(codes.is_empty());
     assert!(start.elapsed() < Duration::from_secs(2));
 }
@@ -547,7 +554,7 @@ fn disconnect_keeps_gh() {
     // 해제 명령이 쓰는 함수 그대로.
     assert_eq!(
         disconnect(dir.path(), &gh).unwrap(),
-        GithubStatus::NotConnected
+        GithubStatus::NotConnected { relogin: false }
     );
     assert_eq!(read_record(dir.path()), None);
     let calls = std::fs::read_to_string(&log).unwrap();
@@ -606,8 +613,28 @@ fn parse_status_json() {
 
 #[test]
 fn derive_not_connected() {
+    let not = |relogin| GithubStatus::NotConnected { relogin };
     let auth = GhAuth::Accounts(vec![acct("hodoon", true, "success", "keyring")]);
-    assert_eq!(derive_status(None, &auth), GithubStatus::NotConnected);
+    assert_eq!(derive_status(None, &auth), not(false));
+    assert_eq!(derive_status(None, &GhAuth::LoggedOut), not(false));
+    assert_eq!(derive_status(None, &GhAuth::Accounts(vec![])), not(false));
+    let bad = GhAuth::Accounts(parse_auth_status(BAD_TOKEN_JSON).unwrap());
+    assert_eq!(derive_status(None, &bad), not(true));
+    assert_eq!(
+        serde_json::to_string(&not(true)).unwrap(),
+        r#"{"kind":"notConnected","relogin":true}"#
+    );
+}
+
+#[test]
+fn ready_login_needs_name() {
+    let ok = GhAuth::Accounts(vec![acct("hodoon", true, "success", "keyring")]);
+    assert_eq!(ready_login(&ok).as_deref(), Some("hodoon"));
+    // 사용자 없는 호스트 항목: gh가 키체인 기본 토큰으로 login "" + success를 준다.
+    let empty = GhAuth::Accounts(vec![acct("", true, "success", "keyring")]);
+    assert_eq!(ready_login(&empty), None);
+    let bad = GhAuth::Accounts(vec![acct("hodoon", true, "error", "keyring")]);
+    assert_eq!(ready_login(&bad), None);
 }
 
 #[test]

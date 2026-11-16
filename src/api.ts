@@ -463,7 +463,8 @@ export type ChatStage = { id: string; stage: "designing" | "testing" };
 export type GithubStatus =
   | { kind: "notInstalled" }
   | { kind: "outdated"; version: string }
-  | { kind: "notConnected" }
+  /** relogin = [연결]이 gh 로그인을 새로 돌린다(활성 계정 토큰이 죽음) — 누르기 전에 경고. */
+  | { kind: "notConnected"; relogin: boolean }
   | { kind: "needsLogin"; recorded: string }
   | { kind: "accountChanged"; recorded: string; current: string }
   | { kind: "connected"; login: string; envToken: boolean }

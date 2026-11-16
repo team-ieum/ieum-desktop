@@ -29,6 +29,8 @@ export function integrationsTexts(): string[] {
     t("settings.disconnect"),
     t("settings.gh.needsLogin"),
     t("settings.gh.envToken"),
+    t("settings.gh.unreachable"),
+    t("settings.gh.reloginWarn"),
   ];
 }
 
@@ -169,11 +171,9 @@ export function IntegrationsPane() {
       </>
     );
   } else if (s?.kind === "notConnected" || s?.kind === "needsLogin") {
-    if (s.kind === "needsLogin") {
-      note = t("settings.gh.needsLogin");
-      // 다시 로그인은 사용자 전역 gh 로그인을 바꾼다 — 누르기 전에 말한다.
-      detail = t("settings.gh.reloginWarn");
-    }
+    if (s.kind === "needsLogin") note = t("settings.gh.needsLogin");
+    // 다시 로그인은 사용자 전역 gh 로그인을 바꾼다 — 누르기 전에 말한다(처음 연결이어도).
+    if (s.kind === "needsLogin" || s.relogin) detail = t("settings.gh.reloginWarn");
     actions = (
       <button type="button" className={PRIMARY} onClick={connect}>
         {t("settings.gh.connect")}

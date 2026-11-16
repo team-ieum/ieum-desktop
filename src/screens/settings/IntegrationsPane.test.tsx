@@ -72,7 +72,7 @@ test("install_failure_shows_reason_and_retry", async () => {
 });
 
 test("connect_shows_code_card", async () => {
-  await renderPane({ kind: "notConnected" });
+  await renderPane({ kind: "notConnected", relogin: false });
   const done = deferred<GithubStatus>();
   const connect = vi.spyOn(api, "githubConnect").mockReturnValue(done.promise);
   const open = vi.spyOn(api, "githubOpenDevice").mockResolvedValue();
@@ -92,7 +92,7 @@ test("connect_shows_code_card", async () => {
 
 test("disconnect_calls_api_only", async () => {
   await renderPane({ kind: "connected", login: "hodoon", envToken: false });
-  const disconnect = vi.spyOn(api, "githubDisconnect").mockResolvedValue({ kind: "notConnected" });
+  const disconnect = vi.spyOn(api, "githubDisconnect").mockResolvedValue({ kind: "notConnected", relogin: false });
   await click("연결 해제");
   expect(disconnect).toHaveBeenCalledTimes(1);
   expect(screen.getByRole("button", { name: "연결" })).toBeTruthy();
@@ -121,7 +121,7 @@ test("needs_login", async () => {
 });
 
 test("unmount_cancels_login", async () => {
-  const r = await renderPane({ kind: "notConnected" });
+  const r = await renderPane({ kind: "notConnected", relogin: false });
   vi.spyOn(api, "githubConnect").mockReturnValue(deferred<GithubStatus>().promise);
   const cancel = vi.spyOn(api, "githubCancel").mockResolvedValue();
   await click("연결");
@@ -139,14 +139,14 @@ test("unmount_keeps_install", async () => {
 });
 
 test("unmount_cancels_resumed_login", async () => {
-  const r = await renderPane({ kind: "notConnected" }, { kind: "login", code: null });
+  const r = await renderPane({ kind: "notConnected", relogin: false }, { kind: "login", code: null });
   const cancel = vi.spyOn(api, "githubCancel").mockResolvedValue();
   r.unmount();
   expect(cancel).toHaveBeenCalledTimes(1);
 });
 
 test("resumes_login_job", async () => {
-  await renderPane({ kind: "notConnected" }, { kind: "login", code: "AB12-CD34" });
+  await renderPane({ kind: "notConnected", relogin: false }, { kind: "login", code: "AB12-CD34" });
   expect(screen.getByText("AB12-CD34")).toBeTruthy();
   expect(screen.getByRole("button", { name: "취소" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "연결" })).toBeNull();
@@ -159,7 +159,7 @@ test("resumes_install_job_until_done", async () => {
     expect(screen.getByText("설치하는 중…")).toBeTruthy();
     expect(screen.getByRole("button", { name: "취소" })).toBeTruthy();
     vi.spyOn(api, "githubJob").mockResolvedValue(null);
-    vi.spyOn(api, "githubStatus").mockResolvedValue({ kind: "notConnected" });
+    vi.spyOn(api, "githubStatus").mockResolvedValue({ kind: "notConnected", relogin: false });
     await act(async () => vi.advanceTimersByTimeAsync(1500));
     expect(screen.queryByText("설치하는 중…")).toBeNull();
     expect(screen.getByRole("button", { name: "연결" })).toBeTruthy();
@@ -169,7 +169,7 @@ test("resumes_install_job_until_done", async () => {
 });
 
 test("cancel_is_quiet", async () => {
-  await renderPane({ kind: "notConnected" });
+  await renderPane({ kind: "notConnected", relogin: false });
   vi.spyOn(api, "githubConnect").mockRejectedValue("취소됨");
   await click("연결");
   expect(screen.queryByText("취소됨")).toBeNull();
@@ -178,7 +178,7 @@ test("cancel_is_quiet", async () => {
 });
 
 test("login_failure_shows_output", async () => {
-  await renderPane({ kind: "notConnected" });
+  await renderPane({ kind: "notConnected", relogin: false });
   const done = deferred<GithubStatus>();
   vi.spyOn(api, "githubConnect").mockReturnValue(done.promise);
   await click("연결");
@@ -199,7 +199,7 @@ test("unreachable", async () => {
 });
 
 test("settings_menu_has_integrations", async () => {
-  vi.spyOn(api, "githubStatus").mockResolvedValue({ kind: "notConnected" });
+  vi.spyOn(api, "githubStatus").mockResolvedValue({ kind: "notConnected", relogin: false });
   useWeb.setState({ account: null, expired: false, offline: false });
   await act(async () => {
     render(<SettingsShell onBack={() => {}} version="0.2.0" initial="integrations" />);
@@ -208,4 +208,33 @@ test("settings_menu_has_integrations", async () => {
   expect(nav.getByRole("button", { name: "연동" }).getAttribute("aria-current")).toBe("true");
   await act(async () => fireEvent.change(screen.getByLabelText("설정 검색"), { target: { value: "gh" } }));
   expect(nav.getByRole("button", { name: "연동" })).toBeTruthy();
+  // 상태에 따라 나오는 문구(닿지 못함·다시 로그인 경고)로도 찾는다.
+  for (const q of ["닿지", "새 로그인으로"]) {
+    await act(async () => fireEvent.change(screen.getByLabelText("설정 검색"), { target: { value: q } }));
+    expect(nav.getByRole("button", { name: "연동" })).toBeTruthy();
+  }
+});
+
+test("first_connect_warns_when_relogin", async () => {
+  await renderPane({ kind: "notConnected", relogin: true });
+  expect(screen.getByText("연결하면 터미널의 gh 로그인도 새 로그인으로 바뀌어요.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "연결" })).toBeTruthy();
+  cleanup();
+  await renderPane({ kind: "notConnected", relogin: false });
+  expect(screen.queryByText("연결하면 터미널의 gh 로그인도 새 로그인으로 바뀌어요.")).toBeNull();
+});
+
+test("polling_stops_after_unmount", async () => {
+  vi.useFakeTimers();
+  try {
+    const r = await renderPane({ kind: "notInstalled" }, { kind: "install", code: null });
+    await act(async () => vi.advanceTimersByTimeAsync(1100));
+    const before = vi.mocked(api.githubJob).mock.calls.length;
+    expect(before).toBeGreaterThan(1); // 마운트 1회 + 폴링
+    r.unmount();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(vi.mocked(api.githubJob).mock.calls.length).toBe(before);
+  } finally {
+    vi.useRealTimers();
+  }
 });
