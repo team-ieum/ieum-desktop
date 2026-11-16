@@ -27,18 +27,14 @@ fn shell_run_returns_code_and_streams() {
 #[test]
 fn shell_run_timeout_kills_group() {
     let cancel = AtomicBool::new(false);
+    // 로그인 셸 시작이 느린 Mac(nvm·conda 등)에서도 `echo $!`까지 가도록 넉넉히.
+    let limit = Duration::from_millis(1500);
     let start = Instant::now();
-    let r = shell_run(
-        "sleep 30 & echo $! ; wait",
-        Duration::from_millis(300),
-        &cancel,
-        &mut |_| {},
-    )
-    .unwrap();
+    let r = shell_run("sleep 30 & echo $! ; wait", limit, &cancel, &mut |_| {}).unwrap();
     assert!(r.timed_out);
     assert!(!r.cancelled);
     assert_eq!(r.code, None);
-    assert!(start.elapsed() < Duration::from_secs(2));
+    assert!(start.elapsed() < limit + Duration::from_secs(2));
     let pid = r.stdout.trim();
     assert!(!pid.is_empty());
     let alive = std::process::Command::new("kill")

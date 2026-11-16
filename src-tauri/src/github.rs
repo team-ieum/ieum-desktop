@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use ieum_local::ai::{sh_quote, shell_output, shell_run};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::active::Active;
 
@@ -51,6 +51,9 @@ pub struct GhAccount {
     pub state: String,
     #[serde(rename = "tokenSource")]
     pub token_source: String,
+    /// state가 "error"일 때 gh가 주는 원인(401·네트워크 등).
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// `gh auth status --json hosts`의 github.com 계정들. 호스트가 없으면 빈 Vec.
@@ -95,10 +98,27 @@ pub enum GithubStatus {
         login: String,
         env_token: bool,
     },
+    /// gh가 GitHub에 닿지 못함(네트워크·프록시 등). 토큰 문제가 아니라 로그인을 권하지 않는다.
+    Unreachable {
+        error: String,
+    },
+}
+
+/// 활성 계정이 토큰 문제(401) 아닌 오류면 그 오류 문구.
+fn unreachable_error(auth: &GhAuth) -> Option<String> {
+    let GhAuth::Accounts(accounts) = auth else {
+        return None;
+    };
+    let a = accounts.iter().find(|a| a.active && a.state != "success")?;
+    let e = a.error.as_deref().filter(|e| !e.trim().is_empty())?;
+    (!e.contains("401") && !e.contains("Bad credentials")).then(|| e.trim().to_string())
 }
 
 /// gh 설치·버전 확인을 통과한 뒤의 상태. `recorded` = IEUM 연결 기록 login.
 pub fn derive_status(recorded: Option<&str>, auth: &GhAuth) -> GithubStatus {
+    if let Some(error) = unreachable_error(auth) {
+        return GithubStatus::Unreachable { error };
+    }
     let Some(recorded) = recorded else {
         return GithubStatus::NotConnected;
     };
@@ -111,13 +131,14 @@ pub fn derive_status(recorded: Option<&str>, auth: &GhAuth) -> GithubStatus {
     let Some(a) = accounts.iter().find(|a| a.active) else {
         return needs();
     };
-    if a.login != recorded {
+    // 토큰이 죽은 계정은 login이 비어 오기도 해서(401) 계정 비교보다 먼저 본다.
+    if a.state != "success" {
+        needs()
+    } else if a.login != recorded {
         GithubStatus::AccountChanged {
             recorded: recorded.into(),
             current: a.login.clone(),
         }
-    } else if a.state != "success" {
-        needs()
     } else {
         GithubStatus::Connected {
             login: a.login.clone(),
@@ -160,28 +181,50 @@ pub fn find_gh(app_data: &Path) -> Result<GhFound, GithubStatus> {
     let app = app_data.join("bin").join("gh");
     let app_gh = app
         .is_file()
-        .then(|| {
-            shell_output(
-                &format!("{} --version", sh_quote(&app.to_string_lossy())),
-                STATUS_TIMEOUT,
-            )
-        })
+        .then(|| version_of(&app))
         .flatten()
-        .and_then(|t| parse_gh_version(t.lines().next()?))
         .map(|version| GhFound { path: app, version });
     pick_gh(path_gh, app_gh)
 }
 
-/// `gh auth status --json hosts --hostname github.com`. 종료 1 → `LoggedOut`.
+/// 절대 경로 gh의 `--version`(로그인 셸 없이). 5초를 넘기면 kill하고 None.
+fn version_of(gh: &Path) -> Option<(u32, u32, u32)> {
+    let mut child = std::process::Command::new(gh)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + STATUS_TIMEOUT;
+    // ponytail: 20ms 폴링 — 출력이 한두 줄이라 파이프가 차지 않는다.
+    while child.try_wait().ok()?.is_none() {
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut out = String::new();
+    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut out).ok()?;
+    parse_gh_version(out.lines().next()?)
+}
+
+/// `gh auth status` 상한. gh가 GitHub API로 토큰을 검증해 1~2초 걸린다.
+const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// `gh auth status --active --json hosts --hostname github.com`(활성 계정만 검증). 종료 1 → `LoggedOut`.
+/// 실제 gh는 로그아웃이어도 `{"hosts":{}}` + 종료 0이라 보통은 빈 목록으로 온다.
 pub fn gh_auth(gh: &Path) -> Result<GhAuth, String> {
     let cmd = format!(
-        "{} auth status --json hosts --hostname github.com",
+        "{} auth status --active --json hosts --hostname github.com",
         sh_quote(&gh.to_string_lossy())
     );
-    let r = shell_run(&cmd, STATUS_TIMEOUT, &AtomicBool::new(false), &mut |_| {})
+    let r = shell_run(&cmd, AUTH_TIMEOUT, &AtomicBool::new(false), &mut |_| {})
         .map_err(|e| format!("gh를 실행하지 못했어요: {e}"))?;
     if r.timed_out {
-        return Err("gh가 5초 안에 답하지 않았어요.".into());
+        return Err("gh가 10초 안에 답하지 않았어요.".into());
     }
     match r.code {
         Some(0) => parse_auth_status(&r.stdout).map(GhAuth::Accounts),
@@ -227,11 +270,49 @@ pub enum JobKind {
 pub struct GithubJob {
     pub kind: JobKind,
     pub cancel: Arc<AtomicBool>,
+    /// 로그인 중 받은 device 코드(다시 연 화면이 코드 카드를 그린다).
+    pub code: Option<String>,
 }
 
 #[derive(Default)]
 pub struct GithubJobs {
     pub current: Mutex<Option<GithubJob>>,
+}
+
+/// 화면에 주는 진행 중 작업. `kind`는 `"login"`·`"install"`.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubJobView {
+    pub kind: &'static str,
+    pub code: Option<String>,
+}
+
+impl GithubJobs {
+    pub fn view(&self) -> Option<GithubJobView> {
+        let cur = self.current.lock().ok()?;
+        cur.as_ref().map(|j| GithubJobView {
+            kind: match j.kind {
+                JobKind::Login => "login",
+                JobKind::Install => "install",
+            },
+            code: j.code.clone(),
+        })
+    }
+
+    /// 진행 중 작업을 취소하고 슬롯이 빌 때까지 최대 `max` 기다린다(앱 종료 때 — gh·brew가 고아로 남지 않게).
+    pub fn cancel_and_wait(&self, max: Duration) {
+        match self.current.lock() {
+            Ok(cur) => match cur.as_ref() {
+                Some(j) => j.cancel.store(true, Ordering::SeqCst),
+                None => return,
+            },
+            Err(_) => return,
+        }
+        let end = Instant::now() + max;
+        while Instant::now() < end && self.current.lock().is_ok_and(|c| c.is_some()) {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 }
 
 /// gh 찾기 → 로그인 상태 → 기록과 비교.
@@ -257,32 +338,57 @@ pub async fn github_status(active: State<'_, Active>) -> Result<GithubStatus, St
     status_of(&active).await
 }
 
-/// 연결 해제 = IEUM 기록만 삭제. gh에서 로그아웃시키지 않는다.
+/// 연결 해제 본문: IEUM 기록만 지우고 상태를 다시 읽는다. gh에서 로그아웃시키지 않는다.
+pub fn disconnect(dir: &Path, gh: &Path) -> Result<GithubStatus, String> {
+    clear_record(dir)?;
+    Ok(derive_status(read_record(dir).as_deref(), &gh_auth(gh)?))
+}
+
 #[tauri::command]
 pub async fn github_disconnect(active: State<'_, Active>) -> Result<GithubStatus, String> {
-    clear_record(&active.account_dir().await?)?;
-    status_of(&active).await
+    let dir = active.account_dir().await?;
+    let app_data = active.app_data().to_path_buf();
+    blocking(move || match find_gh(&app_data) {
+        Ok(g) => disconnect(&dir, &g.path),
+        Err(s) => clear_record(&dir).map(|()| s),
+    })
+    .await?
+}
+
+/// 진행 중인 gh 작업. 다시 연 화면이 [취소]·코드 카드를 그리는 데 쓴다.
+#[tauri::command]
+pub async fn github_job(jobs: State<'_, GithubJobs>) -> Result<Option<GithubJobView>, String> {
+    Ok(jobs.view())
 }
 
 /// [브라우저 열기]가 여는 고정 주소. gh 출력의 주소는 쓰지 않는다.
 pub const DEVICE_URL: &str = "https://github.com/login/device";
+/// `--scopes workflow`: 터미널 기본 로그인과 같게(빠지면 `.github/workflows` push가 거절된다).
 pub const LOGIN_CMD_ARGS: &str =
-    "auth login --web --hostname github.com --git-protocol https --skip-ssh-key";
+    "auth login --web --hostname github.com --skip-ssh-key --scopes workflow";
+/// gh에 github.com 계정 항목이 없을 때만 붙인다 — 있으면 사용자의 git_protocol을 덮지 않는다.
+pub const GIT_PROTOCOL_ARG: &str = " --git-protocol https";
 const NO_CODE: &str = "gh 출력을 읽지 못했어요";
 /// 로그인 코드를 기다리는 시간·로그인 전체 상한(device code 만료).
 const CODE_WAIT: Duration = Duration::from_secs(10);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
-/// device 로그인. stderr에서 처음 읽은 코드로 `on_code`를 한 번 부른다.
-/// `code_wait` 안에 코드가 없으면 `cancel`을 세우고 실패.
+/// device 로그인. stderr 줄마다 `on_line`, 처음 읽은 코드로 `on_code`를 한 번 부른다.
+/// `code_wait` 안에 코드가 없으면 `cancel`을 세우고 실패. `set_protocol`이면 `GIT_PROTOCOL_ARG`를 붙인다.
 pub fn run_login(
     gh: &Path,
+    set_protocol: bool,
     cancel: &AtomicBool,
     code_wait: Duration,
     limit: Duration,
     on_code: &mut dyn FnMut(&str),
+    on_line: &mut dyn FnMut(&str),
 ) -> Result<(), String> {
-    let cmd = format!("{} {LOGIN_CMD_ARGS}", sh_quote(&gh.to_string_lossy()));
+    let protocol = if set_protocol { GIT_PROTOCOL_ARG } else { "" };
+    let cmd = format!(
+        "{} {LOGIN_CMD_ARGS}{protocol}",
+        sh_quote(&gh.to_string_lossy())
+    );
     let (got, done, expired) = (
         AtomicBool::new(false),
         AtomicBool::new(false),
@@ -302,6 +408,7 @@ pub fn run_login(
             }
         });
         let r = shell_run(&cmd, limit, cancel, &mut |line| {
+            on_line(line);
             if !line.trim().is_empty() {
                 last = line.trim().to_string();
             }
@@ -349,16 +456,39 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
 }
 
 /// jobs 슬롯을 차지하고, 버려질 때(성공·실패·취소) 비운다.
-struct JobGuard<'a>(&'a GithubJobs);
+pub struct JobGuard<'a>(&'a GithubJobs);
 
 impl<'a> JobGuard<'a> {
-    fn start(jobs: &'a GithubJobs, kind: JobKind, cancel: Arc<AtomicBool>) -> Result<Self, String> {
+    pub fn start(
+        jobs: &'a GithubJobs,
+        kind: JobKind,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<Self, String> {
         let mut cur = jobs.current.lock().map_err(|e| e.to_string())?;
         if cur.is_some() {
             return Err("이미 진행 중이에요".into());
         }
-        *cur = Some(GithubJob { kind, cancel });
+        *cur = Some(GithubJob {
+            kind,
+            cancel,
+            code: None,
+        });
         Ok(Self(jobs))
+    }
+
+    /// 로그인 코드를 작업에 남긴다.
+    pub fn set_code(&self, code: &str) {
+        self.0.set_code(code);
+    }
+}
+
+impl GithubJobs {
+    fn set_code(&self, code: &str) {
+        if let Ok(mut cur) = self.current.lock()
+            && let Some(j) = cur.as_mut()
+        {
+            j.code = Some(code.to_string());
+        }
     }
 }
 
@@ -378,23 +508,50 @@ pub async fn github_connect(
     jobs: State<'_, GithubJobs>,
 ) -> Result<GithubStatus, String> {
     let dir = active.account_dir().await?;
+    // 상태 확인 구간부터 슬롯을 잡는다 — 그 사이 [취소]·화면 떠남도 먹게.
+    let cancel = Arc::new(AtomicBool::new(false));
+    let _job = JobGuard::start(&jobs, JobKind::Login, cancel.clone())?;
+    let is_cancelled = || -> Result<(), String> {
+        if cancel.load(Ordering::SeqCst) {
+            Err("취소됨".into())
+        } else {
+            Ok(())
+        }
+    };
     let app_data = active.app_data().to_path_buf();
     let gh = match blocking(move || find_gh(&app_data)).await? {
         Ok(g) => g,
         Err(s) => return Ok(s),
     };
+    is_cancelled()?;
     let path = gh.path.clone();
-    let login = match ready_login(&blocking(move || gh_auth(&path)).await??) {
+    let auth = blocking(move || gh_auth(&path)).await??;
+    is_cancelled()?;
+    if let Some(error) = unreachable_error(&auth) {
+        return Ok(GithubStatus::Unreachable { error });
+    }
+    let login = match ready_login(&auth) {
         Some(l) => l,
         None => {
-            let cancel = Arc::new(AtomicBool::new(false));
-            let _job = JobGuard::start(&jobs, JobKind::Login, cancel.clone())?;
             let (v0, v1, v2) = gh.version;
             let path = gh.path.clone();
+            let cancel = cancel.clone();
+            // github.com 계정 항목이 이미 있으면(state 무관) 프로토콜은 그대로 둔다.
+            let set_protocol = !matches!(&auth, GhAuth::Accounts(a) if !a.is_empty());
             blocking(move || {
-                run_login(&path, &cancel, CODE_WAIT, LOGIN_TIMEOUT, &mut |code| {
-                    let _ = app.emit("github-login-code", serde_json::json!({ "code": code }));
-                })
+                let mut emit_line = |line: &str| progress(&app, line);
+                run_login(
+                    &path,
+                    set_protocol,
+                    &cancel,
+                    CODE_WAIT,
+                    LOGIN_TIMEOUT,
+                    &mut |code| {
+                        app.state::<GithubJobs>().set_code(code);
+                        let _ = app.emit("github-login-code", serde_json::json!({ "code": code }));
+                    },
+                    &mut emit_line,
+                )
             })
             .await?
             .map_err(|e| {
@@ -491,10 +648,12 @@ impl Drop for TempDir {
 }
 
 /// sha256이 맞으면 zip의 `*/bin/gh`를 `<app_data>/bin/gh`에 둔다. 틀리면 아무것도 쓰지 않는다.
+/// 바꿔 넣기 직전에 `cancel`이면 `gh.tmp`를 지우고 `"취소됨"`.
 pub fn install_from_zip(
     zip: &[u8],
     expected_sha256: &str,
     app_data: &Path,
+    cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
     use sha2::{Digest, Sha256};
     use std::os::unix::fs::PermissionsExt;
@@ -532,14 +691,25 @@ pub fn install_from_zip(
     std::fs::create_dir_all(&bin).map_err(err)?;
     let staged = bin.join("gh.tmp");
     let dest = bin.join("gh");
-    let placed = std::fs::copy(&src, &staged)
-        .and_then(|_| std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)))
-        .and_then(|()| std::fs::rename(&staged, &dest));
-    if let Err(e) = placed {
+    let staged_ok = std::fs::copy(&src, &staged)
+        .and_then(|_| std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)));
+    // 바꿔 넣기 직전이 마지막 취소 지점.
+    let cancelled = cancel.load(Ordering::SeqCst);
+    let placed = staged_ok.and_then(|()| {
+        if cancelled {
+            Ok(())
+        } else {
+            std::fs::rename(&staged, &dest)
+        }
+    });
+    if cancelled || placed.is_err() {
         let _ = std::fs::remove_file(&staged);
-        return Err(err(e));
     }
-    Ok(dest)
+    match placed {
+        Err(e) => Err(err(e)),
+        Ok(()) if cancelled => Err("취소됨".into()),
+        Ok(()) => Ok(dest),
+    }
 }
 
 /// 시스템 임시 폴더 아래 새 폴더(배타 생성, 이미 있으면 다른 이름).
@@ -566,34 +736,44 @@ pub enum InstallRoute {
 }
 
 /// brew가 있고 gh가 없거나 brew 것이면 brew, 그 밖엔 공식 릴리스(기존 gh는 둔다).
+/// "brew 것" = 링크를 풀면 `<brew prefix>/Cellar/` 아래(Intel은 prefix가 `/usr/local`이라 prefix만으론 모른다).
 pub fn choose_route(brew_prefix: Option<&Path>, current_gh: Option<&Path>) -> InstallRoute {
-    match (brew_prefix, current_gh) {
-        (None, _) => InstallRoute::Release,
-        (Some(_), None) => InstallRoute::BrewInstall,
-        (Some(prefix), Some(gh)) if gh.starts_with(prefix) => InstallRoute::BrewUpgrade,
+    let Some(prefix) = brew_prefix else {
+        return InstallRoute::Release;
+    };
+    let Some(gh) = current_gh else {
+        return InstallRoute::BrewInstall;
+    };
+    let cellar = prefix
+        .canonicalize()
+        .unwrap_or_else(|_| prefix.to_path_buf())
+        .join("Cellar");
+    match gh.canonicalize() {
+        Ok(real) if real.starts_with(&cellar) => InstallRoute::BrewUpgrade,
         _ => InstallRoute::Release,
     }
 }
 
+/// 설치·로그인 진행 줄(화면의 "출력 보기").
 fn progress(app: &AppHandle, line: &str) {
-    let _ = app.emit(
-        "github-install-progress",
-        serde_json::json!({ "line": line }),
-    );
+    let _ = app.emit("github-progress", serde_json::json!({ "line": line }));
 }
 
 fn run_brew(cmd: &str, cancel: &AtomicBool, app: &AppHandle) -> Result<(), String> {
     let mut last = String::new();
-    let r = shell_run(cmd, INSTALL_TIMEOUT, cancel, &mut |line| {
-        if !line.trim().is_empty() {
-            last = line.trim().to_string();
-        }
-        progress(app, line);
-    })
+    // brew는 진행을 stdout에 쓴다 — stderr로 합쳐야 줄 단위로, 순서대로 흘러온다.
+    let r = shell_run(
+        &format!("{cmd} 1>&2"),
+        INSTALL_TIMEOUT,
+        cancel,
+        &mut |line| {
+            if !line.trim().is_empty() {
+                last = line.trim().to_string();
+            }
+            progress(app, line);
+        },
+    )
     .map_err(|e| format!("brew를 실행하지 못했어요: {e}"))?;
-    for line in r.stdout.lines() {
-        progress(app, line);
-    }
     if r.cancelled {
         Err("취소됨".into())
     } else if r.timed_out {
@@ -650,25 +830,26 @@ async fn fetch_inner(client: &reqwest::Client, url: &str, max: usize) -> Result<
     Ok(buf)
 }
 
-/// 공식 릴리스 zip을 받아 체크섬을 확인하고 앱 폴더에 둔다. 전체 10분 상한.
+/// 공식 릴리스 zip을 받아 체크섬을 확인하고 앱 폴더에 둔다. 받기 단계에 10분 상한.
 async fn install_release(
     app: &AppHandle,
     app_data: &Path,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<(), String> {
-    tokio::time::timeout(
-        INSTALL_TIMEOUT,
-        install_release_inner(app, app_data, cancel),
-    )
-    .await
-    .map_err(|_| "설치 시간이 끝났어요(10분).".to_string())?
+    let (zip, sha) = tokio::time::timeout(INSTALL_TIMEOUT, download_release(app, cancel))
+        .await
+        .map_err(|_| "설치 시간이 끝났어요(10분).".to_string())??;
+    let (app_data, cancel) = (app_data.to_path_buf(), cancel.clone());
+    blocking(move || install_from_zip(&zip, &sha, &app_data, &cancel)).await??;
+    progress(app, "설치 완료");
+    Ok(())
 }
 
-async fn install_release_inner(
+/// 최신 릴리스 zip과 그 sha256.
+async fn download_release(
     app: &AppHandle,
-    app_data: &Path,
     cancel: &AtomicBool,
-) -> Result<(), String> {
+) -> Result<(Vec<u8>, String), String> {
     let client = reqwest::Client::builder()
         .user_agent("ieum-desktop")
         .connect_timeout(Duration::from_secs(30))
@@ -683,10 +864,7 @@ async fn install_release_inner(
     progress(app, "검증 중…");
     let sha = checksum_for(&String::from_utf8_lossy(&sums), &zip_name)
         .ok_or("체크섬 목록에 gh 파일이 없어요.")?;
-    let app_data = app_data.to_path_buf();
-    blocking(move || install_from_zip(&zip, &sha, &app_data)).await??;
-    progress(app, "설치 완료");
-    Ok(())
+    Ok((zip, sha))
 }
 
 /// [설치]·[업데이트]. brew가 있으면 brew로, 아니면 공식 릴리스를 앱 폴더에.
@@ -709,20 +887,35 @@ pub async fn github_install(
         (line("brew --prefix"), line("command -v gh"))
     })
     .await?;
-    match choose_route(brew.as_deref(), current.as_deref()) {
-        InstallRoute::Release => install_release(&app, &app_data, &cancel).await?,
-        route => {
-            let cmd = if route == InstallRoute::BrewInstall {
-                "brew install gh"
-            } else {
-                "brew upgrade gh"
-            };
-            let app = app.clone();
-            blocking(move || run_brew(cmd, &cancel, &app)).await??;
+    let route = choose_route(brew.as_deref(), current.as_deref());
+    let mut released = route == InstallRoute::Release;
+    if released {
+        install_release(&app, &app_data, &cancel).await?;
+    } else {
+        let cmd = if route == InstallRoute::BrewInstall {
+            "brew install gh"
+        } else {
+            "brew upgrade gh"
+        };
+        let (app2, c) = (app.clone(), cancel.clone());
+        let brewed = blocking(move || run_brew(cmd, &c, &app2)).await?;
+        match brewed {
+            Err(e) if e == "취소됨" => return Err(e),
+            // brew가 안 되면(다른 계정 소유·"not installed" 등) 공식 릴리스로 한 번 더.
+            Err(e) => {
+                progress(&app, &format!("brew 실패({e}) — 공식 릴리스로 설치해요."));
+                released = true;
+                install_release(&app, &app_data, &cancel).await?;
+            }
+            Ok(()) => {}
         }
     }
     let ad = app_data.clone();
     if let Err(s) = blocking(move || find_gh(&ad)).await? {
+        // 이번에 앱 폴더에 둔 gh가 쓸 수 없으면 지운다.
+        if released {
+            let _ = std::fs::remove_file(app_data.join("bin").join("gh"));
+        }
         return Err(match s {
             GithubStatus::Outdated { version } => {
                 format!("설치했지만 gh가 2.81.0보다 낮아요(gh {version}).")

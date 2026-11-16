@@ -8,11 +8,145 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use ieum_desktop_lib::github::{
-    GhAccount, GhAuth, GhFound, GithubStatus, InstallRoute, LOGIN_CMD_ARGS, MIN_GH, checksum_for,
-    choose_route, clear_record, derive_status, fetch, gh_auth, install_from_zip, parse_auth_status,
+    GIT_PROTOCOL_ARG, GhAccount, GhAuth, GhFound, GithubJobView, GithubJobs, GithubStatus,
+    InstallRoute, JobGuard, JobKind, LOGIN_CMD_ARGS, MIN_GH, checksum_for, choose_route,
+    clear_record, derive_status, disconnect, fetch, gh_auth, install_from_zip, parse_auth_status,
     parse_device_code, parse_gh_version, pick_gh, read_record, release_assets, run_login,
     write_record,
 };
+
+fn no_cancel() -> AtomicBool {
+    AtomicBool::new(false)
+}
+
+/// `pid`가 1초 안에 사라지는지(좀비 회수 여유).
+fn gone(pid: &str) -> bool {
+    let end = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < end {
+        let alive = std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        if !alive {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+#[test]
+fn job_view_and_slot() {
+    let jobs = GithubJobs::default();
+    assert_eq!(jobs.view(), None);
+    let cancel = Arc::new(AtomicBool::new(false));
+    let guard = JobGuard::start(&jobs, JobKind::Login, cancel.clone()).unwrap();
+    assert_eq!(
+        jobs.view(),
+        Some(GithubJobView {
+            kind: "login",
+            code: None
+        })
+    );
+    guard.set_code("AB12-CD34");
+    assert_eq!(
+        serde_json::to_string(&jobs.view().unwrap()).unwrap(),
+        r#"{"kind":"login","code":"AB12-CD34"}"#
+    );
+    assert_eq!(
+        JobGuard::start(&jobs, JobKind::Install, cancel.clone()).err(),
+        Some("이미 진행 중이에요".to_string())
+    );
+    drop(guard);
+    assert_eq!(jobs.view(), None);
+    let _g = JobGuard::start(&jobs, JobKind::Install, cancel).unwrap();
+    assert_eq!(
+        serde_json::to_string(&jobs.view().unwrap()).unwrap(),
+        r#"{"kind":"install","code":null}"#
+    );
+}
+
+#[test]
+fn exit_cancels_running_job() {
+    let jobs = GithubJobs::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    std::thread::scope(|s| {
+        let guard = JobGuard::start(&jobs, JobKind::Login, cancel.clone()).unwrap();
+        let c = cancel.clone();
+        s.spawn(move || {
+            while !c.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            drop(guard);
+        });
+        let start = Instant::now();
+        jobs.cancel_and_wait(Duration::from_millis(300));
+        assert!(cancel.load(Ordering::SeqCst));
+        assert!(start.elapsed() < Duration::from_millis(300));
+        assert_eq!(jobs.view(), None);
+    });
+    // 작업이 없으면 바로 돌아온다.
+    let start = Instant::now();
+    jobs.cancel_and_wait(Duration::from_millis(300));
+    assert!(start.elapsed() < Duration::from_millis(100));
+}
+
+const PROXY_ERR_JSON: &str = r#"{"hosts":{"github.com":[{"state":"error","error":"Get \"https://api.github.com/\": proxyconnect tcp: dial tcp 127.0.0.1:9: connect: connection refused","active":true,"host":"github.com","login":"hodoon","tokenSource":"keyring"}]}}"#;
+const BAD_TOKEN_JSON: &str = r#"{"hosts":{"github.com":[{"state":"error","error":"HTTP 401: Bad credentials (https://api.github.com/)","active":true,"host":"github.com","login":"","tokenSource":"GH_TOKEN"}]}}"#;
+
+#[test]
+fn derive_unreachable_vs_bad_token() {
+    let auth = GhAuth::Accounts(parse_auth_status(PROXY_ERR_JSON).unwrap());
+    let GithubStatus::Unreachable { error } = derive_status(Some("hodoon"), &auth) else {
+        panic!("{:?}", derive_status(Some("hodoon"), &auth));
+    };
+    assert!(error.contains("proxyconnect"), "{error}");
+    // 기록이 없어도 네트워크 문제로 본다.
+    assert!(matches!(
+        derive_status(None, &auth),
+        GithubStatus::Unreachable { .. }
+    ));
+    let auth = GhAuth::Accounts(parse_auth_status(BAD_TOKEN_JSON).unwrap());
+    assert_eq!(
+        derive_status(Some("hodoon"), &auth),
+        GithubStatus::NeedsLogin {
+            recorded: "hodoon".into()
+        }
+    );
+    assert_eq!(derive_status(None, &auth), GithubStatus::NotConnected);
+    assert_eq!(
+        serde_json::to_string(&GithubStatus::Unreachable { error: "e".into() }).unwrap(),
+        r#"{"kind":"unreachable","error":"e"}"#
+    );
+}
+
+#[test]
+fn logged_out_exit0_needs_login() {
+    // 실제 gh는 로그아웃이어도 `{"hosts":{}}` + 종료 0.
+    let dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(dir.path(), "echo '{\"hosts\":{}}'\nexit 0");
+    let auth = gh_auth(&gh).unwrap();
+    assert_eq!(
+        derive_status(Some("hodoon"), &auth),
+        GithubStatus::NeedsLogin {
+            recorded: "hodoon".into()
+        }
+    );
+}
+
+#[test]
+fn install_cancel_before_rename_leaves_nothing() {
+    let (bytes, sha) = gh_zip(|bin| {
+        fake_gh(bin, "echo gh version 9.9.9");
+    });
+    let app = tempfile::tempdir().unwrap();
+    let r = install_from_zip(&bytes, &sha, app.path(), &AtomicBool::new(true));
+    assert_eq!(r, Err("취소됨".to_string()));
+    assert!(!app.path().join("bin").join("gh").exists());
+    assert!(!app.path().join("bin").join("gh.tmp").exists());
+}
 use sha2::{Digest, Sha256};
 
 const RELEASE_JSON: &str = r#"{"tag_name":"v2.104.0","assets":[
@@ -52,7 +186,7 @@ fn install_bad_checksum_leaves_nothing() {
     });
     let dir = tempfile::tempdir().unwrap();
     let wrong = "0".repeat(64);
-    assert!(install_from_zip(&bytes, &wrong, dir.path()).is_err());
+    assert!(install_from_zip(&bytes, &wrong, dir.path(), &no_cancel()).is_err());
     assert!(!dir.path().join("bin").exists());
 }
 
@@ -82,7 +216,7 @@ fn install_rejects_symlinked_gh() {
         std::os::unix::fs::symlink("/bin/sh", bin.join("gh")).unwrap();
     });
     let app = tempfile::tempdir().unwrap();
-    assert!(install_from_zip(&bytes, &sha, app.path()).is_err());
+    assert!(install_from_zip(&bytes, &sha, app.path(), &no_cancel()).is_err());
     assert!(!app.path().join("bin").join("gh").exists());
 }
 
@@ -130,7 +264,7 @@ fn install_from_zip_places_executable() {
     });
 
     let app = tempfile::tempdir().unwrap();
-    let gh = install_from_zip(&bytes, &sha, app.path()).unwrap();
+    let gh = install_from_zip(&bytes, &sha, app.path(), &no_cancel()).unwrap();
     assert_eq!(gh, app.path().join("bin").join("gh"));
     let out = std::process::Command::new(&gh)
         .arg("--version")
@@ -142,22 +276,39 @@ fn install_from_zip_places_executable() {
 
 #[test]
 fn choose_route_cases() {
-    let brew = Path::new("/opt/homebrew");
+    // brew prefix 흉내: <prefix>/Cellar/gh/2.0.0/bin/gh 와 <prefix>/bin/gh → Cellar 링크.
+    let root = tempfile::tempdir().unwrap();
+    let brew = root.path().join("homebrew");
+    let cellar_bin = brew.join("Cellar/gh/2.0.0/bin");
+    std::fs::create_dir_all(&cellar_bin).unwrap();
+    fake_gh(&cellar_bin, "exit 0");
+    std::fs::create_dir_all(brew.join("bin")).unwrap();
+    std::os::unix::fs::symlink(cellar_bin.join("gh"), brew.join("bin/gh")).unwrap();
+    // 같은 prefix 아래지만 Cellar 링크가 아닌 gh(Intel `/usr/local/bin/gh` 공식 pkg 같은 경우).
+    let plain = brew.join("sbin");
+    std::fs::create_dir_all(&plain).unwrap();
+    let plain_gh = fake_gh(&plain, "exit 0");
+    let brew2 = root.path().join("homebrew2/bin");
+    std::fs::create_dir_all(&brew2).unwrap();
+    let other_gh = fake_gh(&brew2, "exit 0");
+
+    let linked = brew.join("bin/gh");
+    assert_eq!(choose_route(None, Some(&linked)), InstallRoute::Release);
+    assert_eq!(choose_route(Some(&brew), None), InstallRoute::BrewInstall);
     assert_eq!(
-        choose_route(None, Some(Path::new("/opt/homebrew/bin/gh"))),
-        InstallRoute::Release
-    );
-    assert_eq!(choose_route(Some(brew), None), InstallRoute::BrewInstall);
-    assert_eq!(
-        choose_route(Some(brew), Some(Path::new("/opt/homebrew/bin/gh"))),
+        choose_route(Some(&brew), Some(&linked)),
         InstallRoute::BrewUpgrade
     );
     assert_eq!(
-        choose_route(Some(brew), Some(Path::new("/usr/local/bin/gh"))),
+        choose_route(Some(&brew), Some(&plain_gh)),
         InstallRoute::Release
     );
     assert_eq!(
-        choose_route(Some(brew), Some(Path::new("/opt/homebrew2/bin/gh"))),
+        choose_route(Some(&brew), Some(&other_gh)),
+        InstallRoute::Release
+    );
+    assert_eq!(
+        choose_route(Some(&brew), Some(Path::new("/nonexistent/bin/gh"))),
         InstallRoute::Release
     );
 }
@@ -166,11 +317,40 @@ const CODE_LINE: &str = "! One-time code (AB12-CD34) copied to clipboard";
 
 /// `run_login`을 돌려 결과와 받은 코드들.
 fn login(gh: &Path, cancel: &AtomicBool, code_wait: Duration) -> (Result<(), String>, Vec<String>) {
-    let mut codes = Vec::new();
-    let r = run_login(gh, cancel, code_wait, Duration::from_secs(30), &mut |c| {
-        codes.push(c.to_string())
-    });
+    let (r, codes, _) = login_lines(gh, cancel, code_wait);
     (r, codes)
+}
+
+/// `run_login` 결과, 받은 코드들, 흘려 받은 stderr 줄들.
+fn login_lines(
+    gh: &Path,
+    cancel: &AtomicBool,
+    code_wait: Duration,
+) -> (Result<(), String>, Vec<String>, Vec<String>) {
+    let mut codes = Vec::new();
+    let mut lines = Vec::new();
+    let r = run_login(
+        gh,
+        true,
+        cancel,
+        code_wait,
+        Duration::from_secs(30),
+        &mut |c| codes.push(c.to_string()),
+        &mut |l| lines.push(l.to_string()),
+    );
+    (r, codes, lines)
+}
+
+#[test]
+fn login_streams_stderr_lines() {
+    let dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(
+        dir.path(),
+        &format!("echo '{CODE_LINE}' 1>&2\necho 'Authentication complete.' 1>&2\nexit 0"),
+    );
+    let (r, _, lines) = login_lines(&gh, &no_cancel(), Duration::from_secs(5));
+    assert_eq!(r, Ok(()));
+    assert_eq!(lines, [CODE_LINE, "Authentication complete."]);
 }
 
 #[test]
@@ -199,17 +379,29 @@ fn login_no_code_fails_fast() {
 #[test]
 fn login_cancel_kills() {
     let dir = tempfile::tempdir().unwrap();
-    let gh = fake_gh(dir.path(), &format!("echo '{CODE_LINE}' 1>&2\nsleep 30"));
+    let pid_file = dir.path().join("pid");
+    let gh = fake_gh(
+        dir.path(),
+        &format!(
+            "echo $$ > '{}'\necho '{CODE_LINE}' 1>&2\nexec sleep 30",
+            pid_file.display()
+        ),
+    );
     let cancel = Arc::new(AtomicBool::new(false));
     let c = cancel.clone();
+    let pf = pid_file.clone();
+    // 가짜 gh가 떠서 pid를 남긴 뒤에 취소한다(로그인 셸 시작이 느려도).
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(200));
+        while !std::fs::read_to_string(&pf).is_ok_and(|s| s.ends_with('\n')) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(100));
         c.store(true, Ordering::SeqCst);
     });
-    let start = Instant::now();
     let (r, _) = login(&gh, &cancel, Duration::from_secs(5));
     assert_eq!(r, Err("취소됨".to_string()));
-    assert!(start.elapsed() < Duration::from_secs(2));
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    assert!(gone(pid.trim()), "가짜 gh {pid}가 살아 있음");
 }
 
 #[test]
@@ -227,6 +419,10 @@ fn login_failure_reason() {
 
 #[test]
 fn login_args_exact() {
+    assert_eq!(
+        LOGIN_CMD_ARGS,
+        "auth login --web --hostname github.com --skip-ssh-key --scopes workflow"
+    );
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join("args.log");
     let gh = fake_gh(
@@ -236,9 +432,27 @@ fn login_args_exact() {
             log.display()
         ),
     );
-    let (r, _) = login(&gh, &AtomicBool::new(false), Duration::from_secs(5));
-    assert_eq!(r, Ok(()));
-    assert_eq!(std::fs::read_to_string(&log).unwrap(), LOGIN_CMD_ARGS);
+    let args = |set_protocol| {
+        let r = run_login(
+            &gh,
+            set_protocol,
+            &no_cancel(),
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+            &mut |_| {},
+            &mut |_| {},
+        );
+        assert_eq!(r, Ok(()));
+        std::fs::read_to_string(&log).unwrap()
+    };
+    // gh에 github.com 계정 항목이 없음 → 프로토콜을 정한다.
+    assert_eq!(args(true), format!("{LOGIN_CMD_ARGS}{GIT_PROTOCOL_ARG}"));
+    assert_eq!(
+        args(true),
+        "auth login --web --hostname github.com --skip-ssh-key --scopes workflow --git-protocol https"
+    );
+    // 이미 있음 → 사용자의 git_protocol을 덮지 않는다.
+    assert_eq!(args(false), LOGIN_CMD_ARGS);
 }
 
 const STATUS_JSON: &str = r#"{"hosts":{"github.com":[{"state":"success","active":true,"login":"hodoon","tokenSource":"keyring"}]}}"#;
@@ -289,7 +503,9 @@ fn gh_auth_with_fake_gh() {
     let dir = tempfile::tempdir().unwrap();
     let gh = fake_gh(
         dir.path(),
-        &format!("case \"$*\" in *'auth status'*) echo '{STATUS_JSON}'; exit 0;; esac\nexit 9"),
+        &format!(
+            "case \"$*\" in 'auth status --active --json hosts --hostname github.com') echo '{STATUS_JSON}'; exit 0;; esac\nexit 9"
+        ),
     );
     match gh_auth(&gh).unwrap() {
         GhAuth::Accounts(a) => assert_eq!(a.len(), 1),
@@ -328,13 +544,12 @@ fn disconnect_keeps_gh() {
         ),
     );
     write_record(dir.path(), "hodoon").unwrap();
-    // 해제 명령 본문: 기록 지우기 → 상태 다시 읽기.
-    clear_record(dir.path()).unwrap();
-    let auth = gh_auth(&gh).unwrap();
+    // 해제 명령이 쓰는 함수 그대로.
     assert_eq!(
-        derive_status(read_record(dir.path()).as_deref(), &auth),
+        disconnect(dir.path(), &gh).unwrap(),
         GithubStatus::NotConnected
     );
+    assert_eq!(read_record(dir.path()), None);
     let calls = std::fs::read_to_string(&log).unwrap();
     assert!(calls.contains("auth status"), "{calls}");
     assert!(!calls.contains("logout"), "{calls}");
@@ -346,6 +561,7 @@ fn acct(login: &str, active: bool, state: &str, source: &str) -> GhAccount {
         active,
         state: state.into(),
         token_source: source.into(),
+        error: None,
     }
 }
 
