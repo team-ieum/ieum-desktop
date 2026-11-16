@@ -619,7 +619,17 @@ async fn file_op_recorded_while_run_in_flight() {
     );
     assert!(inbox.join("renamed.pdf").exists());
 
-    // AI가 도는 동안에도 파일 작업이 기록에 있다.
+    // AI가 도는 동안에도 파일 작업이 기록에 있다. 도중 기록은 AI 호출과 따로 써지니 기다린다.
+    let recorded = || {
+        env.store.list_runs(Some(&id)).is_ok_and(|l| {
+            l.first().is_some_and(|r| {
+                env.store
+                    .get_run(&r.run_id)
+                    .is_ok_and(|run| run.file_ops.len() == 1)
+            })
+        })
+    };
+    assert!(wait_until(Duration::from_secs(5), recorded).await);
     let list = env.store.list_runs(Some(&id)).unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].finished_at.is_empty());

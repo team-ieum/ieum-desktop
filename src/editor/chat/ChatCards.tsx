@@ -57,7 +57,6 @@ export function TestCard({
               {k}: {shown(v)}
             </p>
           ))}
-          {n.outputClipped && <p className="text-neutral-500">{t("chat.card.outputClipped")}</p>}
           {n.error && <p className="break-all text-danger-700">{n.error}</p>}
         </div>
       ))}

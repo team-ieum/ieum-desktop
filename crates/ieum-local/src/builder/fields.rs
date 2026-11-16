@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 use super::Code;
 use super::edit::{AI_EVENT, AI_LOCKED_FIELDS, find, find_mut, is_folder_field};
 use super::test::type_name;
-use crate::http::mask;
+use reqwest::Url;
 
 /// 정적 검증 + 필수 칸·선택지. Builder는 늘 둘을 합쳐 쓴다.
 pub(crate) fn all_errors(wf: &Workflow, catalog: &Catalog) -> Vec<ValidationError> {
@@ -30,23 +30,80 @@ fn locked(event: &str, key: &str) -> bool {
     is_folder_field(event, key) || (event == AI_EVENT && AI_LOCKED_FIELDS.contains(&key))
 }
 
+/// AI에게 값 대신 보이는 표시. set이 이 표시를 받으면 기존 값을 지킨다.
 const HIDDEN: &str = "(숨김)";
 
-/// HTTP 노드에는 사람이 편집기에서 넣은 비밀(머리말 값·주소의 쿼리·계정·본문)이 있다 — AI에게 주지 않는다.
-/// 주소는 실패 문구와 같은 규칙으로 가린다(경로 속 참조식은 보인다).
+fn hidden_body(v: &Value) -> String {
+    format!("(숨김: {})", type_name(v))
+}
+
+fn is_hidden_body(s: &str) -> bool {
+    s.starts_with("(숨김: ") && s.ends_with(')')
+}
+
+/// 스킴·호스트(포트)까지만 — 웹훅은 경로 자체가 비밀이다. 호스트 자리의 참조식은 보인다.
+fn url_shown(s: &str) -> String {
+    let rest = |more: bool| {
+        if more {
+            format!("/{HIDDEN}")
+        } else {
+            String::new()
+        }
+    };
+    if let Some(end) = s.starts_with("{{").then(|| s.find("}}")).flatten() {
+        return format!("{}{}", &s[..end + 2], rest(end + 2 < s.len()));
+    }
+    let Ok(url) = Url::parse(s) else {
+        return HIDDEN.into();
+    };
+    let Some(host) = url.host_str() else {
+        return HIDDEN.into();
+    };
+    let user = if url.username().is_empty() && url.password().is_none() {
+        String::new()
+    } else {
+        format!("{HIDDEN}@")
+    };
+    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+    let more = url.path() != "/" || url.query().is_some() || url.fragment().is_some();
+    format!("{}://{user}{host}{port}{}", url.scheme(), rest(more))
+}
+
+/// HTTP 노드에는 사람이 편집기에서 넣은 비밀(머리말 값·주소의 경로·쿼리·계정·본문)이 있다 — AI에게 주지 않는다.
 fn shown(event: &str, key: &str, value: Option<&Value>) -> Option<Value> {
     let value = value?;
     if event != "http.request" || value.is_null() {
         return Some(value.clone());
     }
     Some(match (key, value) {
-        ("url", Value::String(s)) => mask(s).into(),
+        ("url", Value::String(s)) => url_shown(s).into(),
         ("headers", Value::Object(m)) => m.keys().map(|k| (k.clone(), json!(HIDDEN))).collect(),
         ("url" | "headers", _) => HIDDEN.into(),
         // 본문은 있다는 것과 모양만.
-        ("body", v) => format!("(숨김: {})", type_name(v)).into(),
+        ("body", v) => hidden_body(v).into(),
         _ => value.clone(),
     })
+}
+
+/// AI는 숨긴 값을 모르니 fields에서 본 표시를 그대로 돌려준다 — 그 자리는 사람이 넣은 값을 지킨다.
+fn keep_hidden(key: &str, value: Value, old: Option<&Value>) -> Result<Value, Code> {
+    let old = old.filter(|v| !v.is_null());
+    match (key, value) {
+        ("url", Value::String(s)) if s.contains(HIDDEN) => old.cloned().ok_or(Code::FieldInvalid),
+        ("body", Value::String(s)) if is_hidden_body(&s) => old.cloned().ok_or(Code::FieldInvalid),
+        ("headers", Value::Object(mut m)) => {
+            for (k, v) in m.iter_mut() {
+                if v == HIDDEN {
+                    *v = old
+                        .and_then(|o| o.get(k))
+                        .cloned()
+                        .ok_or(Code::FieldInvalid)?;
+                }
+            }
+            Ok(Value::Object(m))
+        }
+        (_, value) => Ok(value),
+    }
 }
 
 fn field_json(event: &str, f: &InputField, path: String, value: Option<Value>) -> Value {
@@ -207,8 +264,11 @@ pub(super) fn set(
             return Err(Code::FieldLocked);
         }
         let mut value = coerce(f, value)?;
-        if (node.event.as_str(), key.as_str()) == ("http.request", "body") {
-            value = json_or_text(value);
+        if node.event == "http.request" {
+            value = keep_hidden(&key, value, node.config.get(&key))?;
+            if key == "body" {
+                value = json_or_text(value);
+            }
         }
         match (node.event.as_str(), key.as_str()) {
             ("local.file_move", "destination") if !destination_ok(&value) => {

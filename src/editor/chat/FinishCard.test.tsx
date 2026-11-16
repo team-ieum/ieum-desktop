@@ -73,7 +73,7 @@ test("finish_card_shows_http_line_like_confirm_card", async () => {
   await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
   const card = screen.getByRole("dialog");
   expect(within(card).getByTestId("http-request").textContent).toBe("요청 보내기 → POST https://x.test/o/〈앞 노드 값〉");
-  expect(within(card).getByText("https://x.test").tagName).toBe("STRONG");
+  expect(within(card).getByText("x.test").tagName).toBe("STRONG");
   expect(within(card).getByText("머리말: X-Data")).toBeTruthy();
   expect(within(card).getByText("본문 있음")).toBeTruthy();
   expect(within(card).getByText("함께 보내는 값: 파일 읽기 의 id").className).toContain("text-danger-700");

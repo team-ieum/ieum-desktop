@@ -410,7 +410,7 @@ async fn http_fields_hide_secrets() {
     assert_eq!(value("method"), json!("POST"));
     assert_eq!(
         value("url"),
-        json!("https://…@hooks.example.com/{{nodes.t.output.name}}?…")
+        json!("https://(숨김)@hooks.example.com/(숨김)")
     );
     assert_eq!(
         value("headers"),
@@ -437,6 +437,120 @@ async fn http_fields_hide_secrets() {
     });
     let r = run(&b, json!({"op": "fields", "args": {"id": "h"}})).await;
     assert_eq!(r.data["fields"][3]["value"], Value::Null);
+}
+
+fn http_node(url: &str) -> Value {
+    json!({
+        "nodes": [
+            trig(),
+            {"id": "h", "type": "HTTP", "event": "http.request", "config": {
+                "method": "POST",
+                "url": url,
+                "headers": {"Authorization": "Bearer HSECRET"},
+                "body": {"k": "BSECRET"}
+            }}
+        ],
+        "edges": [{"source": "t", "target": "h"}]
+    })
+}
+
+async fn shown_url(b: &Builder) -> Value {
+    let r = run(b, json!({"op": "fields", "args": {"id": "h"}})).await;
+    r.data["fields"][1]["value"].clone()
+}
+
+/// 웹훅처럼 경로 자체가 비밀인 주소 — 호스트(와 참조식 호스트)까지만 보인다.
+#[tokio::test]
+async fn http_fields_hide_url_path() {
+    for (url, want) in [
+        (
+            "https://hooks.slack.com/services/T0AAAA/B0BBBB/PATHSECRET123",
+            "https://hooks.slack.com/(숨김)",
+        ),
+        (
+            "https://discord.com/api/webhooks/123/PATHSECRET123",
+            "https://discord.com/(숨김)",
+        ),
+        (
+            "https://api.telegram.org/botPATHSECRET123/sendMessage",
+            "https://api.telegram.org/(숨김)",
+        ),
+        (
+            "https:/user:PWSECRET@host.example/x",
+            "https://(숨김)@host.example/(숨김)",
+        ),
+        ("https://user:PW/SECRET@host.example/x", "(숨김)"),
+        ("http://host.example:8080", "http://host.example:8080"),
+        (
+            "{{nodes.t.output.name}}/PATHSECRET123",
+            "{{nodes.t.output.name}}/(숨김)",
+        ),
+        ("not a url PATHSECRET123", "(숨김)"),
+    ] {
+        let b = Builder::new(MemHost::with(W, http_node(url))).unwrap();
+        assert_eq!(shown_url(&b).await, json!(want), "{url}");
+    }
+}
+
+/// AI가 fields에서 본 숨김 표시를 그대로 돌려줘도 사람이 넣은 값은 그대로다.
+#[tokio::test]
+async fn http_set_keeps_values_behind_hidden_marks() {
+    let url = "https://api.example.com/x?token=QSECRET";
+    let h = MemHost::with(W, http_node(url));
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(&b, json!({"op": "fields", "args": {"id": "h"}})).await;
+    let shown = |i: usize| r.data["fields"][i]["value"].clone();
+    let mut headers = shown(2);
+    headers["Content-Type"] = json!("application/json");
+    let r = run(
+        &b,
+        set(
+            "h",
+            json!({"headers": headers, "url": shown(1), "body": shown(3)}),
+        ),
+    )
+    .await;
+    assert!(r.ok, "{r:?}");
+    let cfg = h.doc(W).workflow.nodes[1].config.clone();
+    assert_eq!(
+        cfg["headers"],
+        json!({"Authorization": "Bearer HSECRET", "Content-Type": "application/json"})
+    );
+    assert_eq!(cfg["url"], json!(url));
+    assert_eq!(cfg["body"], json!({"k": "BSECRET"}));
+
+    // 새 값은 그대로 들어가고, 빠진 머리말은 지워진다.
+    let r = run(
+        &b,
+        set(
+            "h",
+            json!({"headers": {"X-A": "1"}, "url": "https://b.example/y"}),
+        ),
+    )
+    .await;
+    assert!(r.ok, "{r:?}");
+    let cfg = h.doc(W).workflow.nodes[1].config.clone();
+    assert_eq!(cfg["headers"], json!({"X-A": "1"}));
+    assert_eq!(cfg["url"], json!("https://b.example/y"));
+
+    // 숨김 표시인데 지킬 기존 값이 없으면 거절.
+    let saves = h.saves();
+    h.put_doc(W, |d| {
+        d.workflow.nodes[1].config.remove("url");
+        d.workflow.nodes[1].config.remove("body");
+    });
+    for values in [
+        json!({"headers": {"Authorization": "(숨김)"}}),
+        json!({"url": "https://b.example/(숨김)"}),
+        json!({"body": "(숨김: object)"}),
+    ] {
+        assert_eq!(
+            run(&b, set("h", values.clone())).await.code,
+            Some(Code::FieldInvalid),
+            "{values}"
+        );
+    }
+    assert_eq!(h.saves(), saves);
 }
 
 /// BE는 머리말을 `Map<String,String>`으로 읽는다 — 글이 아닌 값은 set에서 거절.

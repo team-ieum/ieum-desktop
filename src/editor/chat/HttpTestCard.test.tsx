@@ -115,17 +115,41 @@ test("test_card_notes_real_request", async () => {
   expect(screen.queryByText("실제로 요청을 보냈어요")).toBeNull();
 });
 
-test("test_card_notes_clipped_output", async () => {
-  vi.spyOn(api, "getRun").mockResolvedValue({
-    run: {
-      nodes: {
-        h: { status: "succeeded", output: { body: "abc" }, error: null, outputClipped: true },
-        g: { status: "succeeded", output: { body: "x" }, error: null },
-      },
-    },
-  } as unknown as StoredRun);
-  await act(async () => render(<TestCard runId="r1" status="succeeded" />));
-  expect(screen.getAllByText("응답이 길어 기록에는 앞부분만 남겼어요.")).toHaveLength(1);
+const bold = (card: HTMLElement) => Array.from(card.querySelectorAll("strong"), (e) => e.textContent);
+const confirmCard = (url: string) => {
+  render(<HttpConfirm lines={[line({ url })]} skipLabel="취소" onAnswer={() => {}} />);
+  return screen.getByRole("dialog");
+};
+
+test("http_card_bolds_only_the_real_host", () => {
+  const card = confirmCard("https://good.com@evil.com/");
+  expect(bold(card)).toEqual(["evil.com"]);
+  expect(requests(card)).toEqual(["POST https://…@evil.com/"]);
+  expect(card.textContent).not.toContain("good.com");
+});
+
+test("http_card_warns_when_host_is_a_reference", () => {
+  for (const url of ["{{nodes.a.output.url}}/x", "https://{{nodes.a.output.host}}/x", "not a url"]) {
+    const card = confirmCard(url);
+    expect(bold(card)).toEqual([]);
+    expect(within(card).getByText("목적지가 앞 노드 값으로 정해져요")).toBeTruthy();
+    cleanup();
+  }
+});
+
+test("http_card_shows_punycode_host_with_original", () => {
+  const card = confirmCard("https://한글.kr/a");
+  const host = new URL("https://한글.kr").host;
+  expect(host).toContain("xn--");
+  expect(bold(card)).toEqual([host]);
+  expect(card.textContent).toContain("한글.kr");
+});
+
+test("http_card_plain_url_unchanged", () => {
+  const card = confirmCard("https://x.test:8080/o/{{nodes.a.output.id}}?q=1");
+  expect(bold(card)).toEqual(["x.test:8080"]);
+  expect(requests(card)).toEqual(["POST https://x.test:8080/o/〈앞 노드 값〉?q=1"]);
+  expect(within(card).queryByText("목적지가 앞 노드 값으로 정해져요")).toBeNull();
 });
 
 function Harness({ nodes }: { nodes: WfNode[] }) {
@@ -193,7 +217,7 @@ test("http_card_keeps_host_and_buttons_visible_for_long_url", async () => {
   await act(async () => render(<HttpTestCard workflowId="w1" />));
   await emit({ id: "w1", lines: [line({ url: `https://evil.example.com/${"a".repeat(2000)}` })] });
   const card = screen.getByRole("dialog");
-  expect(within(card).getByText("https://evil.example.com").tagName).toBe("STRONG");
+  expect(within(card).getByText("evil.example.com").tagName).toBe("STRONG");
   expect(within(card).getByRole("button", { name: "보내기" })).toBeTruthy();
   expect(within(card).getByRole("button", { name: "테스트 없이 넘어가기" })).toBeTruthy();
   expect(card.className).toContain("max-h-");

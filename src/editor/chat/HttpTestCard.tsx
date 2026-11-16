@@ -12,13 +12,28 @@ export const CARD_BOX =
   "absolute bottom-4 left-1/2 z-30 flex max-h-[calc(100%-2rem)] w-[420px] -translate-x-1/2 flex-col gap-3 rounded-2xl border border-neutral-200 bg-white p-5 shadow-[0_14px_40px_rgba(43,72,86,0.18)]";
 export const CARD_SCROLL = "min-h-0 overflow-y-auto";
 
-/** 스킴·호스트(계정 부분 포함)는 굵게 — 긴 덧붙임 뒤에 호스트가 숨지 않게 맨 앞에 둔다. */
-const ORIGIN = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i;
+/** 스킴 · 계정·호스트 자리 · 나머지. 브라우저 파서처럼 `\`도 호스트 자리를 끝낸다. */
+const AUTHORITY = /^([a-z][a-z0-9+.-]*:[/\\]*)([^/\\?#]*)([\s\S]*)$/i;
+
+/** 실제로 연결될 호스트 — 계정 정보(`good.com@evil.com`)·혼동 글자에 속지 않게 브라우저 파서로 읽는다. 못 읽거나 참조식이면 null. */
+function destination(url: string) {
+  const m = url.match(AUTHORITY);
+  if (!m || m[2].includes("{{")) return null;
+  let host: string;
+  try {
+    host = new URL(url).host;
+  } catch {
+    return null;
+  }
+  if (!host) return null;
+  const at = m[2].lastIndexOf("@");
+  const typed = m[2].slice(at + 1);
+  return { scheme: m[1], user: at >= 0, host, typed: typed.toLowerCase() === host ? null : typed, rest: showRefs(m[3]) };
+}
 
 /** HTTP 요청 한 줄 — 메서드·주소(참조식은 자리만)와 실려 나가는 것(머리말 이름·본문 유무·앞 노드 값 이름). */
 export function HttpRequest({ line, prefix = "" }: { line: HttpLine; prefix?: string }) {
-  const url = showRefs(line.url);
-  const origin = url.match(ORIGIN)?.[0] ?? "";
+  const to = destination(line.url);
   const sends = line.sends.map((s) =>
     t("http.confirm.sendItem")
       .replace("{node}", () => s.nodeLabel || s.nodeId)
@@ -28,9 +43,19 @@ export function HttpRequest({ line, prefix = "" }: { line: HttpLine; prefix?: st
     <>
       <span data-testid="http-request" className="break-all font-mono text-xs">
         {`${prefix}${line.method} `}
-        <strong className="font-bold text-neutral-900">{origin}</strong>
-        {url.slice(origin.length)}
+        {to ? (
+          <>
+            {to.scheme}
+            {to.user && <span className="text-neutral-400">…@</span>}
+            <strong className="font-bold text-neutral-900">{to.host}</strong>
+            {to.typed && <span className="text-neutral-400">{` (${to.typed})`}</span>}
+            {to.rest}
+          </>
+        ) : (
+          showRefs(line.url)
+        )}
       </span>
+      {!to && <span className="text-xs font-semibold text-danger-700">{t("http.confirm.refHost")}</span>}
       {line.headerKeys.length > 0 && (
         <span className="text-xs text-neutral-500">{t("http.confirm.headers").replace("{names}", () => line.headerKeys.join(", "))}</span>
       )}
