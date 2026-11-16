@@ -1248,10 +1248,31 @@ async fn trigger_change_starts_now() {
 async fn clock_back_resets_slot() {
     let env = env();
     let id = hourly(&env);
-    set_clock(&env, "2026-11-16T00:10:00Z"); // 시계가 뒤로
+    set_clock(&env, "2026-11-15T22:30:00Z"); // 시계가 3시간 뒤로 — 기록을 지금으로
     env.sup.tick_for_test();
     assert_eq!(settle(&env, &id).await, 0);
-    assert_eq!(slot(&env, &id), Some(utc("2026-11-16T00:10:00Z")));
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-15T22:30:00Z")));
+}
+
+/// 2시간 안으로 조금 뒤로 간 시계는 기록을 그대로 둔다 — 같은 차례를 다시 돌지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn clock_back_small_keeps_slot() {
+    let env = env();
+    let id = hourly(&env);
+    set_clock(&env, "2026-11-16T02:00:10Z"); // 11:00:10 KST — 11시 차례
+    env.sup.tick_for_test();
+    assert!(wait_until(Duration::from_secs(5), || finished_runs(&env, &id) == 1).await);
+    set_clock(&env, "2026-11-16T01:59:55Z"); // -15초
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-16T02:00:00Z")));
+    set_clock(&env, "2026-11-16T02:00:30Z");
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    set_clock(&env, "2026-11-15T23:00:30Z"); // -3시간
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-15T23:00:30Z")));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1300,4 +1321,29 @@ async fn next_run_listed() {
     assert_eq!(get(&on).watch, WatchState::Watching);
     assert_eq!(get(&off).next_run, None);
     assert_eq!(get(&off).watch, WatchState::Off);
+}
+
+/// 연도가 든 식의 마지막 차례도 돈다 — 다음 차례가 없다는 오류는 그 차례를 처리한 뒤에.
+#[tokio::test(flavor = "multi_thread")]
+async fn last_slot_of_year_runs_then_error() {
+    let env = env();
+    let id = save(
+        &env,
+        sched_wf("schedule.every", json!({"cron": "0 0 9 17 11 ? 2026"})),
+        true,
+    );
+    set_clock(&env, "2026-11-17T00:00:10Z"); // 11/17 09:00:10 KST
+    env.sup.tick_for_test();
+    assert!(wait_until(Duration::from_secs(5), || finished_runs(&env, &id) == 1).await);
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    let entry = env
+        .sup
+        .list_workflows()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.workflow.id == id)
+        .unwrap();
+    assert_eq!(entry.watch, WatchState::WatchError);
+    assert!(status_events(&env, &id, false) >= 1);
 }

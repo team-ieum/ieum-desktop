@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use ieum_engine::schedule::{
-    Decision, Schedule, decide, schedule_cron, schedule_output, to_quartz, triggered_at,
+    Decision, GRACE, Schedule, decide, schedule_cron, schedule_output, to_quartz, triggered_at,
 };
 use ieum_engine::{
     BuiltinRunners, Catalog, ExecEvent, NodeRunner, NodeStatus, RunResult, RunStatus, Runners,
@@ -242,6 +242,14 @@ enum JobSource {
     Test(Workflow),
 }
 
+enum Pushed {
+    Yes,
+    /// 그 워크플로우가 돌거나 기다리는 중(`push_if_idle`만).
+    Busy,
+    /// 감독이 멈춰 받지 않았다.
+    Stopped,
+}
+
 struct Job {
     trigger: Map<String, Value>,
     source: JobSource,
@@ -468,18 +476,24 @@ impl Supervisor {
         let before = (!wf.id.is_empty())
             .then(|| self.store().get_workflow(&wf.id).ok())
             .flatten();
-        let saved = self.store().save_workflow(wf)?;
-        // 꺼짐→켜짐, 트리거 칸이 바뀜 = 지난 차례를 놓친 것으로 치지 않고 지금부터.
-        let restart = before.is_none_or(|b| !b.enabled || trigger_sig(&b) != trigger_sig(&saved));
-        if restart && enabled_schedule(&saved).is_some() {
+        // 저장과 차례 기록을 스케줄 확인과 같은 잠금 안에서 — 그 사이 배경 확인이 새 저장본을
+        // 옛 차례 기록으로 돌리지 않게.
+        let saved = {
             let _one = lock(&self.0.tick_lock);
-            if let Err(e) = self
-                .store()
-                .set_schedule_slot(&saved.id, (self.0.deps.now)())
+            let saved = self.store().save_workflow(wf)?;
+            // 꺼짐→켜짐, 트리거 칸이 바뀜 = 지난 차례를 놓친 것으로 치지 않고 지금부터.
+            let restart =
+                before.is_none_or(|b| !b.enabled || trigger_sig(&b) != trigger_sig(&saved));
+            if restart
+                && enabled_schedule(&saved).is_some()
+                && let Err(e) = self
+                    .store()
+                    .set_schedule_slot(&saved.id, (self.0.deps.now)())
             {
                 eprintln!("[ieum] 스케줄 기록을 쓰지 못했어요: {e}");
             }
-        }
+            saved
+        };
         self.sync();
         Ok(saved)
     }
@@ -700,7 +714,7 @@ impl Supervisor {
             let Some(schedule) = enabled_schedule(wf) else {
                 continue;
             };
-            let schedule = match schedule.and_then(|s| next_slot(&s, now).map(|_| s)) {
+            let schedule = match schedule {
                 Ok(s) => s,
                 Err(e) => {
                     errors.insert(wf.id.clone(), e);
@@ -712,13 +726,26 @@ impl Supervisor {
                     eprintln!("[ieum] 스케줄 기록을 쓰지 못했어요: {e}");
                 }
             };
-            let Some(&last) = slots.get(&wf.id) else {
-                set(now);
-                continue;
+            let decision = match slots.get(&wf.id) {
+                None => {
+                    set(now);
+                    Decision::Nothing
+                }
+                Some(&last) => decide(&schedule, last, now),
             };
-            match decide(&schedule, last, now) {
-                Decision::Nothing => {}
-                Decision::ClockBack => set(now),
+            match decision {
+                // 지난 차례를 다 처리했는데 다음 차례도 없을 때만 오류(연도 식의 마지막 차례는 돈다).
+                Decision::Nothing => {
+                    if let Err(e) = next_slot(&schedule, now) {
+                        errors.insert(wf.id.clone(), e);
+                    }
+                }
+                // 2시간 안으로 조금 뒤로 간 시계는 기록을 둔다 — 지금으로 덮으면 이미 돈 차례가 다시 돈다.
+                Decision::ClockBack => {
+                    if slots.get(&wf.id).is_some_and(|&last| last - now > GRACE) {
+                        set(now);
+                    }
+                }
                 Decision::Expired { slot } => set(slot),
                 Decision::Run { slot } => {
                     // 차례를 먼저 넘긴다 — 기록을 못 쓰면 다음 확인에서 같은 차례를 다시 돌 수 있다.
@@ -732,12 +759,19 @@ impl Supervisor {
                         source: JobSource::Schedule { slot },
                         reply: None,
                     };
-                    if !self.push_if_idle(&wf.id, job) {
-                        eprintln!(
+                    match self.push_if_idle(&wf.id, job) {
+                        Pushed::Yes => {}
+                        Pushed::Busy => eprintln!(
                             "[ieum] 실행 중이라 스케줄 차례를 건너뛰었어요: 워크플로우 {} {}",
                             wf.id,
                             triggered_at(slot)
-                        );
+                        ),
+                        // 멈춘 감독이 차례를 삼키지 않게 되돌린다 — 다음 감독(재시작·계정 복귀)이 돌린다.
+                        Pushed::Stopped => {
+                            if let Some(&last) = slots.get(&wf.id) {
+                                set(last);
+                            }
+                        }
                     }
                 }
             }
@@ -769,23 +803,34 @@ impl Supervisor {
     }
 
     /// 그 워크플로우가 돌거나 기다리는 실행이 없을 때만 넣는다(스케줄 차례는 줄 크기 1).
-    fn push_if_idle(&self, workflow_id: &str, job: Job) -> bool {
-        let busy = lock(&self.0.lanes)
+    /// 확인과 넣기를 같은 잠금 안에서 한다.
+    fn push_if_idle(&self, workflow_id: &str, job: Job) -> Pushed {
+        let mut lanes = lock(&self.0.lanes);
+        if lanes
             .get(workflow_id)
-            .is_some_and(|l| l.running || !l.jobs.is_empty());
-        if !busy {
-            self.push(workflow_id, job);
+            .is_some_and(|l| l.running || !l.jobs.is_empty())
+        {
+            return Pushed::Busy;
         }
-        !busy
+        self.push_locked(&mut lanes, workflow_id, job)
     }
 
     fn push(&self, workflow_id: &str, job: Job) {
         let mut lanes = lock(&self.0.lanes);
+        self.push_locked(&mut lanes, workflow_id, job);
+    }
+
+    fn push_locked(
+        &self,
+        lanes: &mut HashMap<String, Lane>,
+        workflow_id: &str,
+        job: Job,
+    ) -> Pushed {
         if self.is_stopped() {
             if let Some(reply) = job.reply {
                 let _ = reply.send(Err("계정이 바뀌거나 로그아웃되어 취소됐어요.".into()));
             }
-            return;
+            return Pushed::Stopped;
         }
         let lane = lanes.entry(workflow_id.to_string()).or_default();
         lane.jobs.push_back(job);
@@ -807,6 +852,7 @@ impl Supervisor {
             let (sup, id) = (self.clone(), workflow_id.to_string());
             self.0.rt.spawn(async move { sup.drain(&id).await });
         }
+        Pushed::Yes
     }
 
     async fn drain(&self, workflow_id: &str) {
