@@ -5,6 +5,7 @@ pub mod channel;
 pub mod chat;
 pub mod commands;
 pub mod credentials;
+pub mod github;
 pub mod http_confirm;
 pub mod limit_watch;
 pub mod models;
