@@ -981,7 +981,12 @@ const RUN_TAIL: usize = 64 * 1024;
 fn push_tail(buf: &mut Vec<u8>, bytes: &[u8]) {
     buf.extend_from_slice(bytes);
     if buf.len() > RUN_TAIL {
-        buf.drain(..buf.len() - RUN_TAIL);
+        let mut cut = buf.len() - RUN_TAIL;
+        // UTF-8 이어지는 바이트(0b10xxxxxx)는 건너뛰어 문자 경계에서 시작한다.
+        while buf.get(cut).is_some_and(|b| b & 0xC0 == 0x80) {
+            cut += 1;
+        }
+        buf.drain(..cut);
     }
 }
 
@@ -1045,8 +1050,13 @@ pub fn shell_run(
             let _ = child.wait();
             break None;
         }
-        if let Ok(l) = rx.recv_timeout(Duration::from_millis(50)) {
-            on_stderr_line(&l);
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(l) => on_stderr_line(&l),
+            // stderr가 먼저 닫혔다 — 바로 돌아오므로 직접 쉰다(바쁜 루프 방지).
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
         }
     };
     // 남은 손자를 죽여 파이프를 닫는다 — 물고 있으면 읽기 스레드가 끝나지 않는다.
