@@ -91,10 +91,22 @@ impl NodeState {
 #[serde(rename_all = "camelCase", default)]
 pub struct PendingFinish {
     pub hash: String,
-    pub folder: String,
+    /// 폴더 트리거일 때만.
+    pub folder: Option<String>,
+    /// 끝내는 버튼. 이 칸이 생기기 전 파일에는 없다(= enable).
+    pub button: FinishButton,
     pub actions: Vec<FinishAction>,
     /// AI 노드마다 한 줄. 이 칸이 생기기 전 파일에는 없다(빈 목록).
     pub ai: Vec<FinishAi>,
+}
+
+/// 확인 카드의 끝내는 버튼 — 수동 실행 워크플로우는 켤 것이 없어 [저장](누르면 enabled = true로 저장).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FinishButton {
+    #[default]
+    Enable,
+    Save,
 }
 
 /// 확인 카드의 AI 노드 한 줄 — 사람이 켜기 전에 어느 공급원으로 파일 내용이 가는지 본다.

@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 
 use super::edit::{AI_EVENT, FOLDER_FIELDS};
 use super::{
-    Builder, ChatState, Code, Doc, FinishAction, FinishAi, HttpLine, HttpSend, NodeState,
-    PendingFinish, Reply, SaveError, node_state, workflow_hash,
+    Builder, ChatState, Code, Doc, FinishAction, FinishAi, FinishButton, HttpLine, HttpSend,
+    NodeState, PendingFinish, Reply, SaveError, node_state, workflow_hash,
 };
 
 /// 완료까지 남은 것 한 줄.
@@ -213,9 +213,14 @@ impl Builder {
             .iter()
             .filter(|n| n.event == "local.folder_new_file")
             .find_map(|n| text(n, "folder"));
+        let manual = wf.nodes.iter().any(|n| n.event == "manual.run");
         let pending = PendingFinish {
             hash: workflow_hash(wf),
-            folder: folder.unwrap_or_default().to_string(),
+            folder: folder.map(str::to_string),
+            button: match manual {
+                true => FinishButton::Save,
+                false => FinishButton::Enable,
+            },
             actions: actions(wf),
             ai: ai_nodes(wf),
         };
