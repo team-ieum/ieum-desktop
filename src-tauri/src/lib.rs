@@ -317,6 +317,7 @@ pub fn run() {
             github::github_connect,
             github::github_cancel,
             github::github_open_device,
+            github::github_install,
             commands::save_workflow,
             commands::delete_workflow,
             commands::validate_workflow,

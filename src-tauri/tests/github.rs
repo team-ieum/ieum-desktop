@@ -8,10 +8,97 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use ieum_desktop_lib::github::{
-    GhAccount, GhAuth, GhFound, GithubStatus, LOGIN_CMD_ARGS, MIN_GH, clear_record, derive_status,
-    gh_auth, parse_auth_status, parse_device_code, parse_gh_version, pick_gh, read_record,
-    run_login, write_record,
+    GhAccount, GhAuth, GhFound, GithubStatus, InstallRoute, LOGIN_CMD_ARGS, MIN_GH, checksum_for,
+    choose_route, clear_record, derive_status, gh_auth, install_from_zip, parse_auth_status,
+    parse_device_code, parse_gh_version, pick_gh, read_record, release_assets, run_login,
+    write_record,
 };
+use sha2::{Digest, Sha256};
+
+const RELEASE_JSON: &str = r#"{"tag_name":"v2.104.0","assets":[
+ {"name":"gh_2.104.0_checksums.txt","browser_download_url":"https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_checksums.txt"},
+ {"name":"gh_2.104.0_macOS_amd64.zip","browser_download_url":"https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_macOS_amd64.zip"},
+ {"name":"gh_2.104.0_macOS_arm64.zip","browser_download_url":"https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_macOS_arm64.zip"},
+ {"name":"gh_2.104.0_macOS_universal.pkg","browser_download_url":"https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_macOS_universal.pkg"}
+]}"#;
+
+#[test]
+fn release_assets_pick_arch() {
+    let base = "https://github.com/cli/cli/releases/download/v2.104.0/";
+    let (tag, zip_url, zip_name, sums_url) = release_assets(RELEASE_JSON, "aarch64").unwrap();
+    assert_eq!(tag, "v2.104.0");
+    assert_eq!(zip_name, "gh_2.104.0_macOS_arm64.zip");
+    assert_eq!(zip_url, format!("{base}gh_2.104.0_macOS_arm64.zip"));
+    assert_eq!(sums_url, format!("{base}gh_2.104.0_checksums.txt"));
+    let (_, _, zip_name, _) = release_assets(RELEASE_JSON, "x86_64").unwrap();
+    assert_eq!(zip_name, "gh_2.104.0_macOS_amd64.zip");
+    assert!(release_assets(RELEASE_JSON, "riscv64").is_err());
+}
+
+#[test]
+fn checksum_lookup() {
+    let txt = "aaa111  gh_2.104.0_macOS_amd64.zip\nbbb222  gh_2.104.0_macOS_arm64.zip\n";
+    assert_eq!(
+        checksum_for(txt, "gh_2.104.0_macOS_arm64.zip").as_deref(),
+        Some("bbb222")
+    );
+    assert_eq!(checksum_for(txt, "gh_2.104.0_linux_arm64.tar.gz"), None);
+}
+
+#[test]
+fn install_bad_checksum_leaves_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let wrong = "0".repeat(64);
+    assert!(install_from_zip(b"not a zip", &wrong, dir.path()).is_err());
+    assert!(!dir.path().join("bin").exists());
+}
+
+#[test]
+fn install_from_zip_places_executable() {
+    let src = tempfile::tempdir().unwrap();
+    let top = src.path().join("gh_9.9.9_macOS_arm64");
+    std::fs::create_dir_all(top.join("bin")).unwrap();
+    fake_gh(&top.join("bin"), "echo gh version 9.9.9");
+    let zip = src.path().join("gh.zip");
+    let ok = std::process::Command::new("/usr/bin/ditto")
+        .args(["-c", "-k", "--keepParent"])
+        .arg(&top)
+        .arg(&zip)
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
+    let bytes = std::fs::read(&zip).unwrap();
+    let sha = hex::encode(Sha256::digest(&bytes));
+
+    let app = tempfile::tempdir().unwrap();
+    let gh = install_from_zip(&bytes, &sha, app.path()).unwrap();
+    assert_eq!(gh, app.path().join("bin").join("gh"));
+    let out = std::process::Command::new(&gh)
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "gh version 9.9.9\n");
+    assert!(!app.path().join("bin").join("gh.tmp").exists());
+}
+
+#[test]
+fn choose_route_cases() {
+    let brew = Path::new("/opt/homebrew");
+    assert_eq!(
+        choose_route(None, Some(Path::new("/opt/homebrew/bin/gh"))),
+        InstallRoute::Release
+    );
+    assert_eq!(choose_route(Some(brew), None), InstallRoute::BrewInstall);
+    assert_eq!(
+        choose_route(Some(brew), Some(Path::new("/opt/homebrew/bin/gh"))),
+        InstallRoute::BrewUpgrade
+    );
+    assert_eq!(
+        choose_route(Some(brew), Some(Path::new("/usr/local/bin/gh"))),
+        InstallRoute::Release
+    );
+}
 
 const CODE_LINE: &str = "! One-time code (AB12-CD34) copied to clipboard";
 

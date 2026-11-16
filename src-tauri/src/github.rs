@@ -426,3 +426,260 @@ pub async fn github_cancel(jobs: State<'_, GithubJobs>) -> Result<(), String> {
 pub async fn github_open_device() -> Result<(), String> {
     crate::commands::open_url(DEVICE_URL)
 }
+
+/// 설치·업데이트 전체 상한.
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// 받는 zip 크기 상한. checksums·릴리스 JSON은 훨씬 작다.
+const MAX_ZIP: usize = 50 * 1024 * 1024;
+const MAX_SMALL: usize = 1024 * 1024;
+const LATEST_RELEASE: &str = "https://api.github.com/repos/cli/cli/releases/latest";
+
+/// 최신 릴리스 JSON에서 (태그, zip 주소, zip 이름, checksums 주소). `arch`는 `std::env::consts::ARCH`.
+pub fn release_assets(
+    release_json: &str,
+    arch: &str,
+) -> Result<(String, String, String, String), String> {
+    #[derive(Deserialize)]
+    struct Asset {
+        name: String,
+        browser_download_url: String,
+    }
+    #[derive(Deserialize)]
+    struct Release {
+        tag_name: String,
+        assets: Vec<Asset>,
+    }
+    let r: Release = serde_json::from_str(release_json)
+        .map_err(|e| format!("릴리스 정보를 읽지 못했어요: {e}"))?;
+    let arch = match arch {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        other => return Err(format!("이 Mac({other})용 gh가 없어요.")),
+    };
+    let ver = r.tag_name.trim_start_matches('v');
+    let url = |name: &str| {
+        r.assets
+            .iter()
+            .find(|a| a.name == name)
+            .map(|a| a.browser_download_url.clone())
+            .ok_or_else(|| format!("릴리스에 {name}이 없어요."))
+    };
+    let zip_name = format!("gh_{ver}_macOS_{arch}.zip");
+    let zip_url = url(&zip_name)?;
+    let sums_url = url(&format!("gh_{ver}_checksums.txt"))?;
+    Ok((r.tag_name.clone(), zip_url, zip_name, sums_url))
+}
+
+/// `<sha256>  <file>` 줄에서 `file`의 sha256.
+pub fn checksum_for(checksums_txt: &str, file: &str) -> Option<String> {
+    checksums_txt.lines().find_map(|l| {
+        let (sha, name) = l.split_once(char::is_whitespace)?;
+        (name.trim() == file).then(|| sha.to_string())
+    })
+}
+
+/// 버려질 때 지우는 임시 폴더.
+struct TempDir(PathBuf);
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// sha256이 맞으면 zip의 `*/bin/gh`를 `<app_data>/bin/gh`에 둔다. 틀리면 아무것도 쓰지 않는다.
+pub fn install_from_zip(
+    zip: &[u8],
+    expected_sha256: &str,
+    app_data: &Path,
+) -> Result<PathBuf, String> {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+    if !hex::encode(Sha256::digest(zip)).eq_ignore_ascii_case(expected_sha256.trim()) {
+        return Err("받은 gh 파일의 체크섬이 맞지 않아요.".into());
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let tmp = TempDir(std::env::temp_dir().join(format!("ieum-gh-{}-{nanos}", std::process::id())));
+    let err = |e: std::io::Error| format!("gh를 설치하지 못했어요: {e}");
+    let out = tmp.0.join("out");
+    std::fs::create_dir_all(&out).map_err(err)?;
+    let zip_path = tmp.0.join("gh.zip");
+    std::fs::write(&zip_path, zip).map_err(err)?;
+    let ok = std::process::Command::new("/usr/bin/ditto")
+        .args(["-x", "-k"])
+        .arg(&zip_path)
+        .arg(&out)
+        .status()
+        .map_err(err)?
+        .success();
+    if !ok {
+        return Err("gh 압축을 풀지 못했어요.".into());
+    }
+    let src = std::fs::read_dir(&out)
+        .map_err(err)?
+        .flatten()
+        .map(|e| e.path().join("bin").join("gh"))
+        .find(|p| p.is_file())
+        .ok_or("압축 안에 gh가 없어요.")?;
+    let bin = app_data.join("bin");
+    std::fs::create_dir_all(&bin).map_err(err)?;
+    let staged = bin.join("gh.tmp");
+    std::fs::copy(&src, &staged).map_err(err)?;
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(err)?;
+    let dest = bin.join("gh");
+    std::fs::rename(&staged, &dest).map_err(err)?;
+    Ok(dest)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum InstallRoute {
+    BrewInstall,
+    BrewUpgrade,
+    Release,
+}
+
+/// brew가 있고 gh가 없거나 brew 것이면 brew, 그 밖엔 공식 릴리스(기존 gh는 둔다).
+pub fn choose_route(brew_prefix: Option<&Path>, current_gh: Option<&Path>) -> InstallRoute {
+    match (brew_prefix, current_gh) {
+        (None, _) => InstallRoute::Release,
+        (Some(_), None) => InstallRoute::BrewInstall,
+        (Some(prefix), Some(gh)) if gh.starts_with(prefix) => InstallRoute::BrewUpgrade,
+        _ => InstallRoute::Release,
+    }
+}
+
+fn progress(app: &AppHandle, line: &str) {
+    let _ = app.emit(
+        "github-install-progress",
+        serde_json::json!({ "line": line }),
+    );
+}
+
+fn run_brew(cmd: &str, cancel: &AtomicBool, app: &AppHandle) -> Result<(), String> {
+    let mut last = String::new();
+    let r = shell_run(cmd, INSTALL_TIMEOUT, cancel, &mut |line| {
+        if !line.trim().is_empty() {
+            last = line.trim().to_string();
+        }
+        progress(app, line);
+    })
+    .map_err(|e| format!("brew를 실행하지 못했어요: {e}"))?;
+    for line in r.stdout.lines() {
+        progress(app, line);
+    }
+    if r.cancelled {
+        Err("취소됨".into())
+    } else if r.timed_out {
+        Err("설치 시간이 끝났어요(10분).".into())
+    } else if r.code == Some(0) {
+        Ok(())
+    } else if last.is_empty() {
+        Err(format!("brew가 실패했어요(종료 코드 {:?}).", r.code))
+    } else {
+        Err(last)
+    }
+}
+
+/// `max`바이트를 넘거나 취소되면 멈추고 실패.
+async fn fetch(
+    client: &reqwest::Client,
+    url: &str,
+    max: usize,
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>, String> {
+    let net = |e: reqwest::Error| format!("gh를 받지 못했어요: {e}");
+    let mut resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(net)?
+        .error_for_status()
+        .map_err(net)?;
+    let too_big = || format!("받는 파일이 너무 커요({}MB 넘음).", max / 1024 / 1024);
+    if resp.content_length().is_some_and(|n| n > max as u64) {
+        return Err(too_big());
+    }
+    let mut buf = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(net)? {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("취소됨".into());
+        }
+        buf.extend_from_slice(&chunk);
+        if buf.len() > max {
+            return Err(too_big());
+        }
+    }
+    Ok(buf)
+}
+
+/// 공식 릴리스 zip을 받아 체크섬을 확인하고 앱 폴더에 둔다.
+async fn install_release(
+    app: &AppHandle,
+    app_data: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("ieum-desktop")
+        .timeout(INSTALL_TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let json = fetch(&client, LATEST_RELEASE, MAX_SMALL, cancel).await?;
+    let (tag, zip_url, zip_name, sums_url) =
+        release_assets(&String::from_utf8_lossy(&json), std::env::consts::ARCH)?;
+    progress(app, &format!("gh {tag} 받는 중…"));
+    let zip = fetch(&client, &zip_url, MAX_ZIP, cancel).await?;
+    let sums = fetch(&client, &sums_url, MAX_SMALL, cancel).await?;
+    progress(app, "검증 중…");
+    let sha = checksum_for(&String::from_utf8_lossy(&sums), &zip_name)
+        .ok_or("체크섬 목록에 gh 파일이 없어요.")?;
+    let app_data = app_data.to_path_buf();
+    blocking(move || install_from_zip(&zip, &sha, &app_data)).await??;
+    progress(app, "설치 완료");
+    Ok(())
+}
+
+/// [설치]·[업데이트]. brew가 있으면 brew로, 아니면 공식 릴리스를 앱 폴더에.
+#[tauri::command]
+pub async fn github_install(
+    app: AppHandle,
+    active: State<'_, Active>,
+    jobs: State<'_, GithubJobs>,
+) -> Result<GithubStatus, String> {
+    let app_data = active.app_data().to_path_buf();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let _job = JobGuard::start(&jobs, JobKind::Install, cancel.clone())?;
+    let (brew, current) = blocking(|| {
+        let line = |cmd| {
+            shell_output(cmd, STATUS_TIMEOUT)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .map(PathBuf::from)
+        };
+        (line("brew --prefix"), line("command -v gh"))
+    })
+    .await?;
+    match choose_route(brew.as_deref(), current.as_deref()) {
+        InstallRoute::Release => install_release(&app, &app_data, &cancel).await?,
+        route => {
+            let cmd = if route == InstallRoute::BrewInstall {
+                "brew install gh"
+            } else {
+                "brew upgrade gh"
+            };
+            let app = app.clone();
+            blocking(move || run_brew(cmd, &cancel, &app)).await??;
+        }
+    }
+    let ad = app_data.clone();
+    if let Err(s) = blocking(move || find_gh(&ad)).await? {
+        return Err(match s {
+            GithubStatus::Outdated { version } => {
+                format!("설치했지만 gh가 2.81.0보다 낮아요(gh {version}).")
+            }
+            _ => "설치했지만 gh를 찾지 못했어요.".into(),
+        });
+    }
+    status_of(&active).await
+}
