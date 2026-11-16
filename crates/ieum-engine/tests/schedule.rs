@@ -240,3 +240,103 @@ fn output_shape() {
         json!({"triggeredAt": "2026-11-17T09:00:00", "cron": "0 9 * * 5"})
     );
 }
+
+/// `from`에서 이어지는 다음 차례 n개.
+fn nexts(s: &Schedule, from: &str, n: usize) -> Vec<DateTime<Utc>> {
+    let mut t = utc(from);
+    (0..n)
+        .map(|_| {
+            t = s.next_after(t).unwrap();
+            t
+        })
+        .collect()
+}
+
+fn utcs(list: &[&str]) -> Vec<DateTime<Utc>> {
+    list.iter().map(|s| utc(s)).collect()
+}
+
+// 아래 기대값은 Quartz 2.5.2 CronExpression과 대조한 리뷰 결과.
+
+#[test]
+fn quartz_start_step() {
+    // Unix '0/15' = 0분부터 15분마다
+    let s = sched(&to_quartz("0/15 * * * *").unwrap());
+    assert_eq!(
+        nexts(&s, "2026-11-16T00:07:00Z", 2),
+        utcs(&["2026-11-16T00:15:00Z", "2026-11-16T00:30:00Z"])
+    );
+    // 토 09:00 KST → 월 09:00·09:15
+    let s = sched("0 0/15 9-17 ? * MON-FRI");
+    assert_eq!(
+        nexts(&s, "2026-11-14T00:00:00Z", 2),
+        utcs(&["2026-11-16T00:00:00Z", "2026-11-16T00:15:00Z"])
+    );
+    // 1일부터 5일마다 12시: 16일 13시 → 21일 12시
+    let s = sched("0 0 12 1/5 * ?");
+    assert_eq!(
+        nexts(&s, "2026-11-16T04:00:00Z", 1),
+        utcs(&["2026-11-21T03:00:00Z"])
+    );
+}
+
+#[test]
+fn weekday_range_wraps() {
+    let weekend = utcs(&[
+        "2026-11-21T01:00:00Z",
+        "2026-11-22T01:00:00Z",
+        "2026-11-28T01:00:00Z",
+    ]);
+    let s = sched(&to_quartz("0 10 * * 6-7").unwrap());
+    assert_eq!(nexts(&s, "2026-11-16T00:00:00Z", 3), weekend);
+    let s = sched("0 0 10 ? * SAT-SUN");
+    assert_eq!(nexts(&s, "2026-11-16T00:00:00Z", 3), weekend);
+    let daily = utcs(&[
+        "2026-11-17T00:00:00Z",
+        "2026-11-18T00:00:00Z",
+        "2026-11-19T00:00:00Z",
+        "2026-11-20T00:00:00Z",
+        "2026-11-21T00:00:00Z",
+        "2026-11-22T00:00:00Z",
+        "2026-11-23T00:00:00Z",
+    ]);
+    let s = sched(&to_quartz("0 9 * * 1-7").unwrap());
+    assert_eq!(nexts(&s, "2026-11-16T00:00:00Z", 7), daily);
+    let s = sched("0 0 9 ? * MON-SUN");
+    assert_eq!(nexts(&s, "2026-11-16T00:00:00Z", 7), daily);
+    // 금·토·일·월
+    let s = sched("0 0 9 ? * FRI-MON");
+    assert_eq!(
+        nexts(&s, "2026-11-17T00:00:00Z", 4),
+        utcs(&[
+            "2026-11-20T00:00:00Z",
+            "2026-11-21T00:00:00Z",
+            "2026-11-22T00:00:00Z",
+            "2026-11-23T00:00:00Z",
+        ])
+    );
+}
+
+#[test]
+fn weekday_l_alone_is_saturday() {
+    let s = sched("0 0 9 ? * L");
+    assert_eq!(
+        nexts(&s, "2026-11-16T00:00:00Z", 2),
+        utcs(&["2026-11-21T00:00:00Z", "2026-11-28T00:00:00Z"])
+    );
+}
+
+#[test]
+fn unsupported_quartz_rejected() {
+    for q in ["0 0 9 ? * 2#1,6#3", "0 0 9 ? * 6L,2", "0 0 9 L-3 * ?"] {
+        assert!(Schedule::parse(q).is_err(), "{q}");
+    }
+    let e = Schedule::parse("0 0 9 L-3 * ?").unwrap_err();
+    assert!(e.0.contains("지원하지 않는 cron 형식"), "{e:?}");
+}
+
+#[test]
+fn unix_weekday_single_digit_only() {
+    assert!(to_quartz("0 9 * * 07").is_err());
+    assert!(to_quartz("0 9 * * 00").is_err());
+}

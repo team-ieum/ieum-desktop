@@ -216,10 +216,11 @@ fn under(loc: &str, p: &str) -> bool {
 
 // ── 그래프 ─────────────────────────────────────────────
 
-/// SCHEDULE 트리거(`schedule.*`)의 `config.cron`. 비어 있으면 REQUIRED 몫.
+/// SCHEDULE 트리거의 `config.cron`. 비어 있으면 REQUIRED 몫.
 /// agent와 같은 필드 수(5·6·7)·문자 집합에 더해, 데스크톱은 실제로 계산할 수 있는지(`to_quartz`)까지 본다.
-fn cron_error(node: &Node, nid: &str) -> Option<ValidationError> {
-    if !node.event.starts_with("schedule.") {
+fn cron_error(node: &Node, nid: &str, catalog: &Catalog) -> Option<ValidationError> {
+    // 카탈로그가 trigger_type을 읽지 않는다 — SCHEDULE 정의 = 카탈로그에 있는 `schedule.*` 5개.
+    if !node.event.starts_with("schedule.") || catalog.get(&node.event).is_none() {
         return None;
     }
     let cron = node.config.get("cron")?;
@@ -285,7 +286,7 @@ fn graph_errors(nodes: &[Node], edges: &[Edge], catalog: &Catalog) -> Vec<Valida
             )),
             Some(t) if t.to_uppercase() == "TRIGGER" => {
                 triggers.push(nid);
-                errors.extend(cron_error(node, nid));
+                errors.extend(cron_error(node, nid, catalog));
             }
             Some(_) => {}
         }

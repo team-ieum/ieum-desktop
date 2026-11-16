@@ -80,3 +80,43 @@ fn cron_code_serializes() {
         json!("CRON")
     );
 }
+
+#[test]
+fn cron_quartz_start_step_valid() {
+    let catalog = Catalog::embedded().unwrap();
+    for cron in ["0 0/5 * * * ?", "0/5 * * * *", "0 0 9 ? * MON/2"] {
+        let errors = validate(&wf("schedule.every", json!({"cron": cron})), &catalog);
+        assert!(errors.is_empty(), "{cron}: {errors:?}");
+    }
+}
+
+#[test]
+fn cron_message_like_agent() {
+    let catalog = Catalog::embedded().unwrap();
+    let errors = validate(&wf("schedule.every", json!({"cron": "0 9 * *"})), &catalog);
+    assert_eq!(
+        errors[0].message,
+        "cron 표현식 '0 9 * *'이 올바르지 않습니다(5필드 또는 Quartz 6·7필드)."
+    );
+    let errors = validate(&wf("schedule.every", json!({"cron": 42})), &catalog);
+    assert_eq!(errors[0].message, "cron 표현식은 문자열이어야 합니다.");
+}
+
+#[test]
+fn cron_checked_only_on_schedule_triggers() {
+    let catalog = Catalog::embedded().unwrap();
+    let bad = json!({"cron": "0 9 1 * 1"});
+    // agent처럼 SCHEDULE 트리거면 칸 event라도 config.cron을 본다
+    let errors = validate(&wf("schedule.hourly", bad.clone()), &catalog);
+    assert_eq!(cron_errors(&errors), [("t", "config.cron")]);
+    for event in ["manual.run", "schedule.foo"] {
+        let errors = validate(&wf(event, bad.clone()), &catalog);
+        assert!(cron_errors(&errors).is_empty(), "{event}: {errors:?}");
+    }
+    let not_trigger: Workflow = serde_json::from_value(json!({
+        "nodes": [{"id": "t", "type": "ACTION", "event": "schedule.every", "config": bad}],
+        "edges": []
+    }))
+    .unwrap();
+    assert!(cron_errors(&validate(&not_trigger, &catalog)).is_empty());
+}

@@ -152,9 +152,10 @@ fn to_quartz_days(dow: &str) -> Result<String, CronError> {
         if prev == Some('/') {
             out.push_str(&num);
         } else {
-            let n: u32 = num
-                .parse()
-                .ok()
+            // BE처럼 한 글자(0~7)만 — `07`·`00`은 거절.
+            let n: u32 = Some(&num)
+                .filter(|n| n.len() == 1)
+                .and_then(|n| n.parse().ok())
                 .filter(|n| *n <= 7)
                 .ok_or_else(|| CronError(format!("요일은 0~7이어야 합니다: {dow}")))?;
             out.push_str(&(n % 7 + 1).to_string());
@@ -162,6 +163,46 @@ fn to_quartz_days(dow: &str) -> Result<String, CronError> {
         prev = Some(c);
     }
     Ok(out)
+}
+
+const QUARTZ_DAYS: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+
+/// Quartz 요일 필드(대문자)를 croner가 같은 뜻으로 읽게 고친다. croner와 뜻이 갈리는 꼴은 None.
+/// - `L` 단독 = 토요일(7).
+/// - 넘어가는 범위(`FRI-MON`, `7-1`)는 `6-7,1-2`로 편다(croner는 거절하거나 다르게 읽는다).
+/// - `#`·`L`이 든 목록(`2#1,6#3`)은 Quartz도 거절한다.
+fn quartz_dow(dow: &str) -> Option<String> {
+    if dow == "L" {
+        return Some("7".into());
+    }
+    let parts: Vec<&str> = dow.split(',').collect();
+    if parts.len() > 1 && parts.iter().any(|p| p.contains('#') || p.contains('L')) {
+        return None;
+    }
+    let num = |s: &str| -> Option<u32> {
+        match QUARTZ_DAYS.iter().position(|d| *d == s) {
+            Some(i) => Some(i as u32 + 1),
+            None => s.parse().ok(),
+        }
+    };
+    let mut out = Vec::new();
+    for part in parts {
+        let (range, step) = match part.split_once('/') {
+            Some((r, s)) => (r, Some(s)),
+            None => (part, None),
+        };
+        match range.split_once('-').map(|(a, b)| (num(a), num(b))) {
+            Some((Some(a), Some(b))) if a > b => {
+                // ponytail: 넘어가는 범위에 간격(`FRI-MON/2`)은 드물어 펴지 않고 거절
+                if step.is_some() {
+                    return None;
+                }
+                out.push(format!("{a}-7,1-{b}"));
+            }
+            _ => out.push(part.to_string()),
+        }
+    }
+    Some(out.join(","))
 }
 
 /// 파싱된 Quartz 식. 계산은 Asia/Seoul 벽시계 기준.
@@ -181,12 +222,21 @@ impl Schedule {
         {
             return Err(bad());
         }
+        let unsupported = || CronError(format!("지원하지 않는 cron 형식이에요: {quartz}"));
+        // 말일 n일 전(L-n)은 croner가 계산하지 못한다.
+        if fields[3].contains("L-") {
+            return Err(unsupported());
+        }
+        let mut fields: Vec<String> = fields.iter().map(|f| f.to_uppercase()).collect();
+        fields[5] = quartz_dow(&fields[5]).ok_or_else(unsupported)?;
         let cron = CronParser::builder()
             .seconds(Seconds::Required)
             .year(Year::Optional)
             .alternative_weekdays(true)
+            // Quartz의 `0/15`(시작/간격)
+            .sloppy_ranges(true)
             .build()
-            .parse(quartz)
+            .parse(&fields.join(" "))
             .map_err(|_| bad())?;
         Ok(Schedule(cron))
     }
