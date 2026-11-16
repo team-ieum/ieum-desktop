@@ -319,3 +319,14 @@ test("test_undo_failure_shows_paths_on_canvas", async () => {
   expect(screen.getByText("테스트가 옮긴 파일을 되돌리지 못했어요")).toBeTruthy();
   expect(screen.getByText("/in/a.pdf → /out/a.pdf")).toBeTruthy();
 });
+
+test("enable_switch_hidden_for_manual_trigger", async () => {
+  const trig = (event: string, config: Record<string, unknown>): WfNode => ({ id: "t", event, type: "TRIGGER", label: "t", config, position: { x: 0, y: 0 } });
+  await openSaved(entry([trig("manual.run", {})], "v1"));
+  expect(screen.queryByRole("switch", { name: "활성" })).toBeNull();
+  for (const n of [trig("schedule.daily", { hour: "9" }), trig("local.folder_new_file", { folder: "/in" })]) {
+    cleanup();
+    await openSaved(entry([n], "v1"));
+    expect(screen.getByRole("switch", { name: "활성" })).toBeTruthy();
+  }
+});
