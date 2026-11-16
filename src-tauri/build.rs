@@ -69,6 +69,15 @@ const COMMANDS: &[&str] = &[
     "chat_send",
     "chat_pick_folder",
     "list_models",
+    "answer_http_confirm",
+    // ── 설정 > 연동: GitHub(gh CLI) ──
+    "github_status",
+    "github_connect",
+    "github_disconnect",
+    "github_cancel",
+    "github_open_device",
+    "github_install",
+    "github_job",
 ];
 
 fn main() {
