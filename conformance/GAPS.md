@@ -18,7 +18,8 @@
 - 분기 설정 오류(예약어 key·모르는 연산자 등)는 검증 에러가 아니라 실행 시 노드 FAILED.
 - `NOT_RUN` — 실패 뒤 남은 노드 상태. BE는 기록을 남기지 않을 뿐 이름이 없다(묶음 형식이 정한 이름).
 - 갈래 `name`은 `ref: false`라 검증이 막지만, BE는 config 전체를 치환하므로 검증을 건너뛰면 이름도 치환된다.
-- 정적 검증 중 `REQUIRED`·`TYPE`·`CHOICE`·`CRON`·`TOO_LARGE`는 1단계 러스트 범위 밖 — 묶음 워크플로우는 이 규칙에 걸리지 않게 만들었다.
+- 정적 검증 중 `REQUIRED`·`TYPE`·`CHOICE`·`TOO_LARGE`는 1단계 러스트 범위 밖 — 묶음 워크플로우는 이 규칙에 걸리지 않게 만들었다. `CRON`은 스케줄 트리거(1b)와 함께 옮겼다(`crates/ieum-engine/tests/validate_schedule.rs`).
+- 스케줄 칸→cron·5필드 변환은 트리거 출력을 바깥에서 넣는 묶음 형식으로는 대조할 수 없어, 엔진 단위 테스트에 BE 대조표로 고정했다(`crates/ieum-engine/tests/schedule.rs`).
 
 ## 의도된 차이(carry) — 러스트가 BE와 다르게 두는 곳
 
@@ -61,3 +62,17 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | f64 범위를 넘는 숫자가 든 JSON 글(`[1e99999]`·`{"a": -1e400}`): `BigDecimal`로 읽어 폄 → `목록 속 숫자가 너무 커요`(TOO_LARGE)로 실패. 그 밖의 파싱 실패(뒤에 글자가 남음·깨진 JSON)는 BE처럼 쉼표로 나눈다. 범위 초과는 serde_json 오류 문구(`number out of range`)로 가린다 | `formatter_list.rs` `numbers_beyond_f64_fail`, `formatter/inputs.rs` `out_of_range_message_is_pinned` |
 
 실수 표기·이스케이프 차이는 참조식 치환 결과 문자열에만 나타난다(조건 비교는 `java_num`으로 Java 표기를 따른다). u64를 넘는 정수는 읽는 순간 f64가 되므로 조건 비교에도 나타난다.
+
+## 스케줄 트리거(1b) — 데스크톱이 클라우드(Quartz)와 다르게 도는 곳
+
+차이 칸은 `클라우드 → 데스크톱`. 시각은 모두 Asia/Seoul(Mac 시간대와 무관).
+
+| event | 칸 | 차이 | 고정 테스트 |
+|---|---|---|---|
+| `schedule.*` | — | 놓친 차례: 서버가 늘 떠 있어 놓치지 않고, 놓치면 건너뜀 → Mac이 잠들었거나 앱이 꺼져 놓친 차례는 가장 최근 하나만, 그 차례에서 2시간 안이면 깨어난 뒤 한 번 실행. 2시간을 넘으면 건너뛰고 기록만 넘긴다 | `src-tauri/tests/supervisor.rs` `missed_within_grace_once`·`missed_beyond_grace_none` |
+| `schedule.*` | — | 시계가 뒤로 감: 해당 없음 → 마지막 차례보다 2시간 안으로 뒤면 기록을 그대로 둬 이미 돈 차례를 다시 돌지 않고, 2시간보다 크게 뒤면 기록을 지금으로 맞춘다. 그 확인에서는 실행하지 않는다 | `supervisor.rs` `clock_back_small_keeps_slot`·`clock_back_resets_slot` |
+| `schedule.*` | — | 도는 조건: 서버에서 늘 → 앱이 켜져 있고 로그인한(활성) 계정의 켜진 워크플로우만. 다른 계정으로 바꿨다 돌아오면 앱 재시작과 같게 친다(유예 안의 놓친 차례는 한 번). 처음 켠·다시 켠·트리거 칸을 바꾼 워크플로우는 지난 차례를 돌리지 않고 지금부터 센다 | `supervisor.rs` `first_enable_no_backfill`·`reenable_starts_now`·`trigger_change_starts_now`·`restart_no_duplicate` |
+| `schedule.*` | — | 겹침: Quartz 잡이 따로 돈다 → 같은 워크플로우가 실행 중·대기 중이면 그 차례는 건너뜀(기록 없이 앱 로그만) | `supervisor.rs` `overlap_skips` |
+| `schedule.*` | 출력 `triggeredAt` | `LocalDateTime.now().format(ISO_LOCAL_DATE_TIME)`라 소수 초까지(`2026-11-17T09:00:00.123456`) → 초까지(`2026-11-17T09:00:00`). 뜻은 같다 | `crates/ieum-engine/tests/schedule.rs` `output_shape` |
+| `schedule.every` | `cron` | 데스크톱만 거절하는 식: 일 자리 `L-n`(말일 n일 전)은 Quartz가 계산 → `지원하지 않는 cron 형식이에요`. 넘어가는 요일 범위에 간격(`FRI-MON/2`)도 데스크톱만 거절. 넘어가는 범위만(`FRI-MON`·Unix `6-7`)과 요일 자리 `L` 단독(토요일)은 같다 | `schedule.rs` `unsupported_quartz_rejected`·`weekday_range_wraps`·`weekday_l_alone_is_saturday` |
+| `schedule.every` | `cron` | 둘 다 거절해 같은 것: 요일 목록에 `#`·`L`이 섞인 `,`(`2#1,6#3`·`6L,2`), 일·요일이 둘 다 지정되거나 둘 다 `?`인 Quartz 식, 일·요일을 둘 다 지정한 Unix 5필드, 두 자리 Unix 요일(`07`·`00`), 이름 요일에 간격(Unix `MON/2`) | `schedule.rs` `unsupported_quartz_rejected`·`unix_weekday_single_digit_only`·`quartz_features`·`to_quartz_matches_be` |

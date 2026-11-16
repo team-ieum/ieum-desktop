@@ -244,6 +244,8 @@ async fn guide_is_fixed_text() {
         "schedule.daily",
         "manual.run",
         "Asia/Seoul",
+        "MON~SUN",
+        r#""1"~"28" 또는 "L""#,
     ] {
         assert!(GUIDE.contains(must), "{must}");
     }
@@ -270,6 +272,31 @@ async fn pending_does_not_clear_a_newer_pending() {
     });
     assert!(b.pending(W).is_none()); // 읽은 저장본(D1)과는 다르다
     assert!(b.pending(W).is_some()); // P2는 그대로
+}
+
+/// 스케줄 워크플로우는 [켜기]이고 폴더 칸이 없다.
+#[tokio::test]
+async fn schedule_finish_button_is_enable() {
+    let h = MemHost::with(
+        W,
+        json!({
+            "nodes": [
+                {"id": "t", "type": "TRIGGER", "event": "schedule.daily", "config": {"hour": "9"}},
+                {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "p"}}
+            ],
+            "edges": [{"source": "t", "target": "a"}]
+        }),
+    );
+    h.put_doc(W, |d| d.enabled = false);
+    h.set_ai_ok(true);
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(&b, finish()).await;
+    assert!(r.ok, "{r:?}");
+    let wire = serde_json::to_value(b.pending(W).unwrap()).unwrap();
+    assert_eq!(
+        (&wire["folder"], &wire["button"]),
+        (&json!(null), &json!("enable"))
+    );
 }
 
 /// 수동 실행 워크플로우는 확인 카드가 [저장], 폴더 칸이 없다. 사람이 누르면 켜짐으로 저장.

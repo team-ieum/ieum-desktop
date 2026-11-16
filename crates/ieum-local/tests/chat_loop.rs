@@ -561,6 +561,8 @@ fn instruction_is_local() {
         "schedule.daily",
         "manual.run",
         "Asia/Seoul",
+        "MON~SUN",
+        r#""1"~"28" 또는 "L""#,
         "{{nodes.<노드 id>.output.<이름>}}",
         "pick-folder",
         "awaiting_user",

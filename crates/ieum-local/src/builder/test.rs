@@ -92,6 +92,7 @@ impl Builder {
             return Err(Reply::err_with(Code::Invalid, json!({"errors": errors})));
         }
         // 검증을 통과했으니 트리거는 하나다. 폴더 트리거면 그 폴더 칸이 차 있다.
+        // 스케줄·수동 트리거는 파일 없이 트리거 출력을 만든다 — `file`이 넘어와도 무시한다.
         let trigger = sub
             .nodes
             .iter()

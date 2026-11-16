@@ -411,6 +411,7 @@ fn non_folder_wf(event: &str, config: Value) -> Value {
 async fn node_test_schedule_no_folder() {
     for (event, config) in [
         ("schedule.daily", json!({"hour": "9"})),
+        ("schedule.every", json!({"cron": "0 9 * * 5"})),
         ("manual.run", json!({})),
     ] {
         let h = MemHost::with(W, non_folder_wf(event, config));
@@ -427,7 +428,13 @@ async fn node_test_schedule_no_folder() {
         } else {
             let at = out["triggeredAt"].as_str().unwrap();
             assert_eq!(at.len(), "2026-11-17T09:00:00".len(), "{at}");
-            assert_eq!(out.len(), 1);
+            if event == "schedule.every" {
+                // cron은 사용자가 쓴 원문 그대로(Quartz로 바꾸지 않는다)
+                assert_eq!(out["cron"], "0 9 * * 5");
+                assert_eq!(out.len(), 2);
+            } else {
+                assert_eq!(out.len(), 1);
+            }
         }
     }
 }

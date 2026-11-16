@@ -1064,7 +1064,7 @@ impl Supervisor {
 
     /// 지금 실행(같은 줄을 탄다, 기록 trigger = Manual). 끝나면 run_id.
     /// 폴더 트리거는 `file`이 필수 — 그 워크플로우의 허용 폴더 안 일반 파일(심볼릭 링크 아님).
-    /// 스케줄은 지금 시각 출력, 수동은 빈 출력으로 `file` 없이 돈다.
+    /// 스케줄은 지금 시각 출력, 수동은 빈 출력으로 `file` 없이 돈다 — 이때 `file`이 넘어와도 무시한다.
     pub async fn run_now(&self, workflow_id: &str, file: Option<&Path>) -> Result<String, String> {
         let wf = self.store().get_workflow(workflow_id)?;
         let trigger = match trigger_kind(&wf) {
