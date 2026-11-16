@@ -58,6 +58,9 @@ test("schedule_card_summaries", () => {
   expect(sched("schedule.every", { cron: "0 9 * * 5" }).triggerDetail).toBe("cron 0 9 * * 5");
   expect(sched("schedule.daily", { hour: "9" }).trigger).toBe("schedule");
   expect(sched("manual.run", {}).trigger).toBe("manual");
+  // 수동 실행은 켜고 끌 스위치가 없다 — 꺼진 채 저장돼도 "활성".
+  expect(localCard(entry({ enabled: false, workflow: { nodes: [{ id: "t", event: "manual.run", config: {} }], edges: [] } })).status).toBe("active");
+  expect(localCard(entry({ enabled: false })).status).toBe("paused");
 });
 
 test("schedule_card_shows_next_run", () => {

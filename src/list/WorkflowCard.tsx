@@ -2,7 +2,7 @@ import { Boxes, FolderOpen, History, Rocket, Webhook, Zap, type LucideIcon } fro
 import type { ReactNode } from "react";
 import type { WebWorkflowSummary, WfNode, WorkflowEntry } from "../api";
 import { choiceLabel, t } from "../i18n";
-import { ago } from "../shell/Sidebar";
+import { ago, localOn } from "../shell/Sidebar";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { ServiceIcons } from "./ServiceIcons";
 
@@ -59,7 +59,7 @@ export function localCard(w: WorkflowEntry): CardData {
     id: w.id,
     name: w.name,
     source: "local",
-    status: w.enabled ? (w.watch === "watch_error" ? "error" : "active") : "paused",
+    status: localOn(w) ? (w.watch === "watch_error" ? "error" : "active") : "paused",
     services,
     nodeCount: nodes.length,
     trigger: watch ? "watch" : schedule ? "schedule" : "manual",

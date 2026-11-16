@@ -12,6 +12,9 @@ const time = (iso: string) => {
   return Number.isNaN(n) ? 0 : n;
 };
 
+/** 켜짐으로 보이는가 — 수동 실행 워크플로우는 끌 스위치가 없어 늘 켜짐. */
+export const localOn = (w: WorkflowEntry) => w.enabled || w.workflow.nodes.some((n) => n.event === "manual.run");
+
 /** 최근 작업 5개 — 내 PC·웹 이음을 수정 시각 내림차순으로 섞는다. */
 export function recentItems(local: WorkflowEntry[], web: WebWorkflowSummary[], pending: Record<string, unknown> = {}): RecentItem[] {
   return [
@@ -20,7 +23,7 @@ export function recentItems(local: WorkflowEntry[], web: WebWorkflowSummary[], p
       id: w.id,
       name: w.name,
       at: w.updatedAt,
-      dot: w.watch === "watch_error" ? "error" : w.enabled ? "active" : "paused",
+      dot: w.watch === "watch_error" ? "error" : localOn(w) ? "active" : "paused",
       pending: w.id in pending,
     })),
     ...web.map((w): RecentItem => ({ kind: "web", id: w.id, name: w.name, at: w.updatedAt ?? "", dot: w.active ? "active" : "paused" })),
