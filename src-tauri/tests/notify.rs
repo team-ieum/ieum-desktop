@@ -299,3 +299,17 @@ fn undo_failed_notice_skipped_only_when_banner_is_visible() {
         "Couldn't put files back after the test"
     );
 }
+
+#[test]
+fn notify_schedule_like_watch() {
+    let n = notice(RunTrigger::Schedule, finished(true, None));
+    assert_eq!(route(&n, &ALL, false, Lang::Ko), Route::Batch);
+    assert_eq!(route(&n, &ALL, true, Lang::Ko), Route::Drop);
+    let off = Prefs {
+        watch_end: false,
+        ..ALL
+    };
+    assert_eq!(route(&n, &off, false, Lang::Ko), Route::Drop);
+    let started = notice(RunTrigger::Schedule, NoticeKind::Started);
+    assert_eq!(route(&started, &ALL, false, Lang::Ko), Route::Drop);
+}
