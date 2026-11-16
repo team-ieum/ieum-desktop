@@ -115,7 +115,7 @@ fn extract_pattern(i: &In, _: DateTime<Utc>) -> Out {
 
 /// 앞·뒤 확인이 역추적마다 글 끝까지 훑으면 상한 안에서도 10초를 넘는다 — BE처럼 1초에서 끊는다.
 /// 작업은 마감 시각을 받아 찾기 사이마다 확인한다.
-// ponytail: 끊긴 스레드는 진행 중인 찾기 한 번을 끝까지 돈다(역추적 상한까지, 최악 십여 초 CPU) —
+// ponytail: 끊긴 스레드는 진행 중인 찾기 한 번을 끝까지 돈다(역추적 상한까지, release 실측 최악 약 4.5초 CPU) —
 // 동시에 MAX_RUNNING개까지만 두고 넘으면 바로 실패시킨다. 찾기 도중 취소가 필요하면 엔진 교체.
 fn capped(job: impl FnOnce(Instant) -> Out + Send + 'static) -> Out {
     // 패턴 잘못이 아니다 — 코드를 비워 AI 빌더가 멀쩡한 패턴을 고치려 들지 않게.
@@ -144,6 +144,11 @@ const LINE_START: &str = r"(?:(?:\A|(?<=[\n\x{85}\x{2028}\x{2029}])|(?<=\r)(?!\n
 /// 사용자 패턴에 역추적 문법이 없을 때의 상한 — 우리 번역(상수 폭 둘러보기)만으로는 폭주하지 않는다.
 /// 10만 자 여러 줄 글(줄 80자)의 번역된 `.+$`가 release 약 0.18초(실측), 1천만은 부족.
 const EASY_BACKTRACK_LIMIT: usize = 50_000_000;
+/// 중첩 반복 횟수의 곱 — 반복 한 번마다 그 폭을 훑어 역추적 한 번이 비싸다(재리뷰 2 실측).
+/// 넘으면 패턴 오류: 1백만 상한에서도 버려진 스레드가 수 초 넘게 돈다.
+const MAX_REPEAT: u64 = 1_000;
+/// 이 이상이면 5천만이 아니라 1백만 상한.
+const HARD_REPEAT: u64 = 32;
 /// 유니코드 일반 범주 — Java `\p{..}`와 뜻이 같다.
 const CATEGORIES: &[&str] = &[
     "L", "Lu", "Ll", "Lt", "Lm", "Lo", "LC", "M", "Mn", "Mc", "Me", "N", "Nd", "Nl", "No", "P",
@@ -214,6 +219,9 @@ fn java_regex(p: &str, input: &str) -> Result<(String, bool), String> {
     let mut res = String::with_capacity(p.len() * 2);
     // 그룹마다 (멀티라인, DOTALL).
     let mut flags = vec![(false, false)];
+    // 그룹마다 안에서 가장 큰 반복 횟수 곱 / 바로 앞 토큰의 곱 — 거친 상한이다.
+    let mut reps = vec![1u64];
+    let mut last = 1u64;
     let mut class = 0usize;
     let mut hard = false;
     // 바로 앞 토큰이 수량자인가 / 클래스에서 지금 `&&`의 한쪽이 비었는가(여는 괄호·`&&` 바로 뒤).
@@ -222,6 +230,7 @@ fn java_regex(p: &str, input: &str) -> Result<(String, bool), String> {
     while i < cs.len() {
         let c = cs[i];
         i += 1;
+        let prev = std::mem::replace(&mut last, 1);
         let (multi, dotall) = *flags.last().unwrap();
         let after_quant = std::mem::take(&mut quant);
         let empty = std::mem::take(&mut side_empty);
@@ -395,6 +404,8 @@ fn java_regex(p: &str, input: &str) -> Result<(String, bool), String> {
                             'm' => f.0 = on,
                             's' => f.1 = on,
                             'i' | 'u' => {}
+                            // 끄는 쪽은 Java도 기본값이라 뜻이 같다.
+                            'x' if !on => {}
                             c => return Err(format!("지원하지 않는 플래그예요: {c}")),
                         }
                         k += 1;
@@ -410,17 +421,30 @@ fn java_regex(p: &str, input: &str) -> Result<(String, bool), String> {
                 } else if cs.get(i) == Some(&'?') {
                     // `(?=` `(?!` `(?<=` `(?<!` `(?>` — 사용자 둘러보기·원자 그룹.
                     let k: String = cs[i + 1..].iter().take(2).collect();
-                    hard |= k.starts_with(['=', '!', '>']) || k == "<=" || k == "<!";
+                    let look = k.starts_with(['=', '!', '>']) || k == "<=" || k == "<!";
+                    let named =
+                        k.starts_with('<') && k[1..].starts_with(|c: char| c.is_ascii_alphabetic());
+                    // Java가 받는 모양만 — 나머지(`(?~` `(?(` `(?#` `(?'`)는 러스트가 다르게 읽는다.
+                    if !(look || named || k.starts_with(':')) {
+                        return Err(format!("Java에 없는 그룹 문법이에요: (?{k}"));
+                    }
+                    hard |= look;
                     res.push_str("(?");
                     i += 1;
+                } else if cs.get(i) == Some(&'*') {
+                    return Err("Java에 없는 그룹 문법이에요: (*".into());
                 } else {
                     res.push('(');
                 }
                 flags.push(f);
+                reps.push(1);
             }
             ')' => {
                 if flags.len() > 1 {
                     flags.pop();
+                    last = reps.pop().unwrap();
+                    let top = reps.last_mut().unwrap();
+                    *top = (*top).max(last);
                 }
                 res.push(')');
             }
@@ -450,11 +474,23 @@ fn java_regex(p: &str, input: &str) -> Result<(String, bool), String> {
                 res.push('}');
                 i = end.unwrap() + 1;
                 quant = true;
+                let n = match body.split_once(',') {
+                    Some((_, hi)) if !hi.is_empty() => hi,
+                    _ => lo,
+                };
+                last = prev.saturating_mul(n.parse::<u64>().unwrap_or(u64::MAX).max(1));
+                if last > MAX_REPEAT {
+                    return Err("반복 횟수가 너무 커요".into());
+                }
+                hard |= last >= HARD_REPEAT;
+                let top = reps.last_mut().unwrap();
+                *top = (*top).max(last);
             }
             '*' | '+' | '?' => {
                 // 수량자 바로 뒤 `+`는 소유격.
                 hard |= after_quant && c == '+';
                 quant = true;
+                last = prev;
                 res.push(c);
             }
             c => res.push(c),

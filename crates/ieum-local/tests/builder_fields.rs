@@ -553,6 +553,37 @@ async fn http_set_keeps_values_behind_hidden_marks() {
     assert_eq!(h.saves(), saves);
 }
 
+/// 숨김 표시를 섞은 새 값은 거절 — 조용히 옛 값을 지키거나 표시 글자를 저장하지 않는다.
+#[tokio::test]
+async fn http_set_rejects_values_mixing_hidden_marks() {
+    let url = "http://api.example.com/v1/items?token=QSECRET";
+    let h = MemHost::with(W, http_node(url));
+    let b = Builder::new(h.clone()).unwrap();
+    for values in [
+        json!({"url": "https://staging.example.com/(숨김)"}),
+        json!({"url": "http://api.example.com/(숨김)?page=2"}),
+        json!({"url": "https://api.example.com/(숨김)"}),
+        json!({"headers": {"Authorization": "Bearer (숨김)"}}),
+        json!({"body": {"k": "(숨김)"}}),
+        json!({"body": "{\"k\": [\"(숨김)\"]}"}),
+        json!({"body": "앞 (숨김: object)"}),
+    ] {
+        assert_eq!(
+            run(&b, set("h", values.clone())).await.code,
+            Some(Code::FieldInvalid),
+            "{values}"
+        );
+    }
+    assert_eq!(h.saves(), 0);
+    let r = run(
+        &b,
+        set("h", json!({"url": "http://api.example.com/(숨김)"})),
+    )
+    .await;
+    assert!(r.ok, "{r:?}");
+    assert_eq!(h.doc(W).workflow.nodes[1].config["url"], json!(url));
+}
+
 /// BE는 머리말을 `Map<String,String>`으로 읽는다 — 글이 아닌 값은 set에서 거절.
 #[tokio::test]
 async fn set_rejects_non_string_header_values() {

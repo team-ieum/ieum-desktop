@@ -85,11 +85,19 @@ fn shown(event: &str, key: &str, value: Option<&Value>) -> Option<Value> {
     })
 }
 
+/// 두 표시((숨김)·(숨김: 모양))가 모두 이 글로 시작한다.
+fn has_mark(v: &Value) -> bool {
+    v.to_string().contains("(숨김")
+}
+
 /// AI는 숨긴 값을 모르니 fields에서 본 표시를 그대로 돌려준다 — 그 자리는 사람이 넣은 값을 지킨다.
+/// 표시를 섞은 새 값은 거절 — 옛 값을 조용히 지키거나 표시 글자를 저장하면 둘 다 조용한 실패다.
 fn keep_hidden(key: &str, value: Value, old: Option<&Value>) -> Result<Value, Code> {
     let old = old.filter(|v| !v.is_null());
     match (key, value) {
-        ("url", Value::String(s)) if s.contains(HIDDEN) => old.cloned().ok_or(Code::FieldInvalid),
+        ("url", v) if shown("http.request", "url", old).as_ref() == Some(&v) => {
+            old.cloned().ok_or(Code::FieldInvalid)
+        }
         ("body", Value::String(s)) if is_hidden_body(&s) => old.cloned().ok_or(Code::FieldInvalid),
         ("headers", Value::Object(mut m)) => {
             for (k, v) in m.iter_mut() {
@@ -98,10 +106,13 @@ fn keep_hidden(key: &str, value: Value, old: Option<&Value>) -> Result<Value, Co
                         .and_then(|o| o.get(k))
                         .cloned()
                         .ok_or(Code::FieldInvalid)?;
+                } else if has_mark(v) {
+                    return Err(Code::FieldInvalid);
                 }
             }
             Ok(Value::Object(m))
         }
+        ("url" | "body", v) if has_mark(&v) => Err(Code::FieldInvalid),
         (_, value) => Ok(value),
     }
 }

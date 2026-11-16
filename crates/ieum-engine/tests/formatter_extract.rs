@@ -510,6 +510,17 @@ fn java_regex_unsupported() {
         "x{1}{2}",
         "a{2}{3}",
         "a*{2}",
+        // Java에 없는 그룹 문법.
+        "(?~a[^z]*z)z",
+        "(?(1)a|b)",
+        "(*FAIL)",
+        "(?#c)a",
+        "(?'n'a)",
+        // 반복 횟수의 곱이 1000을 넘는다.
+        "a{1001}",
+        "(?:[ab]{5000}|a)*$",
+        "(a{40}){30}",
+        "((?:a?){40}){30}(b{3})",
     ] {
         let e = apply(PAT, &cfg(json!({"input": "a", "pattern": p})), now()).unwrap_err();
         assert!(
@@ -519,6 +530,74 @@ fn java_regex_unsupported() {
             e.message
         );
         assert_eq!(e.code.as_deref(), Some("FIELD_INVALID pattern"), "{p}");
+    }
+}
+
+/// Java가 받는 그룹 문법과 흔한 반복 횟수는 그대로 통과한다.
+#[test]
+fn java_groups_and_counts_pass() {
+    let _g = serial();
+    for p in [
+        "(?:a)",
+        "(?=a)a",
+        "(?!b)a",
+        "(?<=x)a",
+        "(?<!b)a",
+        "(?>a)",
+        "(?<name>a)",
+        "(?i)a",
+        "(?m:a)",
+        "(?-m)a",
+        "(?ims-x:a)",
+        r"\d{4}",
+        "[a-z]{2,10}",
+        ".{0,200}",
+        r"(\d{3}-){2}\d{4}",
+        r"\w{1,64}@",
+        "(a{1,30}){1,30}$",
+        "a{1000}",
+    ] {
+        let r = apply(PAT, &cfg(json!({"input": "a", "pattern": p})), now());
+        assert!(r.is_ok(), "{p}: {:?}", r.err().map(|e| e.message));
+    }
+    // 반복 횟수 패턴이 10만 자 글에서 정상 동작한다.
+    let s = "010-123-4567 ab@c.d 2026\n".repeat(4_000);
+    for (p, n) in [
+        (r"\d{4}$", 1),
+        (r"(\d{3}-){2}\d{4}", 4_000),
+        (r"\w{1,64}@", 4_000),
+        (r"[a-z]{2,10}", 4_000),
+    ] {
+        let got = run(PAT, json!({"input": s, "pattern": p, "all": true}));
+        assert_eq!(got.as_array().unwrap().len(), n, "{p}");
+    }
+}
+
+/// 반복 횟수가 큰 패턴은 낮은 역추적 상한을 받아 버려진 스레드가 오래 돌지 않는다.
+#[test]
+fn large_counts_get_low_backtrack_limit() {
+    let _g = serial();
+    let s = format!("{}b\n", "a".repeat(99_998));
+    for p in [
+        "(a?){100}a{100}$",
+        "(a?){20}(?:a{20}){20}$",
+        "(?:a?){20}(?:(?:a{9}){9}){9}$",
+    ] {
+        // 두 번 돌려 두 자리를 다 채운다.
+        for _ in 0..2 {
+            fails(
+                PAT,
+                json!({"input": s, "pattern": p}),
+                "패턴이 너무 복잡해요",
+                "FIELD_INVALID pattern",
+            );
+        }
+        // 버려진 스레드가 끝나 자리가 비기를 기다린다 — 5천만 상한이면 수 분 걸린다.
+        let t = Instant::now();
+        while apply(PAT, &cfg(json!({"input": "a", "pattern": "a"})), now()).is_err() {
+            assert!(t.elapsed() < Duration::from_secs(60), "{p}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 
