@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use ieum_desktop_lib::github::{
     GhAccount, GhAuth, GhFound, GithubStatus, InstallRoute, LOGIN_CMD_ARGS, MIN_GH, checksum_for,
-    choose_route, clear_record, derive_status, gh_auth, install_from_zip, parse_auth_status,
+    choose_route, clear_record, derive_status, fetch, gh_auth, install_from_zip, parse_auth_status,
     parse_device_code, parse_gh_version, pick_gh, read_record, release_assets, run_login,
     write_record,
 };
@@ -47,18 +47,21 @@ fn checksum_lookup() {
 
 #[test]
 fn install_bad_checksum_leaves_nothing() {
+    let (bytes, _) = gh_zip(|bin| {
+        fake_gh(bin, "echo gh version 9.9.9");
+    });
     let dir = tempfile::tempdir().unwrap();
     let wrong = "0".repeat(64);
-    assert!(install_from_zip(b"not a zip", &wrong, dir.path()).is_err());
+    assert!(install_from_zip(&bytes, &wrong, dir.path()).is_err());
     assert!(!dir.path().join("bin").exists());
 }
 
-#[test]
-fn install_from_zip_places_executable() {
+/// `gh_9.9.9_macOS_arm64/bin/`을 `fill`로 채워 ditto zip을 만든다 → (바이트, sha256).
+fn gh_zip(fill: impl FnOnce(&Path)) -> (Vec<u8>, String) {
     let src = tempfile::tempdir().unwrap();
     let top = src.path().join("gh_9.9.9_macOS_arm64");
     std::fs::create_dir_all(top.join("bin")).unwrap();
-    fake_gh(&top.join("bin"), "echo gh version 9.9.9");
+    fill(&top.join("bin"));
     let zip = src.path().join("gh.zip");
     let ok = std::process::Command::new("/usr/bin/ditto")
         .args(["-c", "-k", "--keepParent"])
@@ -70,6 +73,61 @@ fn install_from_zip_places_executable() {
     assert!(ok);
     let bytes = std::fs::read(&zip).unwrap();
     let sha = hex::encode(Sha256::digest(&bytes));
+    (bytes, sha)
+}
+
+#[test]
+fn install_rejects_symlinked_gh() {
+    let (bytes, sha) = gh_zip(|bin| {
+        std::os::unix::fs::symlink("/bin/sh", bin.join("gh")).unwrap();
+    });
+    let app = tempfile::tempdir().unwrap();
+    assert!(install_from_zip(&bytes, &sha, app.path()).is_err());
+    assert!(!app.path().join("bin").join("gh").exists());
+}
+
+#[test]
+fn release_assets_rejects_other_host() {
+    let json = RELEASE_JSON.replace(
+        "https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_macOS_arm64.zip",
+        "https://evil.example/gh_2.104.0_macOS_arm64.zip",
+    );
+    assert!(release_assets(&json, "aarch64").is_err());
+    let json = RELEASE_JSON.replace(
+        "https://github.com/cli/cli/releases/download/v2.104.0/gh_2.104.0_checksums.txt",
+        "https://github.com/cli/cli/releases/download.evil/gh_2.104.0_checksums.txt",
+    );
+    assert!(release_assets(&json, "aarch64").is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fetch_cancel_while_waiting() {
+    // 연결은 받지만 답하지 않는 서버.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let held: Vec<_> = listener.incoming().take(1).collect();
+        std::thread::sleep(Duration::from_secs(10));
+        drop(held);
+    });
+    let cancel = Arc::new(AtomicBool::new(false));
+    let c = cancel.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        c.store(true, Ordering::SeqCst);
+    });
+    let client = reqwest::Client::new();
+    let start = Instant::now();
+    let r = fetch(&client, &format!("http://{addr}/"), 1024, &cancel).await;
+    assert_eq!(r, Err("취소됨".to_string()));
+    assert!(start.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn install_from_zip_places_executable() {
+    let (bytes, sha) = gh_zip(|bin| {
+        fake_gh(bin, "echo gh version 9.9.9");
+    });
 
     let app = tempfile::tempdir().unwrap();
     let gh = install_from_zip(&bytes, &sha, app.path()).unwrap();
@@ -96,6 +154,10 @@ fn choose_route_cases() {
     );
     assert_eq!(
         choose_route(Some(brew), Some(Path::new("/usr/local/bin/gh"))),
+        InstallRoute::Release
+    );
+    assert_eq!(
+        choose_route(Some(brew), Some(Path::new("/opt/homebrew2/bin/gh"))),
         InstallRoute::Release
     );
 }

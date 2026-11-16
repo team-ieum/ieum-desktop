@@ -433,6 +433,8 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_ZIP: usize = 50 * 1024 * 1024;
 const MAX_SMALL: usize = 1024 * 1024;
 const LATEST_RELEASE: &str = "https://api.github.com/repos/cli/cli/releases/latest";
+/// 받는 zip·checksums 주소는 이 아래만.
+const DOWNLOAD_PREFIX: &str = "https://github.com/cli/cli/releases/download/";
 
 /// 최신 릴리스 JSON에서 (태그, zip 주소, zip 이름, checksums 주소). `arch`는 `std::env::consts::ARCH`.
 pub fn release_assets(
@@ -462,6 +464,7 @@ pub fn release_assets(
             .iter()
             .find(|a| a.name == name)
             .map(|a| a.browser_download_url.clone())
+            .filter(|u| u.starts_with(DOWNLOAD_PREFIX))
             .ok_or_else(|| format!("릴리스에 {name}이 없어요."))
     };
     let zip_name = format!("gh_{ver}_macOS_{arch}.zip");
@@ -498,13 +501,10 @@ pub fn install_from_zip(
     if !hex::encode(Sha256::digest(zip)).eq_ignore_ascii_case(expected_sha256.trim()) {
         return Err("받은 gh 파일의 체크섬이 맞지 않아요.".into());
     }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos());
-    let tmp = TempDir(std::env::temp_dir().join(format!("ieum-gh-{}-{nanos}", std::process::id())));
     let err = |e: std::io::Error| format!("gh를 설치하지 못했어요: {e}");
+    let tmp = new_temp_dir().map_err(err)?;
     let out = tmp.0.join("out");
-    std::fs::create_dir_all(&out).map_err(err)?;
+    std::fs::create_dir(&out).map_err(err)?;
     let zip_path = tmp.0.join("gh.zip");
     std::fs::write(&zip_path, zip).map_err(err)?;
     let ok = std::process::Command::new("/usr/bin/ditto")
@@ -517,20 +517,45 @@ pub fn install_from_zip(
     if !ok {
         return Err("gh 압축을 풀지 못했어요.".into());
     }
+    // 링크는 따라가지 않는다 — 압축 안 링크가 밖의 파일(/bin/sh 등)을 gh로 둘 수 있다.
+    let kind = |p: &Path| std::fs::symlink_metadata(p).map(|m| m.file_type());
     let src = std::fs::read_dir(&out)
         .map_err(err)?
         .flatten()
-        .map(|e| e.path().join("bin").join("gh"))
-        .find(|p| p.is_file())
-        .ok_or("압축 안에 gh가 없어요.")?;
+        .map(|e| e.path())
+        .filter(|top| kind(top).is_ok_and(|t| t.is_dir()))
+        .filter(|top| kind(&top.join("bin")).is_ok_and(|t| t.is_dir()))
+        .map(|top| top.join("bin").join("gh"))
+        .find(|p| kind(p).is_ok_and(|t| t.is_file()))
+        .ok_or("압축 안에 gh 실행 파일이 없어요.")?;
     let bin = app_data.join("bin");
     std::fs::create_dir_all(&bin).map_err(err)?;
     let staged = bin.join("gh.tmp");
-    std::fs::copy(&src, &staged).map_err(err)?;
-    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).map_err(err)?;
     let dest = bin.join("gh");
-    std::fs::rename(&staged, &dest).map_err(err)?;
+    let placed = std::fs::copy(&src, &staged)
+        .and_then(|_| std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)))
+        .and_then(|()| std::fs::rename(&staged, &dest));
+    if let Err(e) = placed {
+        let _ = std::fs::remove_file(&staged);
+        return Err(err(e));
+    }
     Ok(dest)
+}
+
+/// 시스템 임시 폴더 아래 새 폴더(배타 생성, 이미 있으면 다른 이름).
+fn new_temp_dir() -> std::io::Result<TempDir> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let mut n = 0;
+    loop {
+        let p = std::env::temp_dir().join(format!("ieum-gh-{}-{nanos}-{n}", std::process::id()));
+        match std::fs::create_dir(&p) {
+            Ok(()) => return Ok(TempDir(p)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 100 => n += 1,
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -582,13 +607,27 @@ fn run_brew(cmd: &str, cancel: &AtomicBool, app: &AppHandle) -> Result<(), Strin
     }
 }
 
-/// `max`바이트를 넘거나 취소되면 멈추고 실패.
-async fn fetch(
+/// `cancel`이 서면 끝나는 future(50ms 간격 확인).
+async fn cancelled(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::SeqCst) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// `max`바이트를 넘거나 취소되면 멈추고 실패. 연결·응답을 기다리는 중에도 취소된다.
+pub async fn fetch(
     client: &reqwest::Client,
     url: &str,
     max: usize,
     cancel: &AtomicBool,
 ) -> Result<Vec<u8>, String> {
+    tokio::select! {
+        r = fetch_inner(client, url, max) => r,
+        () = cancelled(cancel) => Err("취소됨".into()),
+    }
+}
+
+async fn fetch_inner(client: &reqwest::Client, url: &str, max: usize) -> Result<Vec<u8>, String> {
     let net = |e: reqwest::Error| format!("gh를 받지 못했어요: {e}");
     let mut resp = client
         .get(url)
@@ -603,9 +642,6 @@ async fn fetch(
     }
     let mut buf = Vec::new();
     while let Some(chunk) = resp.chunk().await.map_err(net)? {
-        if cancel.load(Ordering::SeqCst) {
-            return Err("취소됨".into());
-        }
         buf.extend_from_slice(&chunk);
         if buf.len() > max {
             return Err(too_big());
@@ -614,15 +650,28 @@ async fn fetch(
     Ok(buf)
 }
 
-/// 공식 릴리스 zip을 받아 체크섬을 확인하고 앱 폴더에 둔다.
+/// 공식 릴리스 zip을 받아 체크섬을 확인하고 앱 폴더에 둔다. 전체 10분 상한.
 async fn install_release(
+    app: &AppHandle,
+    app_data: &Path,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
+    tokio::time::timeout(
+        INSTALL_TIMEOUT,
+        install_release_inner(app, app_data, cancel),
+    )
+    .await
+    .map_err(|_| "설치 시간이 끝났어요(10분).".to_string())?
+}
+
+async fn install_release_inner(
     app: &AppHandle,
     app_data: &Path,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .user_agent("ieum-desktop")
-        .timeout(INSTALL_TIMEOUT)
+        .connect_timeout(Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
     let json = fetch(&client, LATEST_RELEASE, MAX_SMALL, cancel).await?;
