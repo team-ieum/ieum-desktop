@@ -459,6 +459,14 @@ export interface ChatAi {
   effort: string | null;
 }
 export type ChatStage = { id: string; stage: "designing" | "testing" };
+/** 설정 > 연동의 GitHub 줄 상태(Rust `GithubStatus`). */
+export type GithubStatus =
+  | { kind: "notInstalled" }
+  | { kind: "outdated"; version: string }
+  | { kind: "notConnected" }
+  | { kind: "needsLogin"; recorded: string }
+  | { kind: "accountChanged"; recorded: string; current: string }
+  | { kind: "connected"; login: string; envToken: boolean };
 
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
@@ -513,6 +521,18 @@ export const api = {
   openSystemSettings: (pane: SystemSettingsPane) => invoke<void>("open_system_settings", { pane }),
   /** 공급자 키 발급 화면을 기본 브라우저로 — 주소는 Rust의 고정값. */
   openProviderConsole: (provider: ApiProvider) => invoke<void>("open_provider_console", { provider }),
+  githubStatus: () => invoke<GithubStatus>("github_status"),
+  /** 이미 로그인돼 있으면 바로 기록, 아니면 device 로그인(코드는 github-login-code 이벤트)이 끝날 때까지 기다린다. */
+  githubConnect: () => invoke<GithubStatus>("github_connect"),
+  /** IEUM 기록만 지운다 — gh 로그인은 그대로. */
+  githubDisconnect: () => invoke<GithubStatus>("github_disconnect"),
+  githubInstall: () => invoke<GithubStatus>("github_install"),
+  githubCancel: () => invoke<void>("github_cancel"),
+  githubOpenDevice: () => invoke<void>("github_open_device"),
+  onGithubLoginCode: (cb: (p: { code: string }) => void): Promise<UnlistenFn> =>
+    listen<{ code: string }>("github-login-code", (e) => cb(e.payload)),
+  onGithubInstallProgress: (cb: (p: { line: string }) => void): Promise<UnlistenFn> =>
+    listen<{ line: string }>("github-install-progress", (e) => cb(e.payload)),
   /** 앞 여부·알림 토글과 무관하게 "알림이 켜졌어요". */
   sendTestNotification: () => invoke<void>("send_test_notification"),
   checkUpdateNow: () => invoke<UpdateCheck>("check_update_now"),
