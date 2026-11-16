@@ -269,6 +269,7 @@ async fn run(
         .run_metered(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
+            outputs: &Default::default(),
             events: &tx,
             cancel: &cancel,
         })

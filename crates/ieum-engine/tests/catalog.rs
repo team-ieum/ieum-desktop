@@ -4,9 +4,10 @@ use std::path::Path;
 use ieum_engine::{Catalog, CatalogError, NodeType, Workflow};
 
 #[test]
-fn stage1_catalog_has_six_events() {
+fn stage1_catalog_has_thirty_events() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = Catalog::stage1(&root).unwrap();
+    assert_eq!(catalog.events().len(), 30);
     for event in [
         "branch.if",
         "local.folder_new_file",
@@ -38,11 +39,80 @@ fn embedded_catalog_matches_disk() {
             events.push(path.file_stem().unwrap().to_string_lossy().into_owned());
         }
     }
-    assert_eq!(events.len(), 6);
+    for dir in ["transform", "formatter", "http"] {
+        for entry in std::fs::read_dir(root.join("catalog/events").join(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "json") {
+                let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+                events.push(format!("{dir}.{stem}"));
+            }
+        }
+    }
+    assert_eq!(events.len(), 30);
+    assert_eq!(disk.events().len(), 30);
     for event in &events {
         let (d, e) = (disk.get(event).unwrap(), embedded.get(event));
         let e = e.unwrap_or_else(|| panic!("{event} 내장 안 됨"));
         assert_eq!(format!("{d:?}"), format!("{e:?}"), "{event}");
+    }
+}
+
+#[test]
+fn embedded_has_builtin_24() {
+    let c = Catalog::embedded().unwrap();
+    assert_eq!(c.events().len(), 30);
+    assert_eq!(
+        c.get("transform.map").unwrap().node_type,
+        NodeType::Transform
+    );
+    assert_eq!(
+        c.get("formatter.date_format").unwrap().node_type,
+        NodeType::Transform
+    );
+    assert_eq!(c.get("http.request").unwrap().node_type, NodeType::Http);
+    assert_eq!(
+        c.events()
+            .iter()
+            .filter(|e| e.event.starts_with("formatter."))
+            .count(),
+        22
+    );
+    assert_eq!(
+        c.get("transform.map").unwrap().outputs_from.as_deref(),
+        Some("config.mappings")
+    );
+}
+
+#[test]
+fn formatter_catalog_and_runners_match() {
+    let c = Catalog::embedded().unwrap();
+    let cat: BTreeSet<_> = c
+        .events()
+        .iter()
+        .filter(|e| e.event.starts_with("formatter."))
+        .map(|e| e.event.clone())
+        .collect();
+    let run: BTreeSet<_> = ieum_engine::formatter::events()
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(cat, run);
+    assert_eq!(run.len(), 22);
+    // title은 실패 메시지 머리로 확인 — 10만 자 넘는 input은 모든 포맷터가 실패시킨다.
+    let cfg = serde_json::json!({"input": "x".repeat(100_001)});
+    for event in &run {
+        let e = ieum_engine::formatter::apply(
+            event,
+            cfg.as_object().unwrap(),
+            "2026-11-07T04:30:00Z".parse().unwrap(),
+        )
+        .unwrap_err();
+        let title = &c.get(event).unwrap().title;
+        assert!(
+            e.message.starts_with(&format!("{title}: ")),
+            "{event}: {}",
+            e.message
+        );
     }
 }
 
@@ -76,7 +146,7 @@ fn load_errors_do_not_panic() {
     std::fs::create_dir_all(&dir).unwrap();
     let unknown = dir.join("unknown.json");
     let broken = dir.join("broken.json");
-    std::fs::write(&unknown, r#"{"node_type": "HTTP"}"#).unwrap();
+    std::fs::write(&unknown, r#"{"node_type": "DELAY"}"#).unwrap();
     std::fs::write(&broken, "{ not json").unwrap();
     assert!(matches!(
         Catalog::load(&[("x.unknown".into(), unknown)]),
@@ -123,15 +193,31 @@ fn workflow_roundtrip_keeps_unknown_keys() {
 fn events_listed_trigger_first_with_titles() {
     let c = Catalog::embedded().unwrap();
     let ids: Vec<&str> = c.events().iter().map(|e| e.event.as_str()).collect();
+    assert_eq!(ids.len(), 30);
+    assert_eq!(ids[0], "local.folder_new_file");
+    assert!(ids[1..].is_sorted(), "{ids:?}");
     assert_eq!(
-        ids,
+        ids[1..8],
         [
-            "local.folder_new_file",
             "branch.if",
+            "formatter.date_add",
+            "formatter.date_compare",
+            "formatter.date_format",
+            "formatter.list_pick",
+            "formatter.list_to_text",
+            "formatter.lookup_table",
+        ]
+    );
+    assert_eq!(
+        ids[23..],
+        [
+            "formatter.text_url_encode",
+            "http.request",
             "local.ai",
             "local.file_move",
             "local.file_rename",
-            "local.file_trash"
+            "local.file_trash",
+            "transform.map",
         ]
     );
     assert_eq!(c.events()[0].title, "폴더에 새 파일");

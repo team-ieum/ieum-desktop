@@ -22,7 +22,17 @@ const statusText = (s: string) => (STATUS[s] ? t(STATUS[s]) : s);
 const shown = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v)).slice(0, 200);
 
 /** 테스트 결과 — 값은 실행 기록에서 직접 읽어 화면에만 보인다(AI에게 다시 가지 않는다). */
-export function TestCard({ runId, status, nodeNames }: { runId: string; status: string; nodeNames?: Record<string, string> }) {
+export function TestCard({
+  runId,
+  status,
+  nodeNames,
+  httpSent,
+}: {
+  runId: string;
+  status: string;
+  nodeNames?: Record<string, string>;
+  httpSent?: boolean;
+}) {
   const [run, setRun] = useState<StoredRun | null>(null);
   useEffect(() => {
     api.getRun(runId).then(setRun, () => {});
@@ -35,6 +45,7 @@ export function TestCard({ runId, status, nodeNames }: { runId: string; status: 
         <FlaskConical size={13} aria-hidden="true" />
         {t("chat.card.test")} · {statusText(status)}
       </p>
+      {httpSent && <p className="font-semibold text-danger-700">{t("chat.card.httpSent")}</p>}
       {nodes.map(([id, n]) => (
         <div key={id} className="flex flex-col gap-0.5 border-t border-[#e8f1f5] pt-1.5">
           <p className="flex items-center gap-1.5 font-semibold">

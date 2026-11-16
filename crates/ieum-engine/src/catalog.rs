@@ -9,6 +9,8 @@ pub enum NodeType {
     Ai,
     Action,
     Condition,
+    Transform,
+    Http,
 }
 
 #[derive(Debug, Clone)]
@@ -120,7 +122,7 @@ impl Catalog {
         Self::parse(sources)
     }
 
-    /// 실행 파일에 묶은 1단계 노드 정의(빌드 시 `catalog/events/branch/if.json` + `crates/ieum-local/defs/*.json`).
+    /// 실행 파일에 묶은 노드 정의(`stage1`과 같은 파일들).
     /// 배포된 CLI·앱은 이걸 쓴다. `stage1`(디스크)은 테스트·개발용.
     pub fn embedded() -> Result<Catalog, CatalogError> {
         macro_rules! src {
@@ -151,6 +153,96 @@ impl Catalog {
                 "local.folder_new_file",
                 "crates/ieum-local/defs/local.folder_new_file.json"
             ),
+            src!("transform.map", "catalog/events/transform/map.json"),
+            src!("http.request", "catalog/events/http/request.json"),
+            src!(
+                "formatter.date_add",
+                "catalog/events/formatter/date_add.json"
+            ),
+            src!(
+                "formatter.date_compare",
+                "catalog/events/formatter/date_compare.json"
+            ),
+            src!(
+                "formatter.date_format",
+                "catalog/events/formatter/date_format.json"
+            ),
+            src!(
+                "formatter.list_pick",
+                "catalog/events/formatter/list_pick.json"
+            ),
+            src!(
+                "formatter.list_to_text",
+                "catalog/events/formatter/list_to_text.json"
+            ),
+            src!(
+                "formatter.lookup_table",
+                "catalog/events/formatter/lookup_table.json"
+            ),
+            src!(
+                "formatter.number_currency",
+                "catalog/events/formatter/number_currency.json"
+            ),
+            src!(
+                "formatter.number_format",
+                "catalog/events/formatter/number_format.json"
+            ),
+            src!(
+                "formatter.number_math",
+                "catalog/events/formatter/number_math.json"
+            ),
+            src!(
+                "formatter.number_phone",
+                "catalog/events/formatter/number_phone.json"
+            ),
+            src!(
+                "formatter.text_case",
+                "catalog/events/formatter/text_case.json"
+            ),
+            src!(
+                "formatter.text_default",
+                "catalog/events/formatter/text_default.json"
+            ),
+            src!(
+                "formatter.text_extract",
+                "catalog/events/formatter/text_extract.json"
+            ),
+            src!(
+                "formatter.text_extract_pattern",
+                "catalog/events/formatter/text_extract_pattern.json"
+            ),
+            src!(
+                "formatter.text_length",
+                "catalog/events/formatter/text_length.json"
+            ),
+            src!(
+                "formatter.text_markdown_to_html",
+                "catalog/events/formatter/text_markdown_to_html.json"
+            ),
+            src!(
+                "formatter.text_replace",
+                "catalog/events/formatter/text_replace.json"
+            ),
+            src!(
+                "formatter.text_split",
+                "catalog/events/formatter/text_split.json"
+            ),
+            src!(
+                "formatter.text_strip_html",
+                "catalog/events/formatter/text_strip_html.json"
+            ),
+            src!(
+                "formatter.text_trim",
+                "catalog/events/formatter/text_trim.json"
+            ),
+            src!(
+                "formatter.text_truncate",
+                "catalog/events/formatter/text_truncate.json"
+            ),
+            src!(
+                "formatter.text_url_encode",
+                "catalog/events/formatter/text_url_encode.json"
+            ),
         ])
     }
 
@@ -168,6 +260,8 @@ impl Catalog {
                 "AI" => NodeType::Ai,
                 "ACTION" => NodeType::Action,
                 "CONDITION" => NodeType::Condition,
+                "TRANSFORM" => NodeType::Transform,
+                "HTTP" => NodeType::Http,
                 other => {
                     return Err(CatalogError::UnknownNodeType {
                         event: event.clone(),
@@ -212,29 +306,41 @@ impl Catalog {
         all
     }
 
-    /// `catalog/events/branch/if.json` + `crates/ieum-local/defs/*.json`(파일 이름 = event).
+    /// `catalog/events/branch/if.json` + `crates/ieum-local/defs/*.json`(파일 이름 = event)
+    /// + `catalog/events/{transform,formatter,http}/*.json`(event = `<폴더>.<파일 이름>`).
     pub fn stage1(repo_root: &Path) -> Result<Catalog, CatalogError> {
         let mut files = vec![(
             "branch.if".to_string(),
             repo_root.join("catalog/events/branch/if.json"),
         )];
-        let defs = repo_root.join("crates/ieum-local/defs");
-        let entries = std::fs::read_dir(&defs).map_err(|source| CatalogError::Io {
-            path: defs.clone(),
-            source,
-        })?;
-        for entry in entries {
-            let path = entry
-                .map_err(|source| CatalogError::Io {
-                    path: defs.clone(),
-                    source,
-                })?
-                .path();
-            if path.extension().is_some_and(|e| e == "json") {
-                let event = path.file_stem().unwrap().to_string_lossy().into_owned();
-                files.push((event, path));
-            }
+        json_files(&repo_root.join("crates/ieum-local/defs"), "", &mut files)?;
+        for dir in ["transform", "formatter", "http"] {
+            let prefix = format!("{dir}.");
+            json_files(
+                &repo_root.join("catalog/events").join(dir),
+                &prefix,
+                &mut files,
+            )?;
         }
         Catalog::load(&files)
     }
+}
+
+fn json_files(
+    dir: &Path,
+    prefix: &str,
+    files: &mut Vec<(String, PathBuf)>,
+) -> Result<(), CatalogError> {
+    let io = |source| CatalogError::Io {
+        path: dir.to_path_buf(),
+        source,
+    };
+    for entry in std::fs::read_dir(dir).map_err(io)? {
+        let path = entry.map_err(io)?.path();
+        if path.extension().is_some_and(|e| e == "json") {
+            let stem = path.file_stem().unwrap().to_string_lossy();
+            files.push((format!("{prefix}{stem}"), path));
+        }
+    }
+    Ok(())
 }

@@ -15,3 +15,12 @@ test("node_meta_app_nodes_are_pink", () => {
   expect(nodeMeta("local.folder_new_file", "TRIGGER").label).toBe("시작 조건");
   expect(nodeMeta("branch.if", "CONDITION").color).toBe("#9a6700");
 });
+
+test("node_meta_builtin_colors", () => {
+  expect(nodeMeta("formatter.text_trim", undefined).color).toBe("#287fa4");
+  expect(nodeMeta("formatter.text_trim", undefined).tint).toBe("#e2f2f8");
+  expect(nodeMeta("transform.map", undefined).color).toBe("#287fa4");
+  expect(nodeMeta("http.request", undefined).color).toBe("#c75146");
+  expect(nodeMeta("http.request", undefined).tint).toBe("#fce8e5");
+  expect(nodeMeta("http.request", undefined).label).toBe("HTTP");
+});

@@ -3,14 +3,14 @@
 use std::fs;
 use std::path::Path;
 
-use ieum_engine::{Node, ValidationError, Workflow};
+use ieum_engine::{Node, ValidationError, Workflow, references};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::edit::{AI_EVENT, FOLDER_FIELDS};
 use super::{
-    Builder, ChatState, Code, Doc, FinishAction, FinishAi, NodeState, PendingFinish, Reply,
-    SaveError, node_state, workflow_hash,
+    Builder, ChatState, Code, Doc, FinishAction, FinishAi, HttpLine, HttpSend, NodeState,
+    PendingFinish, Reply, SaveError, node_state, workflow_hash,
 };
 
 /// 완료까지 남은 것 한 줄.
@@ -37,12 +37,77 @@ fn text<'a>(node: &'a Node, key: &str) -> Option<&'a str> {
         .filter(|s| !s.trim().is_empty())
 }
 
-/// 확인 카드에 보일 파일 동작 — 파일 노드만, 배열 순서로.
+const HTTP_EVENT: &str = "http.request";
+
+/// 대문자, 없으면 GET.
+fn http_method(n: &Node) -> String {
+    text(n, "method").unwrap_or("GET").to_uppercase()
+}
+
+/// 원문(참조식 그대로).
+fn http_url(n: &Node) -> String {
+    n.config
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// 확인 카드 한 줄. 머리말은 이름만, 참조식은 어느 노드의 어느 출력인지만 — 값은 싣지 않는다.
+fn http_line(wf: &Workflow, n: &Node) -> HttpLine {
+    let field = |key: &str| n.config.get(key).unwrap_or(&Value::Null);
+    let mut header_keys: Vec<String> = field("headers")
+        .as_object()
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+    header_keys.sort();
+    let mut sends: Vec<HttpSend> = Vec::new();
+    for (node_id, output) in ["url", "headers", "body"]
+        .into_iter()
+        .flat_map(|k| references(field(k)))
+    {
+        let node_label = wf
+            .nodes
+            .iter()
+            .find(|m| m.id == node_id)
+            .and_then(|m| m.label.clone())
+            .unwrap_or_default();
+        let send = HttpSend {
+            node_id,
+            node_label,
+            output,
+        };
+        if !sends.contains(&send) {
+            sends.push(send);
+        }
+    }
+    HttpLine {
+        node_id: n.id.clone(),
+        label: n.label.clone().unwrap_or_default(),
+        method: http_method(n),
+        url: http_url(n),
+        header_keys,
+        sends,
+        has_body: !field("body").is_null(),
+    }
+}
+
+/// HTTP 노드 — 배열 순서로. 테스트 확인 카드가 쓴다.
+pub(super) fn http_lines(wf: &Workflow) -> Vec<HttpLine> {
+    wf.nodes
+        .iter()
+        .filter(|n| n.event == HTTP_EVENT)
+        .map(|n| http_line(wf, n))
+        .collect()
+}
+
+/// 확인 카드에 보일 바깥 동작 — 파일·HTTP 노드만, 배열 순서로.
 fn actions(wf: &Workflow) -> Vec<FinishAction> {
     wf.nodes
         .iter()
         .filter_map(|n| {
             let target = match n.event.as_str() {
+                HTTP_EVENT => Some(format!("{} {}", http_method(n), http_url(n))),
                 "local.file_move" => {
                     let base = text(n, "baseFolder").unwrap_or_default();
                     Some(match text(n, "destination") {
@@ -59,6 +124,7 @@ fn actions(wf: &Workflow) -> Vec<FinishAction> {
                 event: n.event.clone(),
                 label: n.label.clone().unwrap_or_default(),
                 target,
+                http: (n.event == HTTP_EVENT).then(|| http_line(wf, n)),
             })
         })
         .collect()
@@ -185,5 +251,42 @@ impl Builder {
             SaveError::Rejected(_) => Code::SaveRejected,
         })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http_lines_uppercase_method_and_default_get() {
+        let wf: Workflow = serde_json::from_value(json!({
+            "nodes": [
+                {"id": "a", "event": "http.request", "config": {"method": "post", "url": "https://x/{{nodes.t.output.name}}"}},
+                {"id": "f", "event": "formatter.text_trim", "config": {}},
+                {"id": "b", "event": "http.request", "label": "조회", "config": {}}
+            ],
+            "edges": []
+        }))
+        .unwrap();
+        let lines = http_lines(&wf);
+        let got: Vec<_> = lines
+            .iter()
+            .map(|l| {
+                (
+                    l.node_id.as_str(),
+                    l.label.as_str(),
+                    l.method.as_str(),
+                    l.url.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("a", "", "POST", "https://x/{{nodes.t.output.name}}"),
+                ("b", "조회", "GET", "")
+            ]
+        );
     }
 }

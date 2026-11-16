@@ -27,6 +27,8 @@ pub struct NodeCtx<'a> {
     pub node: &'a Node,
     /// 참조식을 치환한 사본.
     pub config: Map<String, Value>,
+    /// 치환 전 상류 출력 — `transform.map`이 원본 설정을 직접 치환할 때 쓴다.
+    pub outputs: &'a Outputs,
     pub events: &'a EventSink,
     pub cancel: &'a CancellationToken,
 }
@@ -76,6 +78,9 @@ pub struct NodeRecord {
     /// 실패한 노드의 `NodeError.code`. 옛 기록에는 없다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
+    /// 저장한 기록에서 출력 일부(HTTP 응답 본문)를 줄였다. 실행 중에는 늘 거짓, 옛 기록에는 없다.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub output_clipped: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +191,7 @@ pub async fn run_workflow(
                 error: None,
                 usage: None,
                 error_code: None,
+                output_clipped: false,
             };
             (n.id.clone(), rec)
         })
@@ -270,6 +276,7 @@ pub async fn run_workflow(
             let ctx = NodeCtx {
                 node,
                 config,
+                outputs: &outputs,
                 events: &events,
                 cancel: &cancel,
             };

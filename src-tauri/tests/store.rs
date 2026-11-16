@@ -306,3 +306,41 @@ fn delete_workflow_appends_to_a_leftover_usage_copy() {
     store.delete_workflow(&id).unwrap();
     assert_eq!(store.all_chat_usage().unwrap().len(), 2);
 }
+
+/// 저장본의 HTTP 본문 줄이기 — 대리쌍을 가르지 않고, HTTP가 아닌 노드·작은 본문은 그대로.
+#[test]
+fn clip_http_bodies_keeps_surrogate_pairs() {
+    use ieum_desktop_lib::store::clip_http_bodies;
+    use ieum_engine::RunResult;
+
+    let wf: Workflow = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "h", "type": "HTTP", "event": "http.request", "config": {}},
+            {"id": "s", "type": "HTTP", "event": "http.request", "config": {}},
+            {"id": "f", "type": "TRANSFORM", "event": "formatter.text_trim", "config": {}}
+        ],
+        "edges": []
+    }))
+    .unwrap();
+    // 99,999번째 단위 뒤에 이모지(2단위)가 걸친다.
+    let big = format!("{}😀{}", "a".repeat(99_999), "b".repeat(10));
+    let rec = |body: serde_json::Value| json!({"status": "succeeded", "output": {"statusCode": 200, "body": body}, "error": null});
+    let mut run: RunResult = serde_json::from_value(json!({
+        "runId": "r", "status": "succeeded", "validationErrors": [], "rejectReason": null,
+        "nodes": {"h": rec(json!(big)), "s": rec(json!({"a": 1})), "f": rec(json!(big))}
+    }))
+    .unwrap();
+    clip_http_bodies(&mut run, &wf);
+    let h = &run.nodes["h"];
+    assert_eq!(
+        h.output.as_ref().unwrap()["body"],
+        json!(format!("{}…(잘림, 전체 100011자)", "a".repeat(99_999)))
+    );
+    assert!(h.output_clipped);
+    assert_eq!(
+        run.nodes["s"].output.as_ref().unwrap()["body"],
+        json!({"a": 1})
+    );
+    assert!(!run.nodes["s"].output_clipped);
+    assert_eq!(run.nodes["f"].output.as_ref().unwrap()["body"], json!(big));
+}

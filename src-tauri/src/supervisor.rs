@@ -13,11 +13,11 @@ use ieum_engine::{
     ValidationError, Workflow, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
-use ieum_local::builder::TestRun;
+use ieum_local::builder::{HttpLine, TestRun};
 use ieum_local::{
-    AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, Journal,
-    NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo, user_folders,
-    validate_user_folder,
+    AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, HttpRunner,
+    Journal, NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo,
+    user_folders, validate_user_folder,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -25,7 +25,8 @@ use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::store::{RunTrigger, Store, StoredRun, StoredWorkflow, now};
+use crate::http_confirm::HttpConfirmGate;
+use crate::store::{RunTrigger, Store, StoredRun, StoredWorkflow, clip_http_bodies, now};
 
 /// 워크플로우 하나의 대기 실행 상한. 넘으면 가장 오래된 것부터 버린다.
 pub const QUEUE_CAP: usize = 100;
@@ -56,6 +57,11 @@ pub enum AppEvent {
     FinishPending {
         workflow_id: String,
         workflow_name: String,
+    },
+    /// 화면 이벤트 `http-test-confirm` — 빌더 테스트가 HTTP 요청을 보내기 전 사람 확인을 기다린다.
+    HttpTestConfirm {
+        workflow_id: String,
+        lines: Vec<HttpLine>,
     },
     /// 화면 이벤트 `test-undo-failed` — 테스트가 옮긴 파일 일부를 되돌리지 못했다.
     /// `at_start` = 앱 시작 때 되돌리다 실패했으면 그 워크플로우 이름(지워졌으면 빈 글). 그때는 화면이
@@ -162,6 +168,8 @@ struct Inner {
     save_lock: Mutex<()>,
     /// 편집기에 저장 안 된 편집이 있는 워크플로우 id(메모리만 — 로그아웃·앱 종료로 비워진다).
     editing: Mutex<HashSet<String>>,
+    /// 빌더 HTTP 테스트 확인 대기 — 계정마다 하나라 다른 계정의 답을 받지 않는다.
+    http_gate: HttpConfirmGate,
     /// `stop()` 뒤 취소됨 — 새 감시·실행을 받지 않고 재확인 루프가 끝난다.
     stopped: CancellationToken,
 }
@@ -217,6 +225,7 @@ impl Supervisor {
             undo_lock: Mutex::default(),
             save_lock: Mutex::default(),
             editing: Mutex::default(),
+            http_gate: HttpConfirmGate::default(),
             stopped: CancellationToken::new(),
         }));
         // 감시(`sync`)보다 먼저 — 되돌려진 파일이 새 파일로 잡히지 않는다.
@@ -282,6 +291,7 @@ impl Supervisor {
     /// 사본(`Clone`)이 남아 drop되지 않을 수 있어 명시적으로 부른다. 되돌릴 수 없다.
     pub fn stop(&self) {
         self.0.stopped.cancel();
+        self.0.http_gate.close();
         lock(&self.0.watches).clear();
         let ids: Vec<String> = lock(&self.0.lanes).keys().cloned().collect();
         self.drop_queued(&ids);
@@ -398,6 +408,10 @@ impl Supervisor {
 
     pub fn user_editing(&self, workflow_id: &str) -> bool {
         lock(&self.0.editing).contains(workflow_id)
+    }
+
+    pub fn http_gate(&self) -> &HttpConfirmGate {
+        &self.0.http_gate
     }
 
     /// 저장과 같은 잠금 안에서 지운다 — `save_workflow_expecting`의 확인과 쓰기 사이에 끼면 지운 것이 되살아난다.
@@ -635,7 +649,7 @@ impl Supervisor {
         let roots = roots_for_workflow(&wf.workflow);
         let (journal, recent) = (Journal::default(), self.0.recent.clone());
         let mut runners = Runners::with_builtin();
-        let local: [(&str, Arc<dyn NodeRunner>); 4] = [
+        let local: [(&str, Arc<dyn NodeRunner>); 5] = [
             (
                 "local.ai",
                 Arc::new(self.0.deps.ai.with_roots(roots.clone())),
@@ -665,6 +679,7 @@ impl Supervisor {
                     self.0.deps.trash_dir.clone(),
                 )),
             ),
+            ("http.request", Arc::new(HttpRunner::new())),
         ];
         runners.extend(local.into_iter().map(|(k, v)| (k.to_string(), v)));
 
@@ -744,6 +759,9 @@ impl Supervisor {
         if run_trigger == RunTrigger::Test {
             let _one_at_a_time = lock(&self.0.undo_lock);
             stored.undo = Some(self.undo_ops(&stored));
+        } else {
+            // 테스트 기록은 줄이지 않는다 — `run_test`가 이 기록에서 출력 타입(객체·글)을 읽어 빌더에 준다.
+            clip_http_bodies(&mut stored.run, &wf.workflow);
         }
         let saved = self.store().save_run(&stored);
         // 못 되돌린 경로는 화면이 기록에서 읽는다 — 기록을 쓴 뒤에 알린다.

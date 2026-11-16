@@ -22,14 +22,42 @@
 
 ## 의도된 차이(carry) — 러스트가 BE와 다르게 두는 곳
 
-| 차이 | BE | 러스트 | 고정 테스트 |
+event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 치환에 나타나는 차이다. 차이 칸은 `BE → 러스트`.
+
+| event | 칸 | 차이 | 고정 테스트 |
 |---|---|---|---|
-| 실수 표기(1e7 이상·1e-3 미만) | `1.0E7`, `1.0E-4` | `10000000.0`, `0.0001` | `crates/ieum-engine/tests/render.rs` `gap_double_notation_differs_from_java` |
-| u64를 넘는 정수 | BigInteger 자릿수 그대로 | f64(`1.8446744073709552e+19`) | `render.rs` `gap_integer_beyond_u64_becomes_f64` |
-| JSON 제어문자 이스케이프 | `\u001F`(대문자) | `\u001f`(소문자) | `render.rs` `gap_json_control_escape_is_lowercase` |
-| 전각·아랍 숫자 | `BigDecimal`이 숫자로 읽음 | 숫자 아님(판단 불가 → 거짓) | `crates/ieum-engine/tests/condition.rs` `gap_non_ascii_digits_are_not_numbers` |
-| chrono 범위 밖 날짜(연도 262143+) | ±999999999년까지 읽음 | 판단 불가(거짓), panic 없음 | `condition.rs` `far_future_rfc_date_does_not_panic` |
-| 분기 경고 문구 | 실행 detail에 실음 | 러너가 버림(`evaluate`에서만 보임) | `condition.rs` `gap_runner_drops_warnings` |
-| AI `outputFields`(`ref: false` 목록) 속 참조 | 검증(agent)이 `outputFields`를 건너뜀 | 부모 `ref: false`를 자식에 전파해 `REF_NOT_ALLOWED`(보안 강화, 데스크톱 로컬 워크플로우 전용) | `crates/ieum-engine/tests/validate.rs` `ai_output_fields_refuse_refs` |
+| (참조식) | — | 실수 표기(1e7 이상·1e-3 미만): `1.0E7`·`1.0E-4` → `10000000.0`·`0.0001` | `crates/ieum-engine/tests/render.rs` `gap_double_notation_differs_from_java` |
+| (참조식) | — | u64를 넘는 정수: BigInteger 자릿수 그대로 → f64(`1.8446744073709552e+19`) | `render.rs` `gap_integer_beyond_u64_becomes_f64` |
+| (참조식) | — | JSON 제어문자 이스케이프: `\u001F`(대문자) → `\u001f`(소문자) | `render.rs` `gap_json_control_escape_is_lowercase` |
+| `branch.if` | `rules` | 전각·아랍 숫자: `BigDecimal`이 숫자로 읽음 → 숫자 아님(판단 불가 → 거짓) | `crates/ieum-engine/tests/condition.rs` `gap_non_ascii_digits_are_not_numbers` |
+| `branch.if` | `rules` | chrono 범위 밖 날짜(연도 262143+): ±999999999년까지 읽음 → 판단 불가(거짓), panic 없음 | `condition.rs` `far_future_rfc_date_does_not_panic` |
+| `branch.if` | — | 분기 경고 문구: 실행 detail에 실음 → 러너가 버림(`evaluate`에서만 보임) | `condition.rs` `gap_runner_drops_warnings` |
+| `local.ai` | `outputFields` | `ref: false` 목록 속 참조: 검증(agent)이 건너뜀 → 부모 `ref: false`를 자식에 전파해 `REF_NOT_ALLOWED`(보안 강화, 데스크톱 로컬 워크플로우 전용) | `crates/ieum-engine/tests/validate.rs` `ai_output_fields_refuse_refs` |
+| `formatter.text_markdown_to_html` | `input` | Markdown 중첩이 101단계를 넘으면: commonmark-java가 열린 블록 100개에서 잘라 낸 결과 → `Markdown 중첩이 너무 깊어요`(TOO_LARGE)로 실패 | `formatter_html.rs` `markdown_depth_limit` |
+| `formatter.text_markdown_to_html` | `input` | 링크·이미지 주소의 공백·비 ASCII 글자: 원문 그대로(`http://x/a b`·`https://x.com/€`) → 퍼센트 인코딩(`a%20b`·`%E2%82%AC`). 같은 주소다 | `formatter_html.rs` `gap_markdown_url_percent_encoded` |
+| `formatter.text_case` | `input` | `capitalize`·`title`에서 대문자가 여러 글자인 특수 글자(`ᾳ` 등 그리스 iota 하첨자): Java 한 글자 대응(`ᾼ`) → 원문 유지(`ᾳ`). `upper`·`lower`(`ß` → `SS`)는 같다 | 없음(`formatter/text.rs` `upper` 주석) |
+| `formatter.text_extract_pattern` | `pattern` | Java 백트래킹이 시간·스택으로 무너지는 패턴(`(a{1,30}){1,30}$`, `(a\|b)*` 긴 입력): `패턴 검사가 1초를 넘었어요`·`패턴이 너무 복잡해요`로 실패 → 뒤·앞 확인·역참조가 없으면 선형 엔진이라 정상 결과(빈 값·전체 일치) | `crates/ieum-engine/tests/formatter_extract.rs` `gap_java_timeout_pattern_ends`·`gap_java_stack_overflow_pattern_matches` |
+| `formatter.text_extract_pattern` | `pattern` | 1초 마감 문구: `패턴 검사가 1초를 넘었어요` → 역추적 상한(100만)·1초 마감 모두 `패턴이 너무 복잡해요`. 마감에 버려진 스레드는 찾기 사이마다 마감을 확인해 진행 중인 찾기 한 번(역추적 상한까지)만 마저 돈다. 사용자 패턴에 역추적 문법이 없으면 상한 5천만, 있거나 반복 횟수 곱이 32 이상이면 1백만. 줄 끝 번역이 걸린 글(10만 자 a…ab 뒤 LF)에서 release 실측 버려진 스레드 시작부터 끝까지: `(.?){31}.{31}$` 약 4.5초·`(a?){31}a{31}$` 약 3.6초(곱 31, 5천만), `(a?){1000}a{1000}$`·`(?:a?){20}(?:(?:a{9}){9}){9}$` 약 2초, `(a?){20}(?:a{20}){20}$` 1.5초, `(?:[ab]{1000}\|a)*$` 1.3초, `(a?){100}a{100}$` 0.4초(곱 32 이상, 1백만). 그동안 동시 2개 제한 때문에 다른 패턴 노드가 `다른 패턴 검사가 아직 끝나지 않았어요`로 실패할 수 있다 | `formatter_extract.rs` `runaway_pattern_ends_fast`·`runaway_lookahead_scan_hits_deadline`·`large_counts_get_low_backtrack_limit`, `formatter/extract.rs` `abandoned_find_loop_stops_at_deadline` |
+| `formatter.text_extract_pattern` | `pattern` | 반복 횟수의 중첩 곱(`{n}`=n, `{n,m}`=m, `{n,}`=n, 이어 붙은 것은 가장 큰 값)이 1000을 넘는 패턴(`a{1001}`·`(?:[ab]{5000}\|a)*$`·`(a{40}){30}`): Java는 받는다 → `정규식 패턴 오류예요: 반복 횟수가 너무 커요`. 5천만 상한에서 `(a?){5000}a{5000}$`의 버려진 스레드가 403.7초 돌던 것(재리뷰 2 실측: N=100 9.2초, 1000 81.7초, 5000 403.7초)을 막는다 | `formatter_extract.rs` `java_regex_unsupported`·`java_groups_and_counts_pass` |
+| `formatter.text_extract_pattern` | `pattern` | 글이 줄바꿈으로 끝나고 줄이 아주 길 때(줄 2000자 9줄, 줄 300자 332줄 등) `.+$`·`.*$`: Java는 마지막 줄 → 줄마다 줄 길이 제곱만큼 역추적해 `패턴이 너무 복잡해요`로 실패 | — |
+| `formatter.text_extract_pattern` | `pattern` | 동시 실행: 제한 없음 → 1초 마감에 버려져 아직 도는 스레드를 포함해 정규식 스레드가 이미 2개 돌고 있으면 새 실행은 바로 `다른 패턴 검사가 아직 끝나지 않았어요. 잠시 뒤 다시 실행해 주세요.`(코드 없음 — 패턴 잘못이 아니다)로 실패 | `crates/ieum-engine/src/formatter/extract.rs` `abandoned_threads_are_capped` |
+| `formatter.text_extract_pattern` | `pattern` | Java와 뜻이 다르거나 옮기지 않은 문법(`\h \H \v \V \R \X \G \K \N \cX`, `\Q…\E`, 클래스 안 `\b`·`--`, POSIX·java 속성 `\p{Alpha}`·`\p{IsDigit}`·`\p{javaLowerCase}`·`\p{gc=Alpha}` 등, 플래그 `(?d)`·`(?x)`·`(?U)`, 한쪽이 빈 클래스 교집합 `[&&a]`·`[a&&]`, 수량자 뒤 반복 횟수 `x{1}{2}`·`a*{2}`)과 Java에 없는 그룹 문법(`(?~…)`·`(?(1)…)`·`(*FAIL)`·`(?#…)`·`(?'n'…)` 등 — `(?:` `(?=` `(?!` `(?<=` `(?<!` `(?>` `(?<이름>`·플래그 말고는 모두. Java도 거절하므로 값 차이는 없다): Java 뜻대로 실행 → `정규식 패턴 오류예요: <설명>`(FIELD_INVALID pattern)으로 실패. `a{,n}`·짝 없는 `{`는 둘 다 패턴 오류 | `formatter_extract.rs` `java_regex_unsupported` |
+| `formatter.text_extract_pattern` | `pattern` | `(?i)`: Java는 ASCII 글자만 대소문자 무시 → 유니코드까지 무시(`(?i)é`가 `É`에, `(?i)k`가 켈빈 기호에 맞음). 비 ASCII 글자에서만 다르다(`(?iu)`는 같다) | `formatter_extract.rs` `gap_case_insensitive_is_unicode` |
+| `formatter.text_extract_pattern` | `pattern` | 빈 일치와 BMP 밖 글자: Java는 서로게이트 쌍 가운데서도 빈 일치를 셈(`x*` all을 이모지 하나에 빈 값 3개) → 글자 단위라 2개 | `formatter_extract.rs` `gap_empty_match_inside_surrogate_pair` |
+| `formatter.text_extract_pattern` | `pattern` | `\b`·`\B`: Java는 글자·숫자 뒤에 붙은 결합 문자(Mn)도 단어 글자로 침 → ASCII `\w`만 단어 글자(`e`+U+0301+`x`에서 경계 2개 → 4개) | `formatter_extract.rs` `gap_word_boundary_combining_mark` |
+| `formatter.date_format`·`formatter.date_add`·`formatter.date_compare` | `input`·`other` | 날짜 범위: Java는 ±999999999년까지 계산 → chrono는 약 ±26만 년까지라 그 범위를 넘는 `date_add` 결과는 `계산한 날짜가 표기할 수 있는 범위를 넘었어요`(TOO_LARGE), 그런 입력은 `날짜로 읽지 못했어요`(FIELD_INVALID)로 실패 | `formatter_date.rs` `out_of_range`·`read_out_of_range` |
+| `formatter.date_format` | `customPattern` | `y M d E H h m s a`·따옴표·구두점 밖의 Java 패턴(`QQ`·`MMM`·`SSS`·`VV`·`[ ]` 등): `DateTimeFormatter`로 표기(`yyyy-QQ` → `2026-04`) → `지원하지 않는 날짜 패턴 문자예요: <문자>`로 실패 | `crates/ieum-engine/tests/formatter_date.rs` `date_format_plan_cases`·`custom_pattern_letters` |
+| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | JSON 글 속 객체·배열 안쪽(2단계 이하)의 소수: `BigDecimal` 원문 자릿수(`[1.50]` → `[1.50]`) → f64 표기(`[1.5]`). 1단계 원소·값은 원문에서 다시 읽어 BE와 같다 | `crates/ieum-engine/tests/formatter_list.rs` `decimals_keep_source_digits` |
+| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 펴면 10만 자를 넘는 소수(`0e-999999999`·`1e-99999`): 수억 자 글을 만듦 → `목록 속 숫자가 10만 자를 넘어요`(TOO_LARGE)로 실패 | `formatter_list.rs` `decimals_keep_source_digits`·`huge_exponents_fail_fast` |
+| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 한 목록·표에서 편 소수 글의 합계가 100만 자를 넘으면(`1e-99997` × 11): 그대로 폄 → `목록 속 숫자가 모두 합해 100만 자를 넘어요`(TOO_LARGE)로 실패 | `formatter_list.rs` `huge_exponents_fail_fast` |
+| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | 중첩이 128단을 넘는 JSON 글: Jackson은 1000단까지 목록으로 읽음 → serde_json 재귀 상한에 걸려 `목록이 너무 깊어요`(TOO_LARGE)로 실패(쉼표 나누기로 가지 않는다). 재귀 상한은 serde_json 오류 문구(`recursion limit exceeded`)로 가린다 | `formatter_list.rs` `deep_nesting_fails`, `formatter/inputs.rs` `recursion_limit_message_is_pinned` |
+| `formatter.list_pick` | `input` | u64·i64 범위를 넘는 정수 원소(`[18446744073709551616]`·`[-9223372036854775809]`): BigInteger(JSON 숫자) → 같은 자릿수의 글. 참조식으로 쓰면 같은 글이지만 출력 타입·실행 기록이 다르다 | `formatter_list.rs` `gap_integer_beyond_u64_is_text` |
+| `http.request` | — | 4xx·5xx 실패 문구의 응답 본문: 1MB까지 그대로 → 앞 2,000자(UTF-16 단위)까지, 넘으면 `…`(실행 기록이 커지지 않게) | `crates/ieum-local/tests/http.rs` `error_body_in_message_is_capped_at_2000_utf16_units` |
+| `http.request` | — | 요청 전체 시간: 읽기 제한(30초 동안 아무것도 안 오면 실패)만 → 요청 하나(리다이렉트 홉·본문 읽기 포함)에 전체 5분 상한도 둔다. 넘으면 `요청을 보내지 못했어요: 시간 초과`(HTTP_UNREACHABLE) | `crates/ieum-local/tests/http.rs` `trickling_body_hits_total_timeout` |
+| `http.request` | `headers` | 다른 출처(scheme·host·port)로 리다이렉트될 때: `Authorization`·`Proxy-Authorization`·`Cookie`만 뗌 → `Content-Type`·`Accept` 밖의 머리말을 전부 뗌(`X-API-Key` 등이 다른 서버로 가지 않게). 같은 출처 안에서는 둘 다 유지 | `http.rs` `cross_origin_redirect_drops_all_user_headers`·`same_origin_redirect_keeps_user_headers` |
+| `http.request` | `headers` | 머리말 값의 비 ASCII 글자(`홍길동 é`): Netty 인코더가 Latin-1 밖 글자를 `?`로 바꿔 보냄(`3f 3f 3f 20 e9`) → UTF-8 바이트 그대로 보냄. 받는 서버가 보는 바이트가 다르다 | 없음 |
+| `http.request` | 응답 `body` | 글자 집합: `Content-Type`의 charset을 따르고 없으면 JSON은 UTF-8, 그 밖은 ISO-8859-1 → charset을 보지 않고 늘 UTF-8(깨진 바이트는 U+FFFD). `euc-kr` 응답은 데스크톱에서 깨지고, charset 없는 `text/plain` UTF-8 한글은 BE에서 깨진다 | `http.rs` `non_utf8_body_is_lossy_string` |
+| `http.request` | `url` | 실패 문구(주소 형식·scheme·호스트 없음·리다이렉트 3회 초과·Location 형식)에 싣는 주소: 원문 그대로 → 쿼리·fragment를 `?…`·`#…`로, `://` 뒤 계정 정보(`@` 앞)를 `…`로 가림(토큰이 실행 기록에 남지 않게) | `crates/ieum-local/tests/http.rs` `url_secrets_are_masked_in_messages`·`fourth_redirect_location_secret_is_masked` |
+| `formatter.list_pick`·`formatter.list_to_text`·`formatter.lookup_table` | `input`·`table` | f64 범위를 넘는 숫자가 든 JSON 글(`[1e99999]`·`{"a": -1e400}`): `BigDecimal`로 읽어 폄 → `목록 속 숫자가 너무 커요`(TOO_LARGE)로 실패. 그 밖의 파싱 실패(뒤에 글자가 남음·깨진 JSON)는 BE처럼 쉼표로 나눈다. 범위 초과는 serde_json 오류 문구(`number out of range`)로 가린다 | `formatter_list.rs` `numbers_beyond_f64_fail`, `formatter/inputs.rs` `out_of_range_message_is_pinned` |
 
 실수 표기·이스케이프 차이는 참조식 치환 결과 문자열에만 나타난다(조건 비교는 `java_num`으로 Java 표기를 따른다). u64를 넘는 정수는 읽는 순간 f64가 되므로 조건 비교에도 나타난다.

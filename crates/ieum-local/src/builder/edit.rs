@@ -28,6 +28,8 @@ fn type_name(t: NodeType) -> &'static str {
         NodeType::Ai => "AI",
         NodeType::Action => "ACTION",
         NodeType::Condition => "CONDITION",
+        NodeType::Transform => "TRANSFORM",
+        NodeType::Http => "HTTP",
     }
 }
 

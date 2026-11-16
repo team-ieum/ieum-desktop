@@ -2,12 +2,14 @@ pub mod ai;
 pub mod builder;
 pub mod chat;
 mod files;
+mod http;
 mod journal;
 mod paths;
 mod undo;
 mod watch;
 
 pub use files::{FileMoveRunner, FileRenameRunner, FileTrashRunner};
+pub use http::HttpRunner;
 pub use journal::{FileId, FileOp, FileOpKind, Journal, RecentWrites};
 pub use paths::{
     AllowedRoots, PathError, resolve_in_base, roots_for_workflow, sanitize_name, user_folders,

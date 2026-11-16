@@ -1,5 +1,29 @@
 // 노드 정의(Task 2와 같은 파일) — 앱 번들에 포함한다.
 import branchIf from "../../catalog/events/branch/if.json";
+import dateAdd from "../../catalog/events/formatter/date_add.json";
+import dateCompare from "../../catalog/events/formatter/date_compare.json";
+import dateFormat from "../../catalog/events/formatter/date_format.json";
+import listPick from "../../catalog/events/formatter/list_pick.json";
+import listToText from "../../catalog/events/formatter/list_to_text.json";
+import lookupTable from "../../catalog/events/formatter/lookup_table.json";
+import numberCurrency from "../../catalog/events/formatter/number_currency.json";
+import numberFormat from "../../catalog/events/formatter/number_format.json";
+import numberMath from "../../catalog/events/formatter/number_math.json";
+import numberPhone from "../../catalog/events/formatter/number_phone.json";
+import textCase from "../../catalog/events/formatter/text_case.json";
+import textDefault from "../../catalog/events/formatter/text_default.json";
+import textExtract from "../../catalog/events/formatter/text_extract.json";
+import textExtractPattern from "../../catalog/events/formatter/text_extract_pattern.json";
+import textLength from "../../catalog/events/formatter/text_length.json";
+import textMarkdownToHtml from "../../catalog/events/formatter/text_markdown_to_html.json";
+import textReplace from "../../catalog/events/formatter/text_replace.json";
+import textSplit from "../../catalog/events/formatter/text_split.json";
+import textStripHtml from "../../catalog/events/formatter/text_strip_html.json";
+import textTrim from "../../catalog/events/formatter/text_trim.json";
+import textTruncate from "../../catalog/events/formatter/text_truncate.json";
+import textUrlEncode from "../../catalog/events/formatter/text_url_encode.json";
+import httpRequest from "../../catalog/events/http/request.json";
+import transformMap from "../../catalog/events/transform/map.json";
 import localAi from "../../crates/ieum-local/defs/local.ai.json";
 import fileMove from "../../crates/ieum-local/defs/local.file_move.json";
 import fileRename from "../../crates/ieum-local/defs/local.file_rename.json";
@@ -22,9 +46,11 @@ export interface Field {
 
 export interface NodeDef {
   event: string;
-  node_type: "TRIGGER" | "AI" | "ACTION" | "CONDITION";
+  node_type: "TRIGGER" | "AI" | "ACTION" | "CONDITION" | "TRANSFORM" | "HTTP";
   inputFields: Field[];
   outputFields?: { key: string }[];
+  /** 출력 칸을 설정에서 읽는 노드 — `config.mappings`면 그 키들. */
+  outputsFrom?: string;
 }
 
 const raw: [string, unknown][] = [
@@ -34,6 +60,30 @@ const raw: [string, unknown][] = [
   ["local.file_rename", fileRename],
   ["local.file_trash", fileTrash],
   ["branch.if", branchIf],
+  ["transform.map", transformMap],
+  ["formatter.date_add", dateAdd],
+  ["formatter.date_compare", dateCompare],
+  ["formatter.date_format", dateFormat],
+  ["formatter.list_pick", listPick],
+  ["formatter.list_to_text", listToText],
+  ["formatter.lookup_table", lookupTable],
+  ["formatter.number_currency", numberCurrency],
+  ["formatter.number_format", numberFormat],
+  ["formatter.number_math", numberMath],
+  ["formatter.number_phone", numberPhone],
+  ["formatter.text_case", textCase],
+  ["formatter.text_default", textDefault],
+  ["formatter.text_extract", textExtract],
+  ["formatter.text_extract_pattern", textExtractPattern],
+  ["formatter.text_length", textLength],
+  ["formatter.text_markdown_to_html", textMarkdownToHtml],
+  ["formatter.text_replace", textReplace],
+  ["formatter.text_split", textSplit],
+  ["formatter.text_strip_html", textStripHtml],
+  ["formatter.text_trim", textTrim],
+  ["formatter.text_truncate", textTruncate],
+  ["formatter.text_url_encode", textUrlEncode],
+  ["http.request", httpRequest],
 ];
 
 /** 팔레트 순서 그대로. */
@@ -60,6 +110,8 @@ export function defaultValue(f: Field): unknown {
   if (f.default !== undefined) return f.default;
   if (f.list) return [];
   if (f.type === "boolean") return false;
+  if (f.type === "dict") return {};
+  if (f.type === "integer") return undefined;
   return "";
 }
 
@@ -110,6 +162,10 @@ export function outputKeys(node: WfNode): string[] {
     const of = node.config.outputFields;
     const keys = Array.isArray(of) ? of.map((f) => f?.key).filter((k): k is string => typeof k === "string" && !!k) : [];
     return keys.length ? keys : ["output"];
+  }
+  if (DEFS[node.event]?.outputsFrom === "config.mappings") {
+    const m = node.config.mappings;
+    return m && typeof m === "object" && !Array.isArray(m) ? Object.keys(m) : [];
   }
   return DEFS[node.event]?.outputFields?.map((f) => f.key) ?? [];
 }

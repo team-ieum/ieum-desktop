@@ -1,4 +1,4 @@
-use ieum_engine::{Outputs, referenced_node_ids, render_deep};
+use ieum_engine::{Outputs, referenced_node_ids, references, render_deep};
 use serde_json::{Value, json};
 
 fn outputs(pairs: &[(&str, Value)]) -> Outputs {
@@ -157,6 +157,20 @@ fn referenced_node_ids_order_and_dedup() {
     assert_eq!(referenced_node_ids(&ordered), vec!["zz", "aa"]);
     assert!(referenced_node_ids(&Value::Null).is_empty());
     assert!(referenced_node_ids(&json!({"a": "plain", "b": 3})).is_empty());
+}
+
+#[test]
+fn references_keep_output_path_order_and_dedup() {
+    let config = json!({
+        "first": "{{nodes.a.output.x.0}} {{nodes.b.output.y}}",
+        "list": ["{{nodes.a.output.x.0}}", {"deep": "{{nodes.a.output.z}}"}],
+        "{{nodes.keyonly.output.k}}": 3
+    });
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+    assert_eq!(
+        references(&config),
+        vec![pair("a", "x.0"), pair("b", "y"), pair("a", "z")]
+    );
 }
 
 // ── 의도된 차이(conformance/GAPS.md) ─────────────────────

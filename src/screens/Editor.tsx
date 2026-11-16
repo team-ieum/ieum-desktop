@@ -4,6 +4,7 @@ import { api, type StoredWorkflow, type ValidationError, type WfNode, type Workf
 import { Canvas, LocalBadge, nodeTitle, StatusIcon } from "../editor/Canvas";
 import { AssistantPanel } from "../editor/chat/AssistantPanel";
 import { FinishCard } from "../editor/chat/FinishCard";
+import { HttpConfirm, HttpTestCard } from "../editor/chat/HttpTestCard";
 import { ConfigPanel } from "../editor/ConfigPanel";
 import { Palette } from "../editor/Palette";
 import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
@@ -186,7 +187,8 @@ export function Editor({
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [status, setStatus] = useState<{ saving?: boolean; error?: string }>({});
   const live = useRuns((s) => s.live[draft.id]) ?? emptyLive(draft.id);
-  const testRun = useTestRun(draft.id);
+  // runNow는 저장본을 돌린다(실행 버튼은 미저장 편집이 있으면 꺼진다) — 확인도 저장본으로 판단한다.
+  const testRun = useTestRun(draft.id, base.workflow.nodes);
   /** 빌더의 테스트가 되돌리지 못한 파일(`원래 자리 → 지금 자리`) — 터미널 입구에는 결과 카드가 없어 여기 배너로 보인다. */
   const [stuck, setStuck] = useState<string[]>([]);
 
@@ -367,6 +369,8 @@ export function Editor({
           nodeNames={Object.fromEntries(draft.workflow.nodes.map((n) => [n.id, n.label || nodeTitle(n.event)]))}
         />
         <FinishCard workflowId={draft.id} version={base.updatedAt} />
+        <HttpTestCard key={draft.id} workflowId={draft.id} />
+        {testRun.ask && <HttpConfirm lines={testRun.ask} skipLabel={t("common.cancel")} onAnswer={testRun.answer} />}
         {selected && (
           <SidePanel
             label={selected.label || nodeTitle(selected.event)}

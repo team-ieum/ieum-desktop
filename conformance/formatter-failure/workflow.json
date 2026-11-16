@@ -1,0 +1,11 @@
+{
+  "nodes": [
+    {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "label": "새 파일", "config": {"folder": "/Users/me/Downloads"}},
+    {"id": "f", "type": "TRANSFORM", "event": "formatter.text_default", "label": "기본값", "config": {"input": "{{nodes.t.output.name}}"}},
+    {"id": "m", "type": "ACTION", "event": "local.file_move", "label": "옮기기", "config": {"path": "{{nodes.t.output.path}}", "baseFolder": "/Users/me/Sorted", "destination": "{{nodes.f.output.output}}"}}
+  ],
+  "edges": [
+    {"id": "e1", "source": "t", "target": "f"},
+    {"id": "e2", "source": "f", "target": "m"}
+  ]
+}

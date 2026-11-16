@@ -37,6 +37,51 @@ test("card_shows_folder_and_actions_and_only_a_click_turns_on", async () => {
   expect(usePendingFinish.getState().pending.w1).toBeUndefined();
 });
 
+test("finish_card_shows_http_action", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({
+    ...P,
+    actions: [{ nodeId: "h", event: "http.request", label: "주문 넣기", target: "POST https://x.test/o/{{nodes.a.output.id}}" }],
+  });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  expect(within(card).getByText("이 워크플로우가 하는 일")).toBeTruthy();
+  expect(within(card).getByText("요청 보내기 → POST https://x.test/o/{{nodes.a.output.id}}")).toBeTruthy();
+});
+
+test("finish_card_shows_http_line_like_confirm_card", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({
+    ...P,
+    actions: [
+      {
+        nodeId: "h",
+        event: "http.request",
+        label: "주문 넣기",
+        target: "POST https://x.test/o/{{nodes.a.output.id}}",
+        http: {
+          nodeId: "h",
+          label: "주문 넣기",
+          method: "POST",
+          url: "https://x.test/o/{{nodes.a.output.id}}",
+          headerKeys: ["X-Data"],
+          sends: [{ nodeId: "a", nodeLabel: "파일 읽기", output: "id" }],
+          hasBody: true,
+        },
+      },
+      P.actions[0],
+    ],
+  });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  expect(within(card).getByTestId("http-request").textContent).toBe("요청 보내기 → POST https://x.test/o/〈앞 노드 값〉");
+  expect(within(card).getByText("x.test").tagName).toBe("STRONG");
+  expect(within(card).getByText("머리말: X-Data")).toBeTruthy();
+  expect(within(card).getByText("본문 있음")).toBeTruthy();
+  expect(within(card).getByText("함께 보내는 값: 파일 읽기 의 id").className).toContain("text-danger-700");
+  // 파일 동작 줄은 그대로.
+  expect(within(card).getByText("옮기기 → /h/out/{{nodes.a.output.folder}}")).toBeTruthy();
+  expect(card.querySelector(".overflow-y-auto")).toBeTruthy();
+});
+
 test("card_lists_ai_nodes_and_marks_file_content_sending", async () => {
   vi.spyOn(api, "pendingFinish").mockResolvedValue({
     ...P,

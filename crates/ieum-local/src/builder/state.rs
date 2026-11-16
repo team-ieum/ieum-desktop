@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use super::HttpLine;
 use crate::ai::AiUsage;
 
 /// `accounts/<계정>/chats/<workflowId>.json`. `state`는 두 입구(터미널·채팅 패널)가 공유한다.
@@ -114,6 +115,9 @@ pub struct FinishAction {
     pub event: String,
     pub label: String,
     pub target: Option<String>,
+    /// HTTP 줄만 — 테스트 확인 카드와 같은 내용. 이 칸이 생기기 전 파일·다른 동작 줄에는 없다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http: Option<HttpLine>,
 }
 
 /// 객체 키를 재귀로 정렬한다(배열 순서는 유지). `serde_json`의 `preserve_order` 여부와 무관하게 같은 글자가 나온다.
