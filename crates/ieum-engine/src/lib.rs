@@ -5,6 +5,7 @@ pub mod formatter;
 mod model;
 mod render;
 mod run;
+pub mod schedule;
 mod transform;
 mod validate;
 
