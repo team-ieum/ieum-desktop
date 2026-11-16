@@ -310,7 +310,7 @@ async fn outline_and_events() {
         json!(["새 파일", "분류"])
     );
     let e = run(&b, json!({"op": "events"})).await;
-    assert_eq!(e.data["events"].as_array().unwrap().len(), 30);
+    assert_eq!(e.data["events"].as_array().unwrap().len(), 36);
     assert_eq!(
         e.data["events"][0],
         json!({"event": "local.folder_new_file", "title": "폴더에 새 파일", "description": "고른 폴더에 새 파일이 생기면 시작해요.", "nodeType": "TRIGGER"})

@@ -153,6 +153,12 @@ impl Catalog {
                 "local.folder_new_file",
                 "crates/ieum-local/defs/local.folder_new_file.json"
             ),
+            src!("schedule.every", "catalog/events/schedule/every.json"),
+            src!("schedule.hourly", "catalog/events/schedule/hourly.json"),
+            src!("schedule.daily", "catalog/events/schedule/daily.json"),
+            src!("schedule.weekly", "catalog/events/schedule/weekly.json"),
+            src!("schedule.monthly", "catalog/events/schedule/monthly.json"),
+            src!("manual.run", "catalog/events/manual/run.json"),
             src!("transform.map", "catalog/events/transform/map.json"),
             src!("http.request", "catalog/events/http/request.json"),
             src!(
@@ -307,14 +313,14 @@ impl Catalog {
     }
 
     /// `catalog/events/branch/if.json` + `crates/ieum-local/defs/*.json`(파일 이름 = event)
-    /// + `catalog/events/{transform,formatter,http}/*.json`(event = `<폴더>.<파일 이름>`).
+    /// + `catalog/events/{transform,formatter,http,schedule,manual}/*.json`(event = `<폴더>.<파일 이름>`).
     pub fn stage1(repo_root: &Path) -> Result<Catalog, CatalogError> {
         let mut files = vec![(
             "branch.if".to_string(),
             repo_root.join("catalog/events/branch/if.json"),
         )];
         json_files(&repo_root.join("crates/ieum-local/defs"), "", &mut files)?;
-        for dir in ["transform", "formatter", "http"] {
+        for dir in ["transform", "formatter", "http", "schedule", "manual"] {
             let prefix = format!("{dir}.");
             json_files(
                 &repo_root.join("catalog/events").join(dir),

@@ -1,5 +1,5 @@
 //! 정적 검증(1단계분) — ieum-agent `core/validators/static_validator.py`를 옮겼다(에러 순서·문구 동일).
-//! `REQUIRED`·`TYPE`·`CHOICE`·`CRON`·`TOO_LARGE`는 1단계 범위 밖이라 옮기지 않았다.
+//! `REQUIRED`·`TYPE`·`CHOICE`·`TOO_LARGE`는 1단계 범위 밖이라 옮기지 않았다. `CRON`은 스케줄 트리거(1b)와 함께 옮겼다.
 //! 필수 칸·선택지는 채팅 빌더용 `validate_fields`가 따로 본다(`validate`의 결과는 그대로).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -28,6 +28,7 @@ pub enum ErrorCode {
     /// `validate_fields`만 낸다(`validate`는 내지 않는다).
     Required,
     Choice,
+    Cron,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -215,6 +216,34 @@ fn under(loc: &str, p: &str) -> bool {
 
 // ── 그래프 ─────────────────────────────────────────────
 
+/// SCHEDULE 트리거(`schedule.*`)의 `config.cron`. 비어 있으면 REQUIRED 몫.
+/// agent와 같은 필드 수(5·6·7)·문자 집합에 더해, 데스크톱은 실제로 계산할 수 있는지(`to_quartz`)까지 본다.
+fn cron_error(node: &Node, nid: &str) -> Option<ValidationError> {
+    if !node.event.starts_with("schedule.") {
+        return None;
+    }
+    let cron = node.config.get("cron")?;
+    if is_empty(Some(cron)) {
+        return None;
+    }
+    let invalid = |message| Some(err(Cron, message, Some(nid), Some("config.cron".into())));
+    let Some(cron) = cron.as_str() else {
+        return invalid("cron 표현식은 문자열이어야 합니다.".into());
+    };
+    let parts: Vec<&str> = cron.split_whitespace().collect();
+    let charset_ok = parts.iter().all(|p| {
+        p.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "*/,-?LW#".contains(c))
+    });
+    if !(5..=7).contains(&parts.len()) || !charset_ok || crate::schedule::to_quartz(cron).is_err() {
+        return invalid(format!(
+            "cron 표현식 '{}'이 올바르지 않습니다(5필드 또는 Quartz 6·7필드).",
+            clip(cron)
+        ));
+    }
+    None
+}
+
 fn graph_errors(nodes: &[Node], edges: &[Edge], catalog: &Catalog) -> Vec<ValidationError> {
     if nodes.is_empty() {
         return vec![err(
@@ -254,7 +283,10 @@ fn graph_errors(nodes: &[Node], edges: &[Edge], catalog: &Catalog) -> Vec<Valida
                 Some(nid),
                 None,
             )),
-            Some(t) if t.to_uppercase() == "TRIGGER" => triggers.push(nid),
+            Some(t) if t.to_uppercase() == "TRIGGER" => {
+                triggers.push(nid);
+                errors.extend(cron_error(node, nid));
+            }
             Some(_) => {}
         }
     }
