@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { api, type CredentialsView, type GithubStatus } from "../../api";
+import { api, type CredentialsView, type GithubJob, type GithubStatus } from "../../api";
 import { setLang } from "../../i18n";
 import { useWeb } from "../../stores/web";
 import { IntegrationsPane } from "./IntegrationsPane";
@@ -9,6 +9,7 @@ import { SettingsShell } from "./SettingsShell";
 
 const CREDS: CredentialsView = { apiKeys: { anthropic: [], openai: [], gemini: [] }, claudeAccounts: [], codexAccounts: [], keychainError: null };
 let onCode: (p: { code: string }) => void = () => {};
+let onLine: (p: { line: string }) => void = () => {};
 
 beforeAll(() => {
   setLang("ko");
@@ -16,7 +17,11 @@ beforeAll(() => {
     onCode = cb;
     return () => {};
   });
-  vi.spyOn(api, "onGithubInstallProgress").mockResolvedValue(() => {});
+  vi.spyOn(api, "onGithubProgress").mockImplementation(async (cb) => {
+    onLine = cb;
+    return () => {};
+  });
+  vi.spyOn(api, "githubJob").mockResolvedValue(null);
   vi.spyOn(api, "listCredentials").mockResolvedValue(CREDS);
   vi.spyOn(api, "subscriptionUsage").mockRejectedValue("no command");
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
@@ -29,12 +34,14 @@ afterEach(() => {
 /** 대기 중인 promise와 그 resolve. */
 function deferred<T>() {
   let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => (resolve = r));
-  return { promise, resolve };
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((r, j) => ((resolve = r), (reject = j)));
+  return { promise, resolve, reject };
 }
 
-const renderPane = async (s: GithubStatus) => {
+const renderPane = async (s: GithubStatus, job: GithubJob | null = null) => {
   vi.spyOn(api, "githubStatus").mockResolvedValue(s);
+  vi.spyOn(api, "githubJob").mockResolvedValue(job);
   let r!: ReturnType<typeof render>;
   await act(async () => {
     r = render(<IntegrationsPane />);
@@ -109,16 +116,86 @@ test("account_changed", async () => {
 test("needs_login", async () => {
   await renderPane({ kind: "needsLogin", recorded: "hodoon" });
   expect(screen.getByText("gh 로그인이 필요해요.")).toBeTruthy();
+  expect(screen.getByText("연결하면 터미널의 gh 로그인도 새 로그인으로 바뀌어요.")).toBeTruthy();
   expect(screen.getByRole("button", { name: "연결" })).toBeTruthy();
 });
 
-test("unmount_cancels", async () => {
+test("unmount_cancels_login", async () => {
   const r = await renderPane({ kind: "notConnected" });
   vi.spyOn(api, "githubConnect").mockReturnValue(deferred<GithubStatus>().promise);
   const cancel = vi.spyOn(api, "githubCancel").mockResolvedValue();
   await click("연결");
   r.unmount();
   expect(cancel).toHaveBeenCalledTimes(1);
+});
+
+test("unmount_keeps_install", async () => {
+  const r = await renderPane({ kind: "notInstalled" });
+  vi.spyOn(api, "githubInstall").mockReturnValue(deferred<GithubStatus>().promise);
+  const cancel = vi.spyOn(api, "githubCancel").mockResolvedValue();
+  await click("설치");
+  r.unmount();
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+test("unmount_cancels_resumed_login", async () => {
+  const r = await renderPane({ kind: "notConnected" }, { kind: "login", code: null });
+  const cancel = vi.spyOn(api, "githubCancel").mockResolvedValue();
+  r.unmount();
+  expect(cancel).toHaveBeenCalledTimes(1);
+});
+
+test("resumes_login_job", async () => {
+  await renderPane({ kind: "notConnected" }, { kind: "login", code: "AB12-CD34" });
+  expect(screen.getByText("AB12-CD34")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "취소" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "연결" })).toBeNull();
+});
+
+test("resumes_install_job_until_done", async () => {
+  vi.useFakeTimers();
+  try {
+    await renderPane({ kind: "notInstalled" }, { kind: "install", code: null });
+    expect(screen.getByText("설치하는 중…")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "취소" })).toBeTruthy();
+    vi.spyOn(api, "githubJob").mockResolvedValue(null);
+    vi.spyOn(api, "githubStatus").mockResolvedValue({ kind: "notConnected" });
+    await act(async () => vi.advanceTimersByTimeAsync(1500));
+    expect(screen.queryByText("설치하는 중…")).toBeNull();
+    expect(screen.getByRole("button", { name: "연결" })).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("cancel_is_quiet", async () => {
+  await renderPane({ kind: "notConnected" });
+  vi.spyOn(api, "githubConnect").mockRejectedValue("취소됨");
+  await click("연결");
+  expect(screen.queryByText("취소됨")).toBeNull();
+  expect(screen.queryByRole("button", { name: "다시 시도" })).toBeNull();
+  expect(api.githubStatus).toHaveBeenCalledTimes(2);
+});
+
+test("login_failure_shows_output", async () => {
+  await renderPane({ kind: "notConnected" });
+  const done = deferred<GithubStatus>();
+  vi.spyOn(api, "githubConnect").mockReturnValue(done.promise);
+  await click("연결");
+  await act(async () => onLine({ line: "error: device flow expired" }));
+  await act(async () => done.reject("error: device flow expired"));
+  expect(screen.getAllByText("error: device flow expired").length).toBeGreaterThan(0);
+  expect(screen.getByText("출력 보기")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "다시 시도" })).toBeTruthy();
+});
+
+test("unreachable", async () => {
+  await renderPane({ kind: "unreachable", error: "proxyconnect tcp: connection refused" });
+  expect(screen.getByText("GitHub에 닿지 못했어요.")).toBeTruthy();
+  expect(screen.getByText("proxyconnect tcp: connection refused")).toBeTruthy();
+  expect(screen.getByText("연결 확인 안 됨")).toBeTruthy();
+  await click("다시 확인");
+  expect(api.githubStatus).toHaveBeenCalledTimes(2);
 });
 
 test("settings_menu_has_integrations", async () => {

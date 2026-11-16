@@ -14,6 +14,7 @@ const BADGE: Record<GithubStatus["kind"], [Key, string]> = {
   needsLogin: ["settings.loginNeeded", WARN],
   accountChanged: ["settings.gh.changed", WARN],
   connected: ["settings.connected", OK],
+  unreachable: ["settings.gh.unreachableBadge", WARN],
 };
 
 /** 설정 검색용 — 이 페이지에 나올 수 있는 문구. */
@@ -44,48 +45,80 @@ type Job = "install" | "connect";
 /** 설정 > 연동 — GitHub 줄 하나. 상태는 열 때·[다시 확인]·작업 끝에 다시 읽는다. */
 export function IntegrationsPane() {
   const [status, setStatus] = useState<GithubStatus | null>(null);
-  const [job, setJob] = useState<Job | null>(null);
+  const [job, setJobState] = useState<Job | null>(null);
+  /** 이 화면이 시작하지 않은(다시 들어와 이어 받은) 작업 — 끝났는지 물어 본다. */
+  const [resumed, setResumed] = useState(false);
   const [code, setCode] = useState<string | null>(null);
   const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const busy = useRef(false);
+  const jobRef = useRef<Job | null>(null);
   /** [다시 시도]가 다시 할 일 — 없으면 상태 다시 읽기. */
   const last = useRef<(() => void) | null>(null);
 
+  const setJob = (j: Job | null) => {
+    jobRef.current = j;
+    setJobState(j);
+    if (!j) setCode(null);
+  };
   const load = useCallback(() => {
     api.githubStatus().then(setStatus, (e) => setError(String(e)));
   }, []);
 
   useEffect(() => {
     load();
+    api.githubJob().then(
+      (j) => {
+        if (!j || jobRef.current) return;
+        jobRef.current = j.kind === "login" ? "connect" : "install";
+        setJobState(jobRef.current);
+        setCode(j.code);
+        setResumed(true);
+      },
+      () => {},
+    );
     const subs = [
       api.onGithubLoginCode((p) => setCode(p.code)),
-      api.onGithubInstallProgress((p) => setLines((l) => [...l, p.line].slice(-20))),
+      api.onGithubProgress((p) => setLines((l) => [...l, p.line].slice(-20))),
     ];
     return () => {
       subs.forEach((s) => s.then((off) => off()));
-      // 로그인·설치 중에 화면을 떠나면 gh 프로세스를 멈춘다.
-      if (busy.current) api.githubCancel().catch(() => {});
+      // 로그인 중에 화면을 떠나면 gh를 멈춘다. 설치는 계속 돌고, 다시 들어오면 이어서 보인다.
+      if (jobRef.current === "connect") api.githubCancel().catch(() => {});
     };
   }, [load]);
 
+  // 이어 받은 작업은 끝을 알릴 promise가 없으니 1초마다 묻는다.
+  useEffect(() => {
+    if (!resumed) return;
+    const id = setInterval(() => {
+      api.githubJob().then(
+        (j) => {
+          if (j) return setCode(j.code);
+          setResumed(false);
+          jobRef.current = null;
+          setJobState(null);
+          setCode(null);
+          load();
+        },
+        () => {},
+      );
+    }, 1000);
+    return () => clearInterval(id);
+  }, [resumed, load]);
+
   const run = (kind: Job, call: () => Promise<GithubStatus>) => {
     const go = () => {
-      busy.current = true;
       setJob(kind);
       setError(null);
       setCode(null);
       setLines([]);
       call()
         .then(setStatus, (e) => {
-          setError(String(e));
+          // 사용자가 [취소]했으면 오류가 아니다 — 조용히 상태만 다시 읽는다.
+          if (String(e) !== "취소됨") setError(String(e));
           load();
         })
-        .finally(() => {
-          busy.current = false;
-          setJob(null);
-          setCode(null);
-        });
+        .finally(() => setJob(null));
     };
     last.current = go;
     go();
@@ -107,6 +140,7 @@ export function IntegrationsPane() {
   );
   const s = status;
   let note: string | null = null;
+  let detail: string | null = null;
   let actions = null;
   if (job) {
     actions = (
@@ -135,12 +169,20 @@ export function IntegrationsPane() {
       </>
     );
   } else if (s?.kind === "notConnected" || s?.kind === "needsLogin") {
-    if (s.kind === "needsLogin") note = t("settings.gh.needsLogin");
+    if (s.kind === "needsLogin") {
+      note = t("settings.gh.needsLogin");
+      // 다시 로그인은 사용자 전역 gh 로그인을 바꾼다 — 누르기 전에 말한다.
+      detail = t("settings.gh.reloginWarn");
+    }
     actions = (
       <button type="button" className={PRIMARY} onClick={connect}>
         {t("settings.gh.connect")}
       </button>
     );
+  } else if (s?.kind === "unreachable") {
+    note = t("settings.gh.unreachable");
+    detail = s.error;
+    actions = recheck;
   } else if (s?.kind === "accountChanged") {
     note = t("settings.gh.accountChanged").replace("{current}", s.current);
     actions = (
@@ -196,6 +238,7 @@ export function IntegrationsPane() {
           </div>
         )}
         {!job && note && <p className="mt-2 typo-caption1_regular text-neutral-600">{note}</p>}
+        {!job && detail && <p className="mt-0.5 break-all typo-caption2_regular text-neutral-500">{detail}</p>}
         {!job && s?.kind === "connected" && s.envToken && <p className="mt-2 typo-caption1_regular text-neutral-600">{t("settings.gh.envToken")}</p>}
         {error && (
           <div className="mt-2 flex items-center gap-3">

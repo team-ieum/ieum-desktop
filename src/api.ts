@@ -466,7 +466,9 @@ export type GithubStatus =
   | { kind: "notConnected" }
   | { kind: "needsLogin"; recorded: string }
   | { kind: "accountChanged"; recorded: string; current: string }
-  | { kind: "connected"; login: string; envToken: boolean };
+  | { kind: "connected"; login: string; envToken: boolean }
+  | { kind: "unreachable"; error: string };
+export type GithubJob = { kind: "login" | "install"; code: string | null };
 
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
@@ -529,10 +531,13 @@ export const api = {
   githubInstall: () => invoke<GithubStatus>("github_install"),
   githubCancel: () => invoke<void>("github_cancel"),
   githubOpenDevice: () => invoke<void>("github_open_device"),
+  /** 진행 중인 로그인·설치(없으면 null) — 다시 들어온 화면이 [취소]·코드 카드를 보이게. */
+  githubJob: () => invoke<GithubJob | null>("github_job"),
   onGithubLoginCode: (cb: (p: { code: string }) => void): Promise<UnlistenFn> =>
     listen<{ code: string }>("github-login-code", (e) => cb(e.payload)),
-  onGithubInstallProgress: (cb: (p: { line: string }) => void): Promise<UnlistenFn> =>
-    listen<{ line: string }>("github-install-progress", (e) => cb(e.payload)),
+  /** 로그인·설치 공용 출력 줄. */
+  onGithubProgress: (cb: (p: { line: string }) => void): Promise<UnlistenFn> =>
+    listen<{ line: string }>("github-progress", (e) => cb(e.payload)),
   /** 앞 여부·알림 토글과 무관하게 "알림이 켜졌어요". */
   sendTestNotification: () => invoke<void>("send_test_notification"),
   checkUpdateNow: () => invoke<UpdateCheck>("check_update_now"),
