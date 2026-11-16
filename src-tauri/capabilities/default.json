@@ -73,6 +73,14 @@
     "allow-chat-send",
     "allow-chat-pick-folder",
     "allow-list-models",
+    "allow-answer-http-confirm",
+    "allow-github-status",
+    "allow-github-connect",
+    "allow-github-disconnect",
+    "allow-github-cancel",
+    "allow-github-open-device",
+    "allow-github-install",
+    "allow-github-job",
     "dialog:allow-open"
   ]
 }

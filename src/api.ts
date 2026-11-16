@@ -459,6 +459,17 @@ export interface ChatAi {
   effort: string | null;
 }
 export type ChatStage = { id: string; stage: "designing" | "testing" };
+/** 설정 > 연동의 GitHub 줄 상태(Rust `GithubStatus`). */
+export type GithubStatus =
+  | { kind: "notInstalled" }
+  | { kind: "outdated"; version: string }
+  /** relogin = [연결]이 gh 로그인을 새로 돌린다(활성 계정 토큰이 죽음) — 누르기 전에 경고. */
+  | { kind: "notConnected"; relogin: boolean }
+  | { kind: "needsLogin"; recorded: string }
+  | { kind: "accountChanged"; recorded: string; current: string }
+  | { kind: "connected"; login: string; envToken: boolean }
+  | { kind: "unreachable"; error: string };
+export type GithubJob = { kind: "login" | "install"; code: string | null };
 
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
@@ -513,6 +524,21 @@ export const api = {
   openSystemSettings: (pane: SystemSettingsPane) => invoke<void>("open_system_settings", { pane }),
   /** 공급자 키 발급 화면을 기본 브라우저로 — 주소는 Rust의 고정값. */
   openProviderConsole: (provider: ApiProvider) => invoke<void>("open_provider_console", { provider }),
+  githubStatus: () => invoke<GithubStatus>("github_status"),
+  /** 이미 로그인돼 있으면 바로 기록, 아니면 device 로그인(코드는 github-login-code 이벤트)이 끝날 때까지 기다린다. */
+  githubConnect: () => invoke<GithubStatus>("github_connect"),
+  /** IEUM 기록만 지운다 — gh 로그인은 그대로. */
+  githubDisconnect: () => invoke<GithubStatus>("github_disconnect"),
+  githubInstall: () => invoke<GithubStatus>("github_install"),
+  githubCancel: () => invoke<void>("github_cancel"),
+  githubOpenDevice: () => invoke<void>("github_open_device"),
+  /** 진행 중인 로그인·설치(없으면 null) — 다시 들어온 화면이 [취소]·코드 카드를 보이게. */
+  githubJob: () => invoke<GithubJob | null>("github_job"),
+  onGithubLoginCode: (cb: (p: { code: string }) => void): Promise<UnlistenFn> =>
+    listen<{ code: string }>("github-login-code", (e) => cb(e.payload)),
+  /** 로그인·설치 공용 출력 줄. */
+  onGithubProgress: (cb: (p: { line: string }) => void): Promise<UnlistenFn> =>
+    listen<{ line: string }>("github-progress", (e) => cb(e.payload)),
   /** 앞 여부·알림 토글과 무관하게 "알림이 켜졌어요". */
   sendTestNotification: () => invoke<void>("send_test_notification"),
   checkUpdateNow: () => invoke<UpdateCheck>("check_update_now"),

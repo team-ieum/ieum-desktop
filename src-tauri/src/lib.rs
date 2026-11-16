@@ -5,6 +5,7 @@ pub mod channel;
 pub mod chat;
 pub mod commands;
 pub mod credentials;
+pub mod github;
 pub mod http_confirm;
 pub mod limit_watch;
 pub mod models;
@@ -268,6 +269,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     crate::limit_watch::spawn(app.handle().clone());
     app.manage(pick::system_pick(app.handle().clone()));
     app.manage(terminal::Terms::default());
+    app.manage(github::GithubJobs::default());
     app.manage(channel::app_gate(app.handle()));
     app.manage(channel::app_channel(app.handle()));
     tray::create(app)?;
@@ -310,6 +312,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_workflows,
+            github::github_status,
+            github::github_disconnect,
+            github::github_connect,
+            github::github_cancel,
+            github::github_open_device,
+            github::github_install,
+            github::github_job,
             commands::save_workflow,
             commands::delete_workflow,
             commands::validate_workflow,
@@ -392,6 +401,9 @@ pub fn run() {
             // 앱이 끝나면 터미널 세션도 전부 끝낸다.
             if let tauri::RunEvent::Exit = e {
                 app.state::<terminal::Terms>().kill_all();
+                // 진행 중 gh 로그인·설치가 고아로 남지 않게.
+                app.state::<github::GithubJobs>()
+                    .cancel_and_wait(std::time::Duration::from_millis(300));
                 app.state::<channel::Channel>().close();
             }
         });

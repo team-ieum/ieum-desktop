@@ -63,12 +63,12 @@ const menu = () => within(screen.getByRole("navigation")).getAllByRole("button")
 const title = () => screen.getByRole("heading", { level: 2 }).textContent;
 const IDS = ["account", "ai", "usage", "general", "notifications", "shortcuts", "macos", "advanced"];
 const pages = () => IDS.filter((id) => document.getElementById(`settings-${id}`));
-const ALL_MENUS = ["이음 계정", "AI 제공자 계정", "통계 및 사용량", "일반", "알림", "단축키", "macOS 권한", "고급"];
+const ALL_MENUS = ["이음 계정", "AI 제공자 계정", "통계 및 사용량", "연동", "일반", "알림", "단축키", "macOS 권한", "고급"];
 
 test("settings_menu_groups_in_order", async () => {
   await renderShell();
   const nav = screen.getByRole("navigation");
-  expect([...nav.querySelectorAll("[data-group]")].map((g) => g.textContent)).toEqual(["계정", "AI 기능", "일반", "개인정보 보호 및 보안", "고급"]);
+  expect([...nav.querySelectorAll("[data-group]")].map((g) => g.textContent)).toEqual(["계정", "AI 기능", "연동", "일반", "개인정보 보호 및 보안", "고급"]);
   expect(menu()).toEqual(ALL_MENUS);
   expect(nav.textContent).not.toContain("권한·준비");
 });

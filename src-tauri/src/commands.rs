@@ -378,7 +378,7 @@ const HELP_URL: &str = "https://github.com/team-ieum/ieum-desktop/blob/main/docs
 
 /// 기본 브라우저로 연다. 주소는 화면이 아니라 고정값·저장된 설정에서 만든다.
 // ponytail: macOS `open`만(1단계는 macOS 전용) — 다른 OS를 내면 opener 플러그인으로.
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     let status = std::process::Command::new("/usr/bin/open")
         .arg(url)
         .status()

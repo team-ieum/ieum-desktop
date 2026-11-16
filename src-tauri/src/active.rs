@@ -2,7 +2,7 @@
 //! 만료는 슬롯을 건드리지 않는다 — 명시적 로그아웃(`deactivate`)만 감시를 멈춘다.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,6 +67,19 @@ impl Active {
 
     pub fn settings(&self) -> &Store {
         &self.base.settings
+    }
+
+    pub fn app_data(&self) -> &Path {
+        &self.base.app_data
+    }
+
+    /// 활성 계정 폴더. 로그인 전이면 `NOT_SIGNED_IN`.
+    pub async fn account_dir(&self) -> Result<PathBuf, String> {
+        let key = self
+            .account_key()
+            .await
+            .ok_or_else(|| NOT_SIGNED_IN.to_string())?;
+        Ok(account_root(&self.base.app_data, &key))
     }
 
     /// 같은 계정이 이미 활성이면 그대로 둔다(만료 뒤 재로그인). 다른 계정이면 그 감시를 멈추고 바꾼다.
