@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import type { WfNode } from "../api";
 import { DEFS, newBranchKey, newNode, nextPosition, outputKeys } from "./defs";
 
-test("defs_has_30_and_transform_map_outputs_follow_mappings", () => {
-  expect(Object.keys(DEFS).length).toBe(30);
+test("defs_has_36_and_transform_map_outputs_follow_mappings", () => {
+  expect(Object.keys(DEFS).length).toBe(36);
   const map = (config: Record<string, unknown>): WfNode => ({ id: "t", event: "transform.map", type: "TRANSFORM", config });
   expect(outputKeys(map({ mappings: { a: "1", b: "2" } }))).toEqual(["a", "b"]);
   expect(outputKeys(map({}))).toEqual([]);

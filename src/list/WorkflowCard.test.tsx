@@ -16,6 +16,7 @@ const entry = (over: Partial<WorkflowEntry> = {}): WorkflowEntry => ({
   updatedAt: "2026-11-12T00:00:00Z",
   watch: "watching",
   watchMessage: null,
+  nextRun: null,
   workflow: {
     nodes: [
       { id: "a", event: "local.folder_new_file", config: { folder: "~/Documents/청구서" } },
@@ -39,6 +40,28 @@ test("local_card_maps_status_and_trigger", () => {
   expect(err.status).toBe("error");
   expect(err.services).toEqual(["local", "ai"]);
   expect(localCard(entry({ workflow: { nodes: [{ id: "x", event: "local.file_trash", config: {} }], edges: [] } })).trigger).toBe("manual");
+});
+
+const sched = (event: string, config: Record<string, unknown>, nextRun: string | null = null) =>
+  localCard(entry({ nextRun, workflow: { nodes: [{ id: "t", event, config }], edges: [] } }));
+
+test("schedule_card_summaries", () => {
+  expect(sched("schedule.hourly", { weekends: true }).triggerDetail).toBe("매시 정각");
+  expect(sched("schedule.hourly", { weekends: false }).triggerDetail).toBe("평일 매시 정각");
+  expect(sched("schedule.daily", { hour: "9", weekends: true }).triggerDetail).toBe("매일 오전 9시");
+  expect(sched("schedule.daily", { hour: "9", weekends: false }).triggerDetail).toBe("평일 매일 오전 9시");
+  expect(sched("schedule.weekly", { weekday: "MON", hour: "9" }).triggerDetail).toBe("매주 월요일 오전 9시");
+  expect(sched("schedule.monthly", { day: "15", hour: "0" }).triggerDetail).toBe("매월 15일 자정");
+  expect(sched("schedule.monthly", { day: "L", hour: "9" }).triggerDetail).toBe("매월 마지막 날 오전 9시");
+  expect(sched("schedule.every", { cron: "0 9 * * 5" }).triggerDetail).toBe("cron 0 9 * * 5");
+  expect(sched("schedule.daily", { hour: "9" }).trigger).toBe("schedule");
+  expect(sched("manual.run", {}).trigger).toBe("manual");
+});
+
+test("schedule_card_shows_next_run", () => {
+  render(<WorkflowCard data={sched("schedule.daily", { hour: "9" }, "2026-11-17T09:00:00")} onOpen={() => {}} menu={[]} />);
+  expect(screen.getByText(/매일 오전 9시/)).toBeTruthy();
+  expect(screen.getByText("다음 11/17 09:00")).toBeTruthy();
 });
 
 test("web_card_menu_opens_in_browser", async () => {

@@ -31,8 +31,11 @@ function httpLine(n: WfNode, nodes: WfNode[]): HttpLine {
   };
 }
 
+/** 파일 없이 바로 도는 트리거(스케줄·수동). 그 밖(폴더)은 파일을 고른다. */
+export const runsWithoutFile = (nodes: WfNode[]) => nodes.some((n) => n.event.startsWith("schedule.") || n.event === "manual.run");
+
 /**
- * 파일을 골라 한 번 실행 — 편집기 툴바와 실행 보기가 같이 쓴다.
+ * 한 번 실행(폴더 트리거는 파일을 골라서) — 편집기 툴바와 실행 보기가 같이 쓴다.
  * `nodes`는 `runNow`가 실제로 돌리는 저장본의 노드다. GET이 아닌 HTTP 요청이 있으면 `ask`에 줄을 올리고
  * 사람이 `answer(true)`해야 돌린다(되돌릴 수 없는 요청).
  */
@@ -42,11 +45,12 @@ export function useTestRun(workflowId: string, nodes: WfNode[]) {
   const [ask, setAsk] = useState<HttpLine[] | null>(null);
   const go = async () => {
     setError(null);
-    const path = await api.pickPath(false).catch((e) => (setError(String(e)), null));
-    if (!path) return;
+    const direct = runsWithoutFile(nodes);
+    const path = direct ? null : await api.pickPath(false).catch((e) => (setError(String(e)), null));
+    if (!direct && !path) return;
     setRunning(true);
     try {
-      await api.runNow(workflowId, path);
+      await (path ? api.runNow(workflowId, path) : api.runNow(workflowId));
     } catch (e) {
       setError(String(e));
     } finally {

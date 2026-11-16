@@ -39,6 +39,8 @@ export interface StoredWorkflow {
 export interface WorkflowEntry extends StoredWorkflow {
   watch: "off" | "watching" | "watch_error";
   watchMessage: string | null;
+  /** 다음 스케줄 차례(Asia/Seoul "YYYY-MM-DDTHH:MM:SS"). 꺼짐·스케줄 아님이면 null. */
+  nextRun?: string | null;
 }
 
 // validate.rs
@@ -112,9 +114,11 @@ export interface StoredRun {
   allowedRoots: string[];
   undo: UndoReport | null;
   trigger?: RunTrigger | null;
+  /** 스케줄 실행의 차례(Asia/Seoul "YYYY-MM-DDTHH:MM:SS"). */
+  scheduledFor?: string | null;
 }
-/** 폴더 감시·수동. 옛 기록은 없음. */
-export type RunTrigger = "watch" | "manual" | "test";
+/** 폴더 감시·수동·스케줄. 옛 기록은 없음. */
+export type RunTrigger = "watch" | "manual" | "test" | "schedule";
 export interface RunSummary {
   runId: string;
   workflowId: string;
@@ -384,7 +388,10 @@ export interface BuilderReply {
 
 export interface PendingFinish {
   hash: string;
-  folder: string;
+  /** 폴더 트리거일 때만. */
+  folder: string | null;
+  /** 끝내는 버튼 — `save`(수동 실행 워크플로우)면 [저장]. 옛 확인 대기에는 없다(= enable). */
+  button?: "enable" | "save";
   /** `http`는 HTTP 줄만 — 이 칸이 생기기 전에 저장된 확인 대기에는 없다. */
   actions: { nodeId: string; event: string; label: string; target: string | null; http?: HttpLine }[];
   /** AI 노드마다 한 줄. 이 칸이 생기기 전에 저장된 확인 대기에는 없다. */
@@ -477,7 +484,8 @@ export const api = {
   deleteWorkflow: (id: string) => invoke<void>("delete_workflow", { id }),
   validateWorkflow: (wf: Workflow) => invoke<ValidationError[]>("validate_workflow", { wf }),
   /** 실행이 끝나면 run id를 돌려준다. */
-  runNow: (id: string, filePath: string) => invoke<string>("run_now", { id, filePath }),
+  /** 폴더 트리거는 `filePath` 필수, 스케줄·수동은 없이. */
+  runNow: (id: string, filePath?: string) => invoke<string>("run_now", { id, filePath: filePath ?? null }),
   listRuns: (workflowId?: string) => invoke<RunSummary[]>("list_runs", { workflowId: workflowId ?? null }),
   getRun: (runId: string) => invoke<StoredRun>("get_run", { runId }),
   undoRun: (runId: string) => invoke<UndoReport>("undo_run", { runId }),

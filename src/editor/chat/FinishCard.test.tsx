@@ -144,3 +144,14 @@ test("refusal_reason_stays_even_when_pending_is_cleared", async () => {
   await act(async () => r.rerender(<FinishCard workflowId="w1" version="v2" />));
   expect(screen.queryByRole("alert")).toBeNull();
 });
+
+test("finish_card_save_button_for_manual", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({ ...P, folder: null, button: "save" });
+  const confirm = vi.spyOn(api, "confirmFinish").mockResolvedValue({ ok: true });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  expect(within(card).queryByText("감시할 폴더")).toBeNull();
+  expect(within(card).queryByRole("button", { name: "켜기" })).toBeNull();
+  await act(async () => fireEvent.click(within(card).getByRole("button", { name: "저장" })));
+  expect(confirm).toHaveBeenCalledWith("w1", true);
+});

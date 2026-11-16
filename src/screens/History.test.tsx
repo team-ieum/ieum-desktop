@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
-import { api, type RunSummary } from "../api";
+import { api, type RunSummary, type StoredRun } from "../api";
 import { setLang } from "../i18n";
 import { History, RunPill } from "./History";
 
@@ -53,5 +53,37 @@ test("history_filter_failed_label_no_match_and_undone", async () => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: /실패/ })));
   expect(screen.getByText("조건에 맞는 실행이 없어요.")).toBeTruthy();
   expect(screen.queryByText("아직 실행 기록이 없어요.")).toBeNull();
+  vi.restoreAllMocks();
+});
+
+test("history_detail_shows_late_schedule_run", async () => {
+  vi.spyOn(api, "listWorkflows").mockResolvedValue([]);
+  vi.spyOn(api, "listRuns").mockResolvedValue([]);
+  const stored = (startedAt: string) => ({
+    run: { status: "succeeded", nodes: {}, validationErrors: [] },
+    workflowId: "w1",
+    startedAt,
+    finishedAt: startedAt,
+    fileOps: [],
+    allowedRoots: [],
+    undo: null,
+    trigger: "schedule",
+    scheduledFor: "2026-11-17T09:00:00",
+  }) as unknown as StoredRun;
+  // 09:00 KST = 00:00Z. 10:30 KST에 돌았다.
+  vi.spyOn(api, "getRun").mockResolvedValue(stored("2026-11-17T01:30:00Z"));
+  await act(async () => {
+    render(<History initialRun="r1" />);
+  });
+  expect(screen.getByText(/스케줄/)).toBeTruthy();
+  expect(screen.getByText(/예정 09:00, 늦게 실행/)).toBeTruthy();
+  cleanup();
+  // 제때 돈 실행은 "늦게"를 붙이지 않는다.
+  vi.spyOn(api, "getRun").mockResolvedValue(stored("2026-11-17T00:00:10Z"));
+  await act(async () => {
+    render(<History initialRun="r1" />);
+  });
+  expect(screen.getByText(/스케줄/)).toBeTruthy();
+  expect(screen.queryByText(/늦게 실행/)).toBeNull();
   vi.restoreAllMocks();
 });

@@ -42,14 +42,18 @@ export function FinishCard({ workflowId, version }: { workflowId: string; versio
     setBusy(false);
   };
 
+  const save = found.button === "save";
+  const title = t(save ? "finish.titleSave" : "finish.title");
   return (
-    <div role="dialog" aria-label={t("finish.title")} className={CARD_BOX}>
-      <h2 className="typo-body2_bold text-neutral-900">{t("finish.title")}</h2>
+    <div role="dialog" aria-label={title} className={CARD_BOX}>
+      <h2 className="typo-body2_bold text-neutral-900">{title}</h2>
       <dl className={`flex flex-col gap-2 typo-caption1_medium text-neutral-700 ${CARD_SCROLL}`}>
-        <div>
-          <dt className="text-neutral-500">{t("finish.folder")}</dt>
-          <dd className="break-all font-mono text-xs">{found.folder}</dd>
-        </div>
+        {found.folder && (
+          <div>
+            <dt className="text-neutral-500">{t("finish.folder")}</dt>
+            <dd className="break-all font-mono text-xs">{found.folder}</dd>
+          </div>
+        )}
         {found.actions.length > 0 && (
           <div>
             <dt className="text-neutral-500">{t("finish.actions")}</dt>
@@ -103,7 +107,7 @@ export function FinishCard({ workflowId, version }: { workflowId: string; versio
           {t("finish.decline")}
         </button>
         <button type="button" className={PRIMARY} disabled={busy} onClick={() => void answer(true)}>
-          {t("finish.accept")}
+          {t(save ? "common.save" : "finish.accept")}
         </button>
       </div>
     </div>
