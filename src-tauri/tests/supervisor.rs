@@ -315,7 +315,11 @@ async fn run_now_records_manual_trigger() {
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
 
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     let run = env.store.get_run(&run_id).unwrap();
     assert_eq!(run.trigger, Some(RunTrigger::Manual));
     assert_eq!(
@@ -331,7 +335,11 @@ async fn undo_run_twice_errors() {
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
 
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     assert!(out.join("sorted/a.pdf").exists());
 
     let report = env.sup.undo_run(&run_id).unwrap();
@@ -347,7 +355,11 @@ async fn undo_uses_stored_roots_not_current() {
     let (inbox, out) = (env.dir("in"), env.dir("out"));
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
 
     // 실행 뒤 워크플로우의 폴더를 전혀 다른 곳으로 바꾼다.
     let mut wf = env.store.get_workflow(&id).unwrap();
@@ -414,7 +426,11 @@ async fn run_now_outside_roots_rejected() {
     std::os::unix::fs::symlink(&key, inbox.join("innocent.pdf")).unwrap();
 
     for f in [key.clone(), inbox.join("innocent.pdf")] {
-        assert!(env.sup.run_now(&id, &f).await.is_err(), "{}", f.display());
+        assert!(
+            env.sup.run_now(&id, Some(&f)).await.is_err(),
+            "{}",
+            f.display()
+        );
     }
     assert_eq!(runs(&env, &id), 0);
     assert_eq!(env.ai.calls.load(Ordering::SeqCst), 0);
@@ -438,7 +454,11 @@ async fn ai_file_outside_roots_rejected() {
     let id = save(&env, wf, false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
 
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     let run = env.store.get_run(&run_id).unwrap();
     assert_eq!(run.run.nodes["a"].status, NodeStatus::Failed);
     assert_eq!(
@@ -486,7 +506,7 @@ async fn save_rejects_bad_folders_and_provider() {
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
     assert!(
         env.sup
-            .run_now(&planted.id, &inbox.join("a.pdf"))
+            .run_now(&planted.id, Some(&inbox.join("a.pdf")))
             .await
             .is_err()
     );
@@ -564,7 +584,9 @@ async fn journal_not_shared_between_runs() {
             let f = inbox.join(format!("f{n}.pdf"));
             fs::write(&f, "pdf").unwrap();
             let (sup, id) = (env.sup.clone(), id.clone());
-            jobs.push(tokio::spawn(async move { sup.run_now(&id, &f).await }));
+            jobs.push(tokio::spawn(
+                async move { sup.run_now(&id, Some(&f)).await },
+            ));
         }
     }
     for j in jobs {
@@ -620,7 +642,7 @@ async fn file_op_recorded_while_run_in_flight() {
     let id = save(&env, wf, false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
     let (sup, wid, f) = (env.sup.clone(), id.clone(), inbox.join("a.pdf"));
-    tokio::spawn(async move { sup.run_now(&wid, &f).await });
+    tokio::spawn(async move { sup.run_now(&wid, Some(&f)).await });
     assert!(
         wait_until(Duration::from_secs(5), || env
             .ai
@@ -692,7 +714,7 @@ async fn run_finished_emitted_after_final_save() {
         now: Arc::new(Utc::now),
     })
     .unwrap();
-    sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    sup.run_now(&id, Some(&inbox.join("a.pdf"))).await.unwrap();
     assert_eq!(*seen.lock().unwrap(), [(RunStatus::Succeeded, false)]);
 }
 
@@ -759,7 +781,11 @@ async fn undo_ignores_tampered_roots_outside_policy() {
     let (inbox, out) = (env.dir("in"), env.dir("out"));
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
 
     // 기록의 허용 폴더를 홈 자체로 바꿔 심는다.
     let mut run = env.store.get_run(&run_id).unwrap();
@@ -791,7 +817,11 @@ async fn run_notice_emitted_with_trigger_and_name() {
     let (inbox, out) = (env.dir("in"), env.dir("out"));
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     let manual = notices(&env, &id);
     assert_eq!(manual.len(), 2, "{manual:?}");
     assert!(matches!(manual[0].kind, NoticeKind::Started));
@@ -837,7 +867,10 @@ async fn run_notice_failed_node_is_label_not_error() {
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
     // 옮길 폴더 자리에 파일을 두어 옮기기 노드를 실패시킨다.
     fs::write(out.join("sorted"), "not a folder").unwrap();
-    env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    env.sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     let n = notices(&env, &id);
     match &n[1].kind {
         NoticeKind::Finished {
@@ -882,7 +915,7 @@ async fn unfinished_test_run_undone_on_next_start() {
         );
         async move {
             fs::write(&file, "pdf").unwrap();
-            let run_id = sup.run_now(&id, &file).await.unwrap();
+            let run_id = sup.run_now(&id, Some(&file)).await.unwrap();
             let mut run = store.get_run(&run_id).unwrap();
             assert_eq!(run.file_ops.len(), 1);
             run.finished_at = String::new();
@@ -1006,7 +1039,11 @@ async fn large_http_body_is_clipped_only_in_stored_run() {
     .unwrap();
     let id = save(&env, wf, false);
     fs::write(inbox.join("a.txt"), "a").unwrap();
-    let run_id = env.sup.run_now(&id, &inbox.join("a.txt")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.txt")))
+        .await
+        .unwrap();
 
     let run = env.store.get_run(&run_id).unwrap();
     assert_eq!(run.run.status, RunStatus::Succeeded, "{:?}", run.run.nodes);
@@ -1346,4 +1383,39 @@ async fn last_slot_of_year_runs_then_error() {
         .unwrap();
     assert_eq!(entry.watch, WatchState::WatchError);
     assert!(status_events(&env, &id, false) >= 1);
+}
+
+/// 폴더 워크플로우는 파일이 있어야, 스케줄·수동은 파일 없이 돈다(기록 trigger = Manual).
+#[tokio::test(flavor = "multi_thread")]
+async fn run_now_by_kind() {
+    let env = env();
+    let inbox = env.dir("in");
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let folder = save(&env, ai_only_wf(&inbox), false);
+    assert_eq!(
+        env.sup.run_now(&folder, None).await.unwrap_err(),
+        "파일을 골라 주세요"
+    );
+    assert!(
+        env.sup
+            .run_now(&folder, Some(&inbox.join("a.pdf")))
+            .await
+            .is_ok()
+    );
+
+    let daily = save(&env, sched_wf("schedule.daily", json!({"hour": "9"})), true);
+    let run_id = env.sup.run_now(&daily, None).await.unwrap();
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Manual));
+    assert_eq!(run.scheduled_for, None);
+    assert_eq!(
+        run.run.nodes["t"].output.as_ref().unwrap()["triggeredAt"],
+        json!("2026-11-16T10:30:00")
+    );
+
+    let manual = save(&env, sched_wf("manual.run", json!({})), true);
+    let run_id = env.sup.run_now(&manual, None).await.unwrap();
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Manual));
+    assert_eq!(run.run.nodes["t"].output.as_ref().unwrap().len(), 0);
 }

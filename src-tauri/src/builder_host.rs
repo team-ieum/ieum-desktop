@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use ieum_engine::Workflow;
 use ieum_local::ai::detect_clis;
 use ieum_local::builder::{
-    AiDefault, Builder, ChatFile, Doc, Host, HttpConfirm, HttpLine, SaveError, TestRun,
+    AiDefault, Builder, ChatFile, Doc, Host, HttpConfirm, HttpLine, SaveError, TestRun, TestTrigger,
 };
 
 use crate::active::Active;
@@ -221,9 +221,9 @@ impl Host for AppHost {
         &self,
         workflow_id: &str,
         wf: Workflow,
-        sample: &Path,
+        trigger: TestTrigger,
     ) -> Result<TestRun, String> {
-        self.sup.run_test(workflow_id, wf, sample).await
+        self.sup.run_test(workflow_id, wf, trigger).await
     }
 
     fn finish_pending(&self, workflow_id: &str, workflow_name: &str) {

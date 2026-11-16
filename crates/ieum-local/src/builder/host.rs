@@ -34,6 +34,15 @@ pub struct AiDefault {
     pub effort: Option<String>,
 }
 
+/// 노드 테스트의 트리거 입력.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TestTrigger {
+    /// 폴더 트리거 — 이 샘플 파일로 트리거 출력을 만든다(허용 폴더 안 일반 파일이어야 한다).
+    File(PathBuf),
+    /// 스케줄·수동 — 트리거 출력 그대로.
+    Output(serde_json::Map<String, serde_json::Value>),
+}
+
 #[derive(Debug, Clone)]
 pub struct TestRun {
     pub run_id: String,
@@ -104,12 +113,12 @@ pub trait Host: Send + Sync {
     /// 터미널용 기본 AI 연결(설계 3절 순서의 첫 번째). 없으면 None.
     async fn ai_default(&self) -> Option<AiDefault>;
     async fn ai_ready(&self, provider: &str, credential: Option<&str>) -> bool;
-    /// `wf`(대상까지 자른 그래프)를 `sample` 파일로 실제 실행하고 자동으로 되돌린 뒤 결과를 준다.
+    /// `wf`(대상까지 자른 그래프)를 `trigger`로 실제 실행하고 자동으로 되돌린 뒤 결과를 준다.
     async fn run_test(
         &self,
         workflow_id: &str,
         wf: Workflow,
-        sample: &Path,
+        trigger: TestTrigger,
     ) -> Result<TestRun, String>;
     /// 완료 조건 통과 → 확인 카드 알림.
     fn finish_pending(&self, workflow_id: &str, workflow_name: &str);

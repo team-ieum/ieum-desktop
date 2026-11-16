@@ -17,7 +17,7 @@ use ieum_engine::{
     ValidationError, Workflow, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
-use ieum_local::builder::{HttpLine, TestRun};
+use ieum_local::builder::{HttpLine, TestRun, TestTrigger};
 use ieum_local::{
     AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, HttpRunner,
     Journal, NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo,
@@ -1062,11 +1062,23 @@ impl Supervisor {
         Ok(stored.run.run_id)
     }
 
-    /// 고른 파일로 시험 실행(같은 줄을 탄다). 끝나면 run_id.
-    /// 파일은 그 워크플로우의 허용 폴더 안 일반 파일(심볼릭 링크 아님)이어야 한다.
-    pub async fn run_now(&self, workflow_id: &str, file: &Path) -> Result<String, String> {
+    /// 지금 실행(같은 줄을 탄다, 기록 trigger = Manual). 끝나면 run_id.
+    /// 폴더 트리거는 `file`이 필수 — 그 워크플로우의 허용 폴더 안 일반 파일(심볼릭 링크 아님).
+    /// 스케줄은 지금 시각 출력, 수동은 빈 출력으로 `file` 없이 돈다.
+    pub async fn run_now(&self, workflow_id: &str, file: Option<&Path>) -> Result<String, String> {
         let wf = self.store().get_workflow(workflow_id)?;
-        let trigger = self.file_trigger(&wf.workflow, file)?;
+        let trigger = match trigger_kind(&wf) {
+            TriggerKind::Folder(_) => {
+                let file = file.ok_or("파일을 골라 주세요")?;
+                self.file_trigger(&wf.workflow, file)?
+            }
+            TriggerKind::Schedule { event, .. } => {
+                let config = trigger_sig(&wf).map(|(_, c)| c).unwrap_or_default();
+                schedule_output(&event, &config, (self.0.deps.now)())
+            }
+            TriggerKind::Manual => Map::new(),
+            TriggerKind::Unsupported => return Err("이 트리거는 지금 실행할 수 없어요.".into()),
+        };
         self.queue(workflow_id, trigger, None).await
     }
 
@@ -1089,15 +1101,18 @@ impl Supervisor {
         rx.await.map_err(|_| "실행이 취소됐어요.".to_string())?
     }
 
-    /// `wf`를 `sample` 파일로 실행 줄에서 한 번 돌리고(기록 trigger = Test) 바로 되돌린다.
+    /// `wf`를 `trigger`(샘플 파일 또는 트리거 출력)로 실행 줄에서 한 번 돌리고(기록 trigger = Test) 바로 되돌린다.
     /// 되돌리기는 파일 작업이 없어도 항상 한다. 못 되돌린 것이 있으면 화면에 알린다(`TestUndoFailed`).
     pub async fn run_test(
         &self,
         workflow_id: &str,
         wf: Workflow,
-        sample: &Path,
+        trigger: TestTrigger,
     ) -> Result<TestRun, String> {
-        let trigger = self.file_trigger(&wf, sample)?;
+        let trigger = match trigger {
+            TestTrigger::File(sample) => self.file_trigger(&wf, &sample)?,
+            TestTrigger::Output(output) => output,
+        };
         // 되돌리기는 실행 줄(`run_one`)이 한다 — 이 future가 버려져도 끝까지 간다.
         let run_id = self.queue(workflow_id, trigger, Some(wf)).await?;
         let stored = self.store().get_run(&run_id)?;

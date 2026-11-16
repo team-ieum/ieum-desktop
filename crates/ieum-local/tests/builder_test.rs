@@ -158,7 +158,7 @@ async fn test_runs_pruned_graph_and_records_ancestors() {
         ran.nodes.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
         ["t", "a", "m"]
     );
-    assert_eq!(sample, watch.join("비밀보고서.pdf"));
+    assert_eq!(sample, TestTrigger::File(watch.join("비밀보고서.pdf")));
     let s = run(&b, json!({"op": "status"})).await;
     let states: Vec<_> = s.data["nodes"]
         .as_array()
@@ -394,4 +394,40 @@ async fn test_refuses_before_running() {
     let r = run(&b, test_op("t")).await;
     assert_eq!(r.code, Some(Code::Internal));
     assert!(!r.to_line().contains("비밀"));
+}
+
+/// 스케줄·수동 트리거 → AI. 폴더가 없어도 테스트가 돈다.
+fn non_folder_wf(event: &str, config: Value) -> Value {
+    json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": event, "config": config},
+            {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "p", "outputFields": [{"key": "folder", "type": "text"}]}}
+        ],
+        "edges": [{"source": "t", "target": "a"}]
+    })
+}
+
+#[tokio::test]
+async fn node_test_schedule_no_folder() {
+    for (event, config) in [
+        ("schedule.daily", json!({"hour": "9"})),
+        ("manual.run", json!({})),
+    ] {
+        let h = MemHost::with(W, non_folder_wf(event, config));
+        let b = Builder::new(h.clone()).unwrap();
+        h.push_test_run(Ok(ok_run()));
+        let r = run(&b, test_op("a")).await;
+        assert!(r.ok, "{event}: {r:?}");
+        let (_, trigger) = h.tested().remove(0);
+        let TestTrigger::Output(out) = trigger else {
+            panic!("{event}: {trigger:?}");
+        };
+        if event == "manual.run" {
+            assert!(out.is_empty());
+        } else {
+            let at = out["triggeredAt"].as_str().unwrap();
+            assert_eq!(at.len(), "2026-11-17T09:00:00".len(), "{at}");
+            assert_eq!(out.len(), 1);
+        }
+    }
 }
