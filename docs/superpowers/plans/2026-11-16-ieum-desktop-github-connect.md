@@ -14,8 +14,8 @@
 - 이슈 #9, 브랜치 `feat/9-github-connect`, PR base `dev`.
 - gh 최소 버전 **2.81.0**. 호스트는 `github.com`만.
 - gh·brew 명령은 전부 사용자 로그인 셸(`$SHELL -lc`)로 실행.
-- 로그인 명령은 정확히 `gh auth login --web --hostname github.com --git-protocol https --skip-ssh-key`, stdin 닫음.
-- 상태 명령은 `gh auth status --json hosts --hostname github.com`. 종료 1 = 로그인 안 됨.
+- 로그인 명령은 `gh auth login --web --hostname github.com --skip-ssh-key --scopes workflow`(+ gh에 github.com 계정 항목이 없을 때만 `--git-protocol https`), stdin 닫음. (최종 리뷰 후 변경)
+- 상태 명령은 `gh auth status --active --json hosts --hostname github.com`, 상한 10초. 로그인 안 됨도 종료 0 + `{"hosts":{}}`. (최종 리뷰 후 변경)
 - **IEUM은 gh에서 로그아웃시키지 않는다.** 연결 해제 = 계정 폴더 `github.json` 삭제만. 토큰은 저장하지 않는다.
 - 브라우저는 고정값 `https://github.com/login/device`만 연다(기존 `open_url`).
 - 시간 상한: 상태·찾기 5초, 로그인 코드 대기 10초, 로그인 전체 15분, 설치·업데이트 10분.

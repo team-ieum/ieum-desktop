@@ -1,6 +1,6 @@
 # IEUM Desktop — GitHub 연결 (gh CLI) 설계
 
-2026-11-16. 상태: 초안(사용자 검토 대기).
+2026-11-16. 상태: 승인됨. 최종 리뷰 반영(같은 날).
 
 ## 왜
 사용자가 데스크톱에서 GitHub 워크플로우를 직접 돌려 보고 싶다. 그 첫 단계로 **로그인(연결)만** 먼저 만든다. GitHub 노드 23개 실행은 다음 이슈.
@@ -37,7 +37,7 @@
   Open this URL to continue in your web browser: https://github.com/login/device
   ```
   Enter를 기다리지 않고, 브라우저를 직접 열지 않는다. 코드는 gh가 클립보드에 복사한다. 그 뒤 브라우저 승인까지 폴링하며 기다리다 끝나면 종료 코드 0.
-- `gh auth status --json hosts` → `{"hosts":{"github.com":[{"state":"success","active":true,"login":"hodoon","tokenSource":"keyring","scopes":"gist, read:org, repo, workflow",…}]}}`. 로그인 안 됐으면 종료 코드 1.
+- `gh auth status --json hosts` → `{"hosts":{"github.com":[{"state":"success","active":true,"login":"hodoon","tokenSource":"keyring","scopes":"gist, read:org, repo, workflow",…}]}}`. 로그인 안 됐으면 `{"hosts":{}}`, **종료 코드 0**(최종 리뷰 실측 — 처음 적은 "종료 1"은 틀림). 토큰 무효·네트워크 오류도 종료 0, 활성 항목 `state:"error"` + `error` 문자열(401은 `Bad credentials`, 네트워크는 `proxyconnect …` 등).
 - 기능 도입 버전: `auth status --json` **2.81.0**, `--skip-ssh-key` 2.48.0, `auth token` 2.17.0. → **최소 버전 2.81.0**.
 - 최신 릴리스 v2.104.0 파일: `gh_<v>_macOS_arm64.zip`, `gh_<v>_macOS_amd64.zip`, `gh_<v>_checksums.txt`(sha256), `…universal.pkg`.
 
@@ -69,9 +69,10 @@
 | 연결됨 | IEUM 기록 있음 + gh 활성 계정이 같은 login, `state: success` | 계정 이름(`login`), [연결 해제] |
 | 계정 바뀜 | IEUM 기록 login ≠ gh 활성 login | 위 문구 + [이 계정으로 연결] [연결 해제] |
 | (환경변수 토큰 표시) | 활성 항목 `tokenSource`가 `GH_TOKEN`·`GITHUB_TOKEN` | 위 상태에 "셸 환경변수 토큰을 쓰는 중이에요." 한 줄 추가. gh 로그인 단계는 건너뛴다 |
-| 연결 문제 | IEUM 기록 있음 + gh 로그아웃됨 또는 state≠success(토큰 만료 등) | "gh 로그인이 필요해요" [연결] |
+| 닿지 못함 | 활성 항목 state≠success이고 `error`에 `401`·`Bad credentials`가 없음(네트워크 문제) | "GitHub에 닿지 못했어요." + 오류 한 줄 [다시 확인]. [연결]은 로그인을 돌리지 않는다 |
+| 연결 문제 | IEUM 기록 있음 + gh 로그아웃됨 또는 state≠success(토큰 만료 등) | "gh 로그인이 필요해요" + "연결하면 터미널의 gh 로그인도 새 로그인으로 바뀌어요." [연결] |
 
-상태는 연동 메뉴를 열 때와 [다시 확인]·작업 완료 후에 다시 읽는다. 주기적 폴링은 하지 않는다.
+상태 명령은 `gh auth status --active --json hosts --hostname github.com`(상한 10초). 상태는 연동 메뉴를 열 때와 [다시 확인]·작업 완료 후에 다시 읽는다. 주기적 폴링은 하지 않는다.
 
 ### 설치·업데이트 ([설치]/[업데이트] = 사용자가 이미 확인한 것)
 - `brew`가 로그인 셸 PATH에 있으면: `brew install gh` / `brew upgrade gh`. 단, 업데이트 대상 gh가 brew 것이 아니면(경로가 brew prefix 밖) 아래 공식 릴리스 경로로 앱 폴더에 새 gh를 둔다(기존 gh는 건드리지 않음).
@@ -82,8 +83,8 @@
 
 ### 연결 ([연결])
 - **gh가 이미 로그인돼 있으면(활성 계정 `state: success`) 코드 없이 바로 그 계정을 기록**하고 연결됨. 다시 로그인시키지 않는다(gh 전역 로그인을 건드리지 않으려고).
-- gh가 로그인 안 됐거나 state≠success일 때만 아래 로그인을 돌린다:
-- 위 `gh auth login --web --hostname github.com --git-protocol https --skip-ssh-key`를 stdin 닫고 실행, stderr를 줄 단위로 읽는다.
+- gh가 로그인 안 됐거나 토큰이 무효일 때만 아래 로그인을 돌린다(사용자 결정: 터미널에서 직접 로그인한 것과 같은 결과):
+- `gh auth login --web --hostname github.com --skip-ssh-key --scopes workflow`, gh에 github.com 계정 항목이 없을 때만 `--git-protocol https`를 덧붙인다(있으면 사용자의 기존 프로토콜 유지). 이 명령을 stdin 닫고 실행, stderr를 줄 단위로 읽는다.
 - `[A-Z0-9]{4}-[A-Z0-9]{4}` 코드와 `https://` 주소를 찾으면 카드 표시:
   ```
   일회용 코드  C0FE-571F  [복사]  [브라우저 열기]
@@ -92,7 +93,7 @@
   [브라우저 열기]는 Rust가 고정값 `https://github.com/login/device`를 `/usr/bin/open`으로 연다(`open_url`의 "주소는 화면이 아닌 고정값에서" 규칙). gh 출력의 주소는 쓰지 않고, 코드만 읽는다.
 - 종료 0 → 상태 다시 읽기 → 활성 login 기록 → 연결됨. 0이 아니면 stderr 마지막 줄을 이유로 보여 주고 "연결 안 됨".
 - 코드가 10초 안에 안 나오면 실패(gh 출력 형식이 바뀐 경우) — 이유: "gh 출력을 읽지 못했어요. gh 버전 X". 원문 stderr는 펼쳐 보기로.
-- 시간 상한 15분(device code 만료), [취소]·메뉴 떠남은 프로세스 종료. 동시에 하나만.
+- 시간 상한 15분(device code 만료), [취소]·메뉴 떠남은 프로세스 종료(설치는 메뉴를 떠나도 계속). 동시에 하나만. 진행 작업은 `github_job`으로 조회해, 메뉴에 다시 들어오면 코드 카드·[취소]를 이어 보여 준다. 앱 종료 때 진행 작업을 취소한다.
 - gh 로그인이 필요한 경우에만 gh를 돌리므로 gh의 "다시 로그인할까요?" 질문은 생기지 않는다.
 
 ### 연결 해제 ([연결 해제])
