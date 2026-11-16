@@ -269,6 +269,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     crate::limit_watch::spawn(app.handle().clone());
     app.manage(pick::system_pick(app.handle().clone()));
     app.manage(terminal::Terms::default());
+    app.manage(github::GithubJobs::default());
     app.manage(channel::app_gate(app.handle()));
     app.manage(channel::app_channel(app.handle()));
     tray::create(app)?;
@@ -311,6 +312,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_workflows,
+            github::github_status,
+            github::github_disconnect,
             commands::save_workflow,
             commands::delete_workflow,
             commands::validate_workflow,

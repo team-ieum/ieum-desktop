@@ -1,9 +1,111 @@
-//! gh 출력 읽기·연결 상태 판정(순수 함수).
+//! gh 출력 읽기·연결 상태 판정, gh 찾기·상태 명령·연결 기록.
+
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 use ieum_desktop_lib::github::{
-    GhAccount, GhAuth, GithubStatus, MIN_GH, derive_status, parse_auth_status, parse_device_code,
-    parse_gh_version,
+    GhAccount, GhAuth, GhFound, GithubStatus, MIN_GH, clear_record, derive_status, gh_auth,
+    parse_auth_status, parse_device_code, parse_gh_version, pick_gh, read_record, write_record,
 };
+
+const STATUS_JSON: &str = r#"{"hosts":{"github.com":[{"state":"success","active":true,"login":"hodoon","tokenSource":"keyring"}]}}"#;
+
+/// `dir/gh` 실행 스크립트를 만든다. `body`는 `#!/bin/sh` 뒤 본문.
+fn fake_gh(dir: &Path, body: &str) -> PathBuf {
+    let p = dir.join("gh");
+    std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p
+}
+
+fn found(v: (u32, u32, u32), p: &str) -> GhFound {
+    GhFound {
+        path: PathBuf::from(p),
+        version: v,
+    }
+}
+
+#[test]
+fn pick_gh_prefers_new_enough() {
+    let path = |r: Result<GhFound, GithubStatus>| r.unwrap().path;
+    assert_eq!(
+        path(pick_gh(
+            Some(found((2, 60, 0), "/path/gh")),
+            Some(found((2, 104, 0), "/app/gh"))
+        )),
+        PathBuf::from("/app/gh")
+    );
+    assert_eq!(
+        path(pick_gh(
+            Some(found((2, 103, 3), "/path/gh")),
+            Some(found((2, 104, 0), "/app/gh"))
+        )),
+        PathBuf::from("/path/gh")
+    );
+    assert_eq!(pick_gh(None, None).unwrap_err(), GithubStatus::NotInstalled);
+    assert_eq!(
+        pick_gh(Some(found((2, 60, 0), "/path/gh")), None).unwrap_err(),
+        GithubStatus::Outdated {
+            version: "2.60.0".into()
+        }
+    );
+}
+
+#[test]
+fn gh_auth_with_fake_gh() {
+    let dir = tempfile::tempdir().unwrap();
+    let gh = fake_gh(
+        dir.path(),
+        &format!("case \"$*\" in *'auth status'*) echo '{STATUS_JSON}'; exit 0;; esac\nexit 9"),
+    );
+    match gh_auth(&gh).unwrap() {
+        GhAuth::Accounts(a) => assert_eq!(a.len(), 1),
+        other => panic!("{other:?}"),
+    }
+    let gh = fake_gh(
+        dir.path(),
+        "echo 'You are not logged into any GitHub hosts.' 1>&2; exit 1",
+    );
+    assert_eq!(gh_auth(&gh).unwrap(), GhAuth::LoggedOut);
+    let gh = fake_gh(dir.path(), "exit 2");
+    assert!(gh_auth(&gh).is_err());
+}
+
+#[test]
+fn record_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    write_record(dir.path(), "hodoon").unwrap();
+    assert_eq!(read_record(dir.path()).as_deref(), Some("hodoon"));
+    clear_record(dir.path()).unwrap();
+    assert_eq!(read_record(dir.path()), None);
+    clear_record(dir.path()).unwrap();
+    std::fs::write(dir.path().join("github.json"), "{nope").unwrap();
+    assert_eq!(read_record(dir.path()), None);
+}
+
+#[test]
+fn disconnect_keeps_gh() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("calls.log");
+    let gh = fake_gh(
+        dir.path(),
+        &format!(
+            "echo \"$*\" >> '{}'\ncase \"$*\" in *'auth status'*) echo '{STATUS_JSON}'; exit 0;; esac\nexit 0",
+            log.display()
+        ),
+    );
+    write_record(dir.path(), "hodoon").unwrap();
+    // 해제 명령 본문: 기록 지우기 → 상태 다시 읽기.
+    clear_record(dir.path()).unwrap();
+    let auth = gh_auth(&gh).unwrap();
+    assert_eq!(
+        derive_status(read_record(dir.path()).as_deref(), &auth),
+        GithubStatus::NotConnected
+    );
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(calls.contains("auth status"), "{calls}");
+    assert!(!calls.contains("logout"), "{calls}");
+}
 
 fn acct(login: &str, active: bool, state: &str, source: &str) -> GhAccount {
     GhAccount {

@@ -1,6 +1,21 @@
-//! GitHub 연결(gh CLI). gh 출력 읽기·연결 상태 판정.
+//! GitHub 연결(gh CLI). gh 찾기·출력 읽기·연결 상태 판정, IEUM 연결 기록(`github.json`).
+//! gh는 사용자 로그인 셸로 부른다. IEUM은 gh에서 로그아웃시키지 않는다 — 해제 = 기록 삭제.
 
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use ieum_local::ai::{sh_quote, shell_output, shell_run};
 use serde::{Deserialize, Serialize};
+use tauri::State;
+
+use crate::active::Active;
+
+/// gh 찾기·상태 명령 시간 상한.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(5);
+/// 계정 폴더의 연결 기록 파일.
+const RECORD: &str = "github.json";
 
 /// 받는 gh 최소 버전(`auth status --json` 도입).
 pub const MIN_GH: (u32, u32, u32) = (2, 81, 0);
@@ -109,4 +124,142 @@ pub fn derive_status(recorded: Option<&str>, auth: &GhAuth) -> GithubStatus {
             env_token: matches!(a.token_source.as_str(), "GH_TOKEN" | "GITHUB_TOKEN"),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GhFound {
+    pub path: PathBuf,
+    pub version: (u32, u32, u32),
+}
+
+/// PATH 쪽이 충분히 새것이면 PATH, 아니면 앱 폴더 쪽(이것도 충분할 때).
+/// 없음 → `NotInstalled`, 둘 다 낮음 → `Outdated`(더 높은 버전).
+pub fn pick_gh(path_gh: Option<GhFound>, app_gh: Option<GhFound>) -> Result<GhFound, GithubStatus> {
+    let all = [path_gh, app_gh];
+    if let Some(g) = all.iter().flatten().find(|g| g.version >= MIN_GH) {
+        return Ok(g.clone());
+    }
+    match all.iter().flatten().map(|g| g.version).max() {
+        Some((a, b, c)) => Err(GithubStatus::Outdated {
+            version: format!("{a}.{b}.{c}"),
+        }),
+        None => Err(GithubStatus::NotInstalled),
+    }
+}
+
+/// 사용자 PATH의 gh와 앱 폴더 `<app_data>/bin/gh` 중 쓸 것.
+pub fn find_gh(app_data: &Path) -> Result<GhFound, GithubStatus> {
+    let path_gh = shell_output("command -v gh && gh --version", STATUS_TIMEOUT).and_then(|t| {
+        let mut lines = t.lines();
+        let path = PathBuf::from(lines.next()?.trim());
+        Some(GhFound {
+            path,
+            version: parse_gh_version(lines.next()?)?,
+        })
+    });
+    let app = app_data.join("bin").join("gh");
+    let app_gh = app
+        .is_file()
+        .then(|| {
+            shell_output(
+                &format!("{} --version", sh_quote(&app.to_string_lossy())),
+                STATUS_TIMEOUT,
+            )
+        })
+        .flatten()
+        .and_then(|t| parse_gh_version(t.lines().next()?))
+        .map(|version| GhFound { path: app, version });
+    pick_gh(path_gh, app_gh)
+}
+
+/// `gh auth status --json hosts --hostname github.com`. 종료 1 → `LoggedOut`.
+pub fn gh_auth(gh: &Path) -> Result<GhAuth, String> {
+    let cmd = format!(
+        "{} auth status --json hosts --hostname github.com",
+        sh_quote(&gh.to_string_lossy())
+    );
+    let r = shell_run(&cmd, STATUS_TIMEOUT, &AtomicBool::new(false), &mut |_| {})
+        .map_err(|e| format!("gh를 실행하지 못했어요: {e}"))?;
+    if r.timed_out {
+        return Err("gh가 5초 안에 답하지 않았어요.".into());
+    }
+    match r.code {
+        Some(0) => parse_auth_status(&r.stdout).map(GhAuth::Accounts),
+        Some(1) => Ok(GhAuth::LoggedOut),
+        _ => Err(format!("gh 상태를 읽지 못했어요: {}", r.stderr.trim())),
+    }
+}
+
+/// `<dir>/github.json`의 login. 없거나 깨졌으면 None.
+pub fn read_record(dir: &Path) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Record {
+        login: String,
+    }
+    let text = std::fs::read_to_string(dir.join(RECORD)).ok()?;
+    serde_json::from_str::<Record>(&text).ok().map(|r| r.login)
+}
+
+/// 연결 기록을 쓴다(임시 파일 + rename). 토큰은 저장하지 않는다.
+pub fn write_record(dir: &Path, login: &str) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let tmp = dir.join(format!("{RECORD}.tmp"));
+    let body = serde_json::json!({ "login": login }).to_string();
+    std::fs::write(&tmp, body).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, dir.join(RECORD)).map_err(|e| e.to_string())
+}
+
+/// 연결 기록만 지운다(gh 로그인은 그대로). 없으면 Ok.
+pub fn clear_record(dir: &Path) -> Result<(), String> {
+    match std::fs::remove_file(dir.join(RECORD)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum JobKind {
+    Login,
+    Install,
+}
+
+/// 진행 중인 gh 작업(로그인·설치) 하나.
+pub struct GithubJob {
+    pub kind: JobKind,
+    pub cancel: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+pub struct GithubJobs {
+    pub current: Mutex<Option<GithubJob>>,
+}
+
+/// gh 찾기 → 로그인 상태 → 기록과 비교.
+fn status_at(app_data: &Path, dir: &Path) -> Result<GithubStatus, String> {
+    let gh = match find_gh(app_data) {
+        Ok(g) => g,
+        Err(s) => return Ok(s),
+    };
+    let auth = gh_auth(&gh.path)?;
+    Ok(derive_status(read_record(dir).as_deref(), &auth))
+}
+
+async fn status_of(active: &Active) -> Result<GithubStatus, String> {
+    let dir = active.account_dir().await?;
+    let app_data = active.app_data().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || status_at(&app_data, &dir))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn github_status(active: State<'_, Active>) -> Result<GithubStatus, String> {
+    status_of(&active).await
+}
+
+/// 연결 해제 = IEUM 기록만 삭제. gh에서 로그아웃시키지 않는다.
+#[tauri::command]
+pub async fn github_disconnect(active: State<'_, Active>) -> Result<GithubStatus, String> {
+    clear_record(&active.account_dir().await?)?;
+    status_of(&active).await
 }
