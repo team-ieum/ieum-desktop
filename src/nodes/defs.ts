@@ -22,6 +22,13 @@ import textStripHtml from "../../catalog/events/formatter/text_strip_html.json";
 import textTrim from "../../catalog/events/formatter/text_trim.json";
 import textTruncate from "../../catalog/events/formatter/text_truncate.json";
 import textUrlEncode from "../../catalog/events/formatter/text_url_encode.json";
+import githubCreateIssue from "../../catalog/events/github/create_issue.json";
+import githubUpdateIssue from "../../catalog/events/github/update_issue.json";
+import githubFindIssue from "../../catalog/events/github/find_issue.json";
+import githubFindOrCreateIssue from "../../catalog/events/github/find_or_create_issue.json";
+import githubListIssues from "../../catalog/events/github/list_issues.json";
+import githubAddLabels from "../../catalog/events/github/add_labels.json";
+import githubCreateComment from "../../catalog/events/github/create_comment.json";
 import httpRequest from "../../catalog/events/http/request.json";
 import manualRun from "../../catalog/events/manual/run.json";
 import scheduleDaily from "../../catalog/events/schedule/daily.json";
@@ -35,6 +42,7 @@ import fileMove from "../../crates/ieum-local/defs/local.file_move.json";
 import fileRename from "../../crates/ieum-local/defs/local.file_rename.json";
 import fileTrash from "../../crates/ieum-local/defs/local.file_trash.json";
 import folderNewFile from "../../crates/ieum-local/defs/local.folder_new_file.json";
+import githubInputs from "../../crates/ieum-local/github_inputs.json";
 import type { Workflow, WfNode } from "../api";
 
 export interface Field {
@@ -57,6 +65,12 @@ export interface NodeDef {
   outputFields?: { key: string }[];
   /** 출력 칸을 설정에서 읽는 노드 — `config.mappings`면 그 키들. */
   outputsFrom?: string;
+}
+
+/** 카탈로그 github 정의에 입력 표(`github_inputs.json`)를 합친다 — 엔진(`catalog.rs`)과 같은 규칙: `{key, type:"string"} ← 표 ← fields[key]`. */
+function githubDef(event: string, d: { fields: Record<string, Partial<Field>> }) {
+  const table = (githubInputs as Record<string, Partial<Field>[]>)[event];
+  return { ...d, inputFields: table.map((row) => ({ key: row.key, type: "string", ...row, ...d.fields[row.key!] })) };
 }
 
 const raw: [string, unknown][] = [
@@ -96,6 +110,13 @@ const raw: [string, unknown][] = [
   ["formatter.text_truncate", textTruncate],
   ["formatter.text_url_encode", textUrlEncode],
   ["http.request", httpRequest],
+  ["github.create_issue", githubDef("github.create_issue", githubCreateIssue)],
+  ["github.update_issue", githubDef("github.update_issue", githubUpdateIssue)],
+  ["github.find_issue", githubDef("github.find_issue", githubFindIssue)],
+  ["github.find_or_create_issue", githubDef("github.find_or_create_issue", githubFindOrCreateIssue)],
+  ["github.list_issues", githubDef("github.list_issues", githubListIssues)],
+  ["github.add_labels", githubDef("github.add_labels", githubAddLabels)],
+  ["github.create_comment", githubDef("github.create_comment", githubCreateComment)],
 ];
 
 /** 팔레트 순서 그대로. 입력 칸 없는 정의(`manual.run`)는 빈 목록. */
