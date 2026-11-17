@@ -33,7 +33,7 @@ function destination(url: string) {
 
 /** HTTP 요청 한 줄 — 메서드·주소(참조식은 자리만)와 실려 나가는 것(머리말 이름·본문 유무·앞 노드 값 이름). */
 export function HttpRequest({ line, prefix = "" }: { line: HttpLine; prefix?: string }) {
-  const to = destination(line.url);
+  const to = line.github ? null : destination(line.url);
   const sends = line.sends.map((s) =>
     t("http.confirm.sendItem")
       .replace("{node}", () => s.nodeLabel || s.nodeId)
@@ -42,8 +42,12 @@ export function HttpRequest({ line, prefix = "" }: { line: HttpLine; prefix?: st
   return (
     <>
       <span data-testid="http-request" className="break-all font-mono text-xs">
-        {`${prefix}${line.method} `}
-        {to ? (
+        {line.github ? (
+          `${prefix}${line.label || t("http.confirm.github")} · ${showRefs(line.github.repo)} · ${showRefs(line.github.summary)}`
+        ) : (
+          `${prefix}${line.method} `
+        )}
+        {line.github ? null : to ? (
           <>
             {to.scheme}
             {to.user && <span className="text-neutral-400">…@</span>}
@@ -55,8 +59,8 @@ export function HttpRequest({ line, prefix = "" }: { line: HttpLine; prefix?: st
           showRefs(line.url)
         )}
       </span>
-      {!to && <span className="text-xs font-semibold text-danger-700">{t("http.confirm.refHost")}</span>}
-      {line.headerKeys.length > 0 && (
+      {!to && !line.github && <span className="text-xs font-semibold text-danger-700">{t("http.confirm.refHost")}</span>}
+      {!line.github && line.headerKeys.length > 0 && (
         <span className="text-xs text-neutral-500">{t("http.confirm.headers").replace("{names}", () => line.headerKeys.join(", "))}</span>
       )}
       {line.hasBody && <span className="text-xs text-neutral-500">{t("http.confirm.body")}</span>}
@@ -93,7 +97,7 @@ export function HttpConfirm({
       <ul className={`flex flex-col gap-2 typo-caption1_medium text-neutral-700 ${CARD_SCROLL}`}>
         {lines.map((l) => (
           <li key={l.nodeId} className="flex flex-col gap-0.5">
-            <span className="typo-caption1_semibold text-neutral-800">{l.label || nodeTitle("http.request")}</span>
+            <span className="typo-caption1_semibold text-neutral-800">{l.label || (l.github ? t("http.confirm.github") : nodeTitle("http.request"))}</span>
             <HttpRequest line={l} />
           </li>
         ))}
