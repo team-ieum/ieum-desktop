@@ -373,3 +373,254 @@ async fn update_issue_rules() {
     );
     assert_eq!(log.lock().unwrap().len(), 2);
 }
+
+fn found(n: usize, pr: bool) -> Vec<Value> {
+    (1..=n)
+        .map(|i| {
+            let mut v = json!({
+                "number": i, "title": format!("t{i}"), "state": "open",
+                "html_url": format!("https://github.com/a/b/issues/{i}"),
+                "labels": [{"name": "bug"}], "assignees": [{"login": "me"}],
+                "user": {"login": "au"}, "created_at": "2026-01-01T00:00:00Z"
+            });
+            if pr {
+                v["pull_request"] = json!({});
+            }
+            v
+        })
+        .collect()
+}
+
+fn find_cfg(by: &str, value: Value) -> Value {
+    json!({"owner": "a", "repo": "b", "search_by": by, "value": value})
+}
+
+const NONE: Value = Value::Null;
+
+#[tokio::test]
+async fn find_by_number_404_and_pr_are_empty() {
+    let empty = json!({"found": false, "total": 0, "items": [], "message": "결과가 없습니다"});
+    let (base, log) = server(404, json!({"message": "Not Found"})).await;
+    let out = run(
+        &base,
+        "github.find_issue",
+        find_cfg("number", json!(" #12 ")),
+    )
+    .await;
+    assert_eq!(Value::Object(out.unwrap()), empty);
+    assert_eq!(log.lock().unwrap()[0].path, "/repos/a/b/issues/12");
+    let (base, _) = server(200, json!({"number": 12, "pull_request": {}})).await;
+    let out = run(&base, "github.find_issue", find_cfg("number", json!(12))).await;
+    assert_eq!(Value::Object(out.unwrap()), empty);
+    let (base, _) = server(200, found(1, false).remove(0)).await;
+    let out = run(&base, "github.find_issue", find_cfg("number", json!("1")))
+        .await
+        .unwrap();
+    assert_eq!(
+        out["items"][0],
+        json!({"number": 1, "title": "t1", "state": "open", "url": "https://github.com/a/b/issues/1",
+               "labels": ["bug"], "assignees": ["me"], "author": "au", "created_at": "2026-01-01T00:00:00Z"})
+    );
+    assert_eq!(
+        (
+            out["found"].clone(),
+            out["total"].clone(),
+            out["message"].clone()
+        ),
+        (json!(true), json!(1), json!(""))
+    );
+}
+
+#[tokio::test]
+async fn find_by_label_pages_until_short_page() {
+    let (l, base) = bind().await;
+    let log = serve(l, |r| {
+        let page: usize = r.path.rsplit("page=").next().unwrap().parse().unwrap();
+        let body = if page == 1 {
+            let mut v = found(99, false);
+            v.extend(found(1, true));
+            v
+        } else {
+            found(3, false)
+        };
+        resp(200, "", Value::Array(body).to_string().as_bytes())
+    });
+    let mut c = find_cfg("label", json!("bug"));
+    c["max_results"] = json!(150);
+    let out = run(&base, "github.find_issue", c).await.unwrap();
+    // 150은 100으로 잘린다(102개를 모아도 앞 100개).
+    assert_eq!(out["total"], 100);
+    let log = log.lock().unwrap();
+    assert_eq!(log.len(), 2);
+    assert_eq!(
+        log[0].path,
+        "/repos/a/b/issues?labels=bug&state=open&per_page=100&page=1"
+    );
+}
+
+#[tokio::test]
+async fn find_by_label_stops_at_ten_pages() {
+    let (l, base) = bind().await;
+    let body = Value::Array(found(100, false)).to_string().into_bytes();
+    let log = serve(l, move |_| resp(200, "", &body));
+    let mut c = find_cfg("assignee", json!("me"));
+    c["max_results"] = json!(100);
+    let out = run(&base, "github.find_issue", c.clone()).await.unwrap();
+    assert_eq!(out["total"], 100);
+    assert_eq!(log.lock().unwrap().len(), 1);
+    // 앞 쪽이 전부 PR이면 limit에 못 닿아 10쪽까지 간다.
+    let (l, base) = bind().await;
+    let body = Value::Array(found(100, true)).to_string().into_bytes();
+    let log = serve(l, move |_| resp(200, "", &body));
+    let out = run(&base, "github.find_issue", c).await.unwrap();
+    assert_eq!(out["total"], 0);
+    let log = log.lock().unwrap();
+    assert_eq!(log.len(), 10);
+    assert!(log[0].path.contains("assignee=me"));
+}
+
+#[tokio::test]
+async fn find_by_title_query_and_filter() {
+    let mut items = found(1, false);
+    items[0]["repository_url"] = json!("https://api.github.com/repos/A/B");
+    let mut other = found(1, false);
+    other[0]["repository_url"] = json!("https://api.github.com/repos/a/c");
+    let mut pr = found(1, true);
+    pr[0]["repository_url"] = json!("https://api.github.com/repos/a/b");
+    items.extend(other);
+    items.extend(pr);
+    let (base, log) = server(200, json!({"items": items})).await;
+    let out = run(&base, "github.find_issue", find_cfg("title", json!("버그")))
+        .await
+        .unwrap();
+    assert_eq!(out["total"], 1);
+    let q = |r: &github_support::Req| {
+        let (_, qs) = r.path.split_once('?').unwrap();
+        let url = reqwest::Url::parse(&format!("http://x/?{qs}")).unwrap();
+        url.query_pairs()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<Vec<_>>()
+    };
+    {
+        let log = log.lock().unwrap();
+        assert!(log[0].path.starts_with("/search/issues?"));
+        assert_eq!(
+            q(&log[0]),
+            vec![
+                (
+                    "q".to_string(),
+                    "버그 in:title repo:a/b is:issue state:open".to_string()
+                ),
+                ("per_page".to_string(), "20".to_string())
+            ]
+        );
+    }
+    let mut c = find_cfg("body", json!("x"));
+    c["state"] = json!("all");
+    run(&base, "github.find_issue", c).await.unwrap();
+    assert_eq!(
+        q(&log.lock().unwrap()[1])[0].1,
+        "x in:body repo:a/b is:issue"
+    );
+}
+
+#[tokio::test]
+async fn find_rejects() {
+    let (base, log) = server(200, json!([])).await;
+    let long = "가".repeat(201);
+    let cases = [
+        (
+            find_cfg("x", json!("v")),
+            "search_by는 number, label, assignee, author, title, body 중 하나여야 합니다.",
+        ),
+        (
+            {
+                let mut c = find_cfg("label", json!("v"));
+                c["state"] = json!("x");
+                c
+            },
+            "state는 open, closed, all 중 하나여야 합니다.",
+        ),
+        (find_cfg("label", json!("")), "value를 입력해 주세요."),
+        (
+            find_cfg("number", json!("abc")),
+            "이슈 번호는 양의 정수여야 합니다.",
+        ),
+        (
+            find_cfg("author", json!("a b")),
+            "GitHub 사용자 이름 형식이 올바르지 않습니다.",
+        ),
+        (
+            find_cfg("title", json!(long)),
+            "검색어는 200자 이하여야 합니다.",
+        ),
+    ];
+    for (c, want) in cases {
+        assert_eq!(message(run(&base, "github.find_issue", c).await), want);
+    }
+    assert_eq!(log.lock().unwrap().len(), 0);
+    // 입력이 틀리면 토큰도 읽지 않는다.
+    let t = Arc::new(CountingToken::default());
+    let r = run_full(
+        &base,
+        t.clone(),
+        "github.find_issue",
+        find_cfg("x", NONE),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(r.is_err());
+    assert_eq!(t.0.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn max_results_clamped() {
+    let (base, log) = server(200, json!({"items": []})).await;
+    for (v, want) in [(json!("500"), "100"), (json!("abc"), "20"), (json!(0), "1")] {
+        let mut c = find_cfg("title", json!("x"));
+        c["max_results"] = v;
+        run(&base, "github.find_issue", c).await.unwrap();
+        let log = log.lock().unwrap();
+        assert!(
+            log.last()
+                .unwrap()
+                .path
+                .ends_with(&format!("per_page={want}"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn list_issues_shape() {
+    let mut items = found(2, false);
+    items.extend(found(1, true));
+    let (base, log) = server(200, Value::Array(items)).await;
+    let out = run(
+        &base,
+        "github.list_issues",
+        json!({"owner": "a", "repo": "b", "state": ""}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        Value::Object(out),
+        json!({"issues": [
+            {"number": 1, "title": "t1", "state": "open", "labels": ["bug"], "created_at": "2026-01-01T00:00:00Z"},
+            {"number": 2, "title": "t2", "state": "open", "labels": ["bug"], "created_at": "2026-01-01T00:00:00Z"}
+        ], "total": 2})
+    );
+    assert_eq!(
+        log.lock().unwrap()[0].path,
+        "/repos/a/b/issues?per_page=20&state=open&sort=updated"
+    );
+    let (base, _) = server(500, json!({})).await;
+    assert!(
+        run(
+            &base,
+            "github.list_issues",
+            json!({"owner": "a", "repo": "b"})
+        )
+        .await
+        .is_err()
+    );
+}

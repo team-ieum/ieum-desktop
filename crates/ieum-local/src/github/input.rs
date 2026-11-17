@@ -32,6 +32,21 @@ pub(crate) fn issue_no(v: &Value) -> Option<u64> {
     (n >= 1).then_some(n)
 }
 
+/// 정수 또는 숫자 문자열(참조식 결과) → 정수. bool·그 밖은 None.
+pub(crate) fn to_int(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n.as_i64(),
+        Value::String(s) => {
+            let s = s.trim();
+            if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            s.parse().ok()
+        }
+        _ => None,
+    }
+}
+
 /// 쉼표 구분 → 순서 유지 중복 제거 목록.
 pub(crate) fn csv(v: &Value) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -48,7 +63,6 @@ pub(crate) fn text(v: &Value) -> String {
 }
 
 /// GitHub login(사용자·조직).
-#[allow(dead_code)] // find_issue(다음 작업)가 쓴다.
 pub(crate) fn is_login(v: &Value) -> bool {
     v.as_str().is_some_and(|s| {
         (1..=39).contains(&s.len())
