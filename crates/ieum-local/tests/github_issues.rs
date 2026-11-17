@@ -712,3 +712,14 @@ async fn find_or_create_non_title_limit_one_and_blank_title() {
     assert_eq!(m, "title을 입력해 주세요.");
     assert!(log.lock().unwrap().is_empty());
 }
+
+/// 참조식이 준 숫자 value도 제목 완전 일치로 비교한다 — agent `str(value)`와 같게(새 이슈를 거듭 만들지 않게).
+#[tokio::test]
+async fn find_or_create_title_numeric_value_matches() {
+    let (base, log) = find_or_create_server(titled(&["2024"])).await;
+    let mut c = find_cfg("title", json!(2024));
+    c["title"] = json!("2024");
+    let out = run(&base, "github.find_or_create_issue", c).await.unwrap();
+    assert_eq!(out["created"], json!(false));
+    assert_eq!(log.lock().unwrap().len(), 1);
+}

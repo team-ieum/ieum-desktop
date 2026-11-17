@@ -457,7 +457,8 @@ pub(crate) async fn find_or_create_issue(
         return Err(input_error("title을 입력해 주세요."));
     }
     let (search_by, value, state) = (get(c, "search_by"), get(c, "value"), get(c, "state"));
-    find_issues_check(search_by, value, state)?;
+    // 비교도 검색과 같은 정규화 값으로 — 참조식이 준 숫자도 글로 바꿔 둔다(agent `str(value)`).
+    let (_, _, want) = find_plan(search_by, value, state)?;
     let t = token.token().await?;
     let (o, r) = (text(get(c, "owner")), text(get(c, "repo")));
     // 제목 검색은 토큰 일치라 부분 일치도 걸린다 → 100건 받아 제목 완전 일치만 남긴다.
@@ -465,7 +466,6 @@ pub(crate) async fn find_or_create_issue(
     let limit = if by_title { 100 } else { 1 };
     let mut items = find_issues(api, &t, &o, &r, search_by, value, state, limit).await?;
     if by_title {
-        let want = text(value);
         items.retain(|i| same_title(i["title"].as_str().unwrap_or(""), &want));
     }
     if let Some(i) = items.first() {
