@@ -26,7 +26,6 @@ fn unreachable() -> NodeError {
 }
 
 /// 호출 전에 입력을 거절할 때.
-#[allow(dead_code)]
 pub(crate) fn input_error(message: &str) -> NodeError {
     fail("GITHUB_INPUT", message)
 }
