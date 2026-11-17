@@ -337,11 +337,20 @@ fn status_at(app_data: &Path, dir: &Path) -> Result<GithubStatus, String> {
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(10);
 const UNREACHABLE: &str = "GitHub에 닿지 못했어요. 잠시 뒤 다시 실행해 주세요.";
 
-fn not_connected(message: &str) -> NodeError {
+fn token_error(code: &str, message: &str) -> NodeError {
     NodeError {
         message: message.into(),
-        code: Some("GITHUB_NOT_CONNECTED".into()),
+        code: Some(code.into()),
     }
+}
+
+fn not_connected(message: &str) -> NodeError {
+    token_error("GITHUB_NOT_CONNECTED", message)
+}
+
+/// 연결은 그대로인데 지금 gh·GitHub에 닿지 못함 — 빌더 AI가 다시 연결하라고 하지 않게 따로 둔다.
+fn unreachable() -> NodeError {
+    token_error("GITHUB_UNREACHABLE", UNREACHABLE)
 }
 
 /// 노드가 토큰을 읽어도 되는지: (gh 경로, 연결한 login, 환경변수 토큰 여부) 또는 실패.
@@ -354,17 +363,18 @@ pub fn token_login(
     let gh = found.map_err(|_| {
         not_connected("GitHub를 쓰려면 gh CLI가 필요해요. 설정 > 연동을 확인해 주세요.")
     })?;
-    let auth = auth.map_err(|_| not_connected(UNREACHABLE))?;
+    let auth = auth.map_err(|_| unreachable())?;
     match derive_status(recorded, &auth) {
         GithubStatus::Connected { login, env_token } => Ok((gh.path, login, env_token)),
         GithubStatus::AccountChanged { .. } => Err(not_connected(
             "gh 계정이 연결한 계정과 달라요. 설정 > 연동을 확인해 주세요.",
         )),
-        GithubStatus::NeedsLogin { .. } => Err(not_connected(
+        GithubStatus::NeedsLogin { .. } => Err(token_error(
+            "GITHUB_AUTH",
             "GitHub 로그인이 만료됐어요. 설정 > 연동에서 다시 연결해 주세요.",
         )),
         // gh 오류 문구는 싣지 않는다(주소·사용자 이름이 들어 있을 수 있음).
-        GithubStatus::Unreachable { .. } => Err(not_connected(UNREACHABLE)),
+        GithubStatus::Unreachable { .. } => Err(unreachable()),
         _ => Err(not_connected(
             "GitHub 연결이 필요해요. 설정 > 연동에서 연결해 주세요.",
         )),

@@ -716,6 +716,7 @@ fn login_err(
 }
 
 const NOT_CONNECTED: Option<&str> = Some("GITHUB_NOT_CONNECTED");
+const UNREACHABLE: Option<&str> = Some("GITHUB_UNREACHABLE");
 
 #[test]
 fn token_login_states() {
@@ -732,10 +733,7 @@ fn token_login_states() {
     }
     let unreachable = "GitHub에 닿지 못했어요. 잠시 뒤 다시 실행해 주세요.";
     let (code, msg) = login_err(gh_found(), Some("hodoon"), Err("gh 꺼짐".into()));
-    assert_eq!(
-        (code.as_deref(), msg.as_str()),
-        (NOT_CONNECTED, unreachable)
-    );
+    assert_eq!((code.as_deref(), msg.as_str()), (UNREACHABLE, unreachable));
 
     let (code, msg) = login_err(
         gh_found(),
@@ -754,7 +752,7 @@ fn token_login_states() {
     assert_eq!(
         (code.as_deref(), msg.as_str()),
         (
-            NOT_CONNECTED,
+            Some("GITHUB_AUTH"),
             "GitHub 로그인이 만료됐어요. 설정 > 연동에서 다시 연결해 주세요."
         )
     );
@@ -763,10 +761,7 @@ fn token_login_states() {
     let mut down = acct("hodoon", true, "error", "keyring");
     down.error = Some("dial tcp: lookup api.github.com secret-proxy".into());
     let (code, msg) = login_err(gh_found(), Some("hodoon"), ok(vec![down]));
-    assert_eq!(
-        (code.as_deref(), msg.as_str()),
-        (NOT_CONNECTED, unreachable)
-    );
+    assert_eq!((code.as_deref(), msg.as_str()), (UNREACHABLE, unreachable));
     assert!(!msg.contains("secret-proxy"));
 
     assert_eq!(
