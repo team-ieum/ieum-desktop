@@ -9,9 +9,10 @@ use serde_json::{Value, json};
 
 use super::edit::{AI_EVENT, FOLDER_FIELDS};
 use super::{
-    Builder, ChatState, Code, Doc, FinishAction, FinishAi, FinishButton, HttpLine, HttpSend,
-    NodeState, PendingFinish, Reply, SaveError, node_state, workflow_hash,
+    Builder, ChatState, Code, Doc, FinishAction, FinishAi, FinishButton, GithubTarget, HttpLine,
+    HttpSend, NodeState, PendingFinish, Reply, SaveError, node_state, workflow_hash,
 };
+use crate::github::GITHUB_WRITE_EVENTS;
 
 /// 완료까지 남은 것 한 줄.
 #[derive(Serialize)]
@@ -53,19 +54,60 @@ fn http_url(n: &Node) -> String {
         .to_string()
 }
 
+fn raw(n: &Node, key: &str) -> String {
+    n.config
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn is_github_write(n: &Node) -> bool {
+    GITHUB_WRITE_EVENTS.contains(&n.event.as_str())
+}
+
+/// GitHub 쓰기 노드의 확인 줄. 값은 싣지 않고 config 전체의 참조식만 `sends`로 보인다.
+fn github_line(wf: &Workflow, n: &Node) -> HttpLine {
+    let summary = match n.event.as_str() {
+        "github.create_issue" | "github.find_or_create_issue" => raw(n, "title"),
+        _ => format!("#{}", raw(n, "issue_number")),
+    };
+    let mut line = http_line_with(wf, n, n.config.values());
+    line.github = Some(GithubTarget {
+        repo: format!("{}/{}", raw(n, "owner"), raw(n, "repo")),
+        summary,
+    });
+    line.has_body = text(n, "body").is_some();
+    line
+}
+
 /// 확인 카드 한 줄. 머리말은 이름만, 참조식은 어느 노드의 어느 출력인지만 — 값은 싣지 않는다.
 fn http_line(wf: &Workflow, n: &Node) -> HttpLine {
-    let field = |key: &str| n.config.get(key).unwrap_or(&Value::Null);
-    let mut header_keys: Vec<String> = field("headers")
-        .as_object()
+    let fields = ["url", "headers", "body"]
+        .into_iter()
+        .map(|k| n.config.get(k).unwrap_or(&Value::Null));
+    let mut line = http_line_with(wf, n, fields);
+    line.method = http_method(n);
+    line.url = http_url(n);
+    line.header_keys = n
+        .config
+        .get("headers")
+        .and_then(Value::as_object)
         .map(|m| m.keys().cloned().collect())
         .unwrap_or_default();
-    header_keys.sort();
+    line.header_keys.sort();
+    line.has_body = n.config.get("body").is_some_and(|b| !b.is_null());
+    line
+}
+
+/// 줄의 공통 부분 — 칸들의 참조식을 등장 순서·중복 없이 `sends`로.
+fn http_line_with<'a>(
+    wf: &Workflow,
+    n: &Node,
+    fields: impl Iterator<Item = &'a Value>,
+) -> HttpLine {
     let mut sends: Vec<HttpSend> = Vec::new();
-    for (node_id, output) in ["url", "headers", "body"]
-        .into_iter()
-        .flat_map(|k| references(field(k)))
-    {
+    for (node_id, output) in fields.flat_map(references) {
         let node_label = wf
             .nodes
             .iter()
@@ -84,24 +126,24 @@ fn http_line(wf: &Workflow, n: &Node) -> HttpLine {
     HttpLine {
         node_id: n.id.clone(),
         label: n.label.clone().unwrap_or_default(),
-        method: http_method(n),
-        url: http_url(n),
-        header_keys,
         sends,
-        has_body: !field("body").is_null(),
+        ..Default::default()
     }
 }
 
-/// HTTP 노드 — 배열 순서로. 테스트 확인 카드가 쓴다.
+/// HTTP·GitHub 쓰기 노드 — 배열 순서로. 테스트 확인 카드가 쓴다.
 pub(super) fn http_lines(wf: &Workflow) -> Vec<HttpLine> {
     wf.nodes
         .iter()
-        .filter(|n| n.event == HTTP_EVENT)
-        .map(|n| http_line(wf, n))
+        .filter_map(|n| match n.event.as_str() {
+            HTTP_EVENT => Some(http_line(wf, n)),
+            _ if is_github_write(n) => Some(github_line(wf, n)),
+            _ => None,
+        })
         .collect()
 }
 
-/// 확인 카드에 보일 바깥 동작 — 파일·HTTP 노드만, 배열 순서로.
+/// 확인 카드에 보일 바깥 동작 — 파일·HTTP·GitHub 쓰기 노드만, 배열 순서로.
 fn actions(wf: &Workflow) -> Vec<FinishAction> {
     wf.nodes
         .iter()
@@ -117,6 +159,7 @@ fn actions(wf: &Workflow) -> Vec<FinishAction> {
                 }
                 "local.file_rename" => Some(text(n, "newName").unwrap_or_default().to_string()),
                 "local.file_trash" => None,
+                _ if is_github_write(n) => Some(format!("{}/{}", raw(n, "owner"), raw(n, "repo"))),
                 _ => return None,
             };
             Some(FinishAction {
@@ -124,7 +167,11 @@ fn actions(wf: &Workflow) -> Vec<FinishAction> {
                 event: n.event.clone(),
                 label: n.label.clone().unwrap_or_default(),
                 target,
-                http: (n.event == HTTP_EVENT).then(|| http_line(wf, n)),
+                http: match n.event.as_str() {
+                    HTTP_EVENT => Some(http_line(wf, n)),
+                    _ if is_github_write(n) => Some(github_line(wf, n)),
+                    _ => None,
+                },
             })
         })
         .collect()
@@ -293,5 +340,44 @@ mod tests {
                 ("b", "조회", "GET", "")
             ]
         );
+    }
+
+    #[test]
+    fn github_write_nodes_become_confirm_lines() {
+        let wf: Workflow = serde_json::from_value(json!({
+            "nodes": [
+                {"id": "c", "event": "github.create_issue", "config": {"owner": "a", "repo": "b", "title": "{{nodes.t.output.name}}", "body": "x"}},
+                {"id": "r", "event": "github.find_issue", "config": {"owner": "a", "repo": "b", "title": "x"}},
+                {"id": "m", "event": "github.add_labels", "config": {"owner": "a", "repo": "b", "issue_number": "{{nodes.t.output.no}}", "labels": "bug"}}
+            ],
+            "edges": []
+        }))
+        .unwrap();
+        let lines = http_lines(&wf);
+        assert_eq!(lines.len(), 2);
+        let c = &lines[0];
+        assert_eq!(
+            c.github,
+            Some(GithubTarget {
+                repo: "a/b".into(),
+                summary: "{{nodes.t.output.name}}".into()
+            })
+        );
+        assert_eq!(
+            c.sends,
+            [HttpSend {
+                node_id: "t".into(),
+                node_label: "".into(),
+                output: "name".into()
+            }]
+        );
+        assert!(c.has_body && c.method.is_empty() && c.url.is_empty() && c.header_keys.is_empty());
+        let m = &lines[1];
+        assert_eq!(m.github.as_ref().unwrap().summary, "#{{nodes.t.output.no}}");
+        assert!(!m.has_body);
+        let acts = actions(&wf);
+        assert_eq!(acts.len(), 2);
+        assert_eq!(acts[0].target.as_deref(), Some("a/b"));
+        assert!(acts[0].http.is_some());
     }
 }
