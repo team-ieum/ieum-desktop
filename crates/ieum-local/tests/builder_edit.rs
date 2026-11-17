@@ -113,6 +113,43 @@ async fn first_node_is_the_only_trigger() {
     assert_eq!(h.doc(W).workflow.nodes.len(), 1);
 }
 
+/// 스케줄(칸)·수동 트리거는 빌더가 만들 수 있다. cron(`schedule.every`)은 편집기 전용이라 모르는 노드로 거절.
+#[tokio::test]
+async fn schedule_and_manual_triggers_but_not_every() {
+    for event in ["schedule.daily", "schedule.hourly", "manual.run"] {
+        let h = MemHost::with(W, json!({"nodes": [], "edges": []}));
+        let b = Builder::new(h.clone()).unwrap();
+        let r = run(
+            &b,
+            json!({"op": "add", "args": {"event": event, "label": "시작"}}),
+        )
+        .await;
+        assert!(r.ok, "{event}: {r:?}");
+    }
+    let h = MemHost::with(W, json!({"nodes": [], "edges": []}));
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(
+        &b,
+        json!({"op": "add", "args": {"event": "schedule.every", "label": "cron"}}),
+    )
+    .await;
+    assert_eq!(r.code, Some(Code::EventUnknown));
+    assert!(h.doc(W).workflow.nodes.is_empty());
+    let events = run(&b, json!({"op": "events"})).await;
+    let ids: Vec<&str> = events.data["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert!(!ids.contains(&"schedule.every"));
+    assert!(ids.contains(&"schedule.daily") && ids.contains(&"manual.run"));
+    assert_eq!(
+        Code::TriggerRule.message(),
+        "첫 노드는 트리거 하나여야 해요(폴더에 새 파일·스케줄·수동 실행)."
+    );
+}
+
 #[tokio::test]
 async fn branch_edges_need_a_known_branch() {
     let cond = json!({"id": "c", "type": "CONDITION", "event": "branch.if", "config": {"branches": [{"key": "b_11111111", "name": "PDF", "rules": [{"left": "x", "operator": "isNotEmpty"}]}]}});
@@ -310,7 +347,7 @@ async fn outline_and_events() {
         json!(["새 파일", "분류"])
     );
     let e = run(&b, json!({"op": "events"})).await;
-    assert_eq!(e.data["events"].as_array().unwrap().len(), 30);
+    assert_eq!(e.data["events"].as_array().unwrap().len(), 35); // schedule.every 뺌
     assert_eq!(
         e.data["events"][0],
         json!({"event": "local.folder_new_file", "title": "폴더에 새 파일", "description": "고른 폴더에 새 파일이 생기면 시작해요.", "nodeType": "TRIGGER"})

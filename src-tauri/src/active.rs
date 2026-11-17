@@ -139,6 +139,7 @@ impl Active {
                 emit: b.emit.clone(),
                 timing: b.timing,
                 recheck: b.recheck,
+                now: Arc::new(chrono::Utc::now),
             },
             first_open,
         );

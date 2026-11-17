@@ -1,11 +1,13 @@
-//! 앱 데이터 폴더 저장: `workflows/<id>.json`, `runs/<run_id>.json`, `settings.json`.
+//! 앱 데이터 폴더 저장: `workflows/<id>.json`, `runs/<run_id>.json`, `settings.json`, `schedule.json`.
 //! id는 UUID(소문자 하이픈 형식)만 — 파일 이름이 되므로 `../` 같은 값으로 폴더 밖에 쓰지 못하게.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use chrono::{DateTime, Utc};
 use ieum_engine::{RunResult, RunStatus, Workflow};
 use ieum_local::ai::AiUsage;
 use ieum_local::builder::{ChatFile, UsageEntry};
@@ -42,6 +44,9 @@ pub struct StoredRun {
     /// 옛 기록에는 없다.
     #[serde(default)]
     pub trigger: Option<RunTrigger>,
+    /// 스케줄 실행의 차례(Asia/Seoul 로컬 "YYYY-MM-DDTHH:MM:SS"). 그 밖의 실행은 없다.
+    #[serde(default)]
+    pub scheduled_for: Option<String>,
 }
 
 /// 기록 파일에 남기는 HTTP 응답 본문 상한(UTF-16 단위) — 기록을 지우는 정책이 없어 실행마다 최대 1MB씩 쌓이지 않게.
@@ -87,7 +92,7 @@ pub struct ChatUsage {
     pub usage: AiUsage,
 }
 
-/// 폴더 감시로 돌았는지, 지금 실행(수동)인지, 채팅 빌더의 노드 테스트인지.
+/// 폴더 감시로 돌았는지, 지금 실행(수동)인지, 채팅 빌더의 노드 테스트인지, 스케줄 차례인지.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RunTrigger {
@@ -95,6 +100,8 @@ pub enum RunTrigger {
     Manual,
     /// 끝나면 바로 되돌린다. 대시보드 실행 건수·알림에서 뺀다.
     Test,
+    /// 알림·집계는 `Watch`와 같게.
+    Schedule,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,6 +192,8 @@ fn check_id(id: &str) -> Result<(), String> {
 
 /// 채팅 상태 파일 읽기·쓰기를 한 프로세스 안에서 차례로.
 static CHAT_LOCK: Mutex<()> = Mutex::new(());
+/// `schedule.json` 읽기-고치기-쓰기를 차례로.
+static SCHEDULE_LOCK: Mutex<()> = Mutex::new(());
 
 /// 임시 파일에 쓰고 rename — 쓰다 죽어도 이전 파일이 남는다.
 pub(crate) fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
@@ -426,6 +435,44 @@ impl Store {
             .collect();
         list.sort_by(|a, b| b.started_at.cmp(&a.started_at));
         Ok(list)
+    }
+
+    /// 워크플로우별 마지막으로 처리한 스케줄 차례(`schedule.json`). 없으면 빈 맵.
+    /// 파일에는 RFC3339 글로 둔다. 읽지 못하는 값은 건너뛴다(그 워크플로우는 처음 켠 것처럼 시작).
+    pub fn get_schedule_slots(&self) -> Result<HashMap<String, DateTime<Utc>>, String> {
+        Ok(self
+            .read_schedule_file()?
+            .into_iter()
+            .filter_map(|(id, at)| Some((id, DateTime::parse_from_rfc3339(&at).ok()?.to_utc())))
+            .collect())
+    }
+
+    pub fn set_schedule_slot(&self, workflow_id: &str, slot: DateTime<Utc>) -> Result<(), String> {
+        let _g = SCHEDULE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slots = self.read_schedule_file()?;
+        slots.insert(workflow_id.to_string(), slot.to_rfc3339());
+        write_atomic(&self.root.join("schedule.json"), &slots)
+    }
+
+    /// 지운 워크플로우의 차례 기록을 뺀다. 없으면 그대로.
+    pub fn remove_schedule_slot(&self, workflow_id: &str) -> Result<(), String> {
+        let _g = SCHEDULE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slots = self.read_schedule_file()?;
+        if slots.remove(workflow_id).is_none() {
+            return Ok(());
+        }
+        write_atomic(&self.root.join("schedule.json"), &slots)
+    }
+
+    fn read_schedule_file(&self) -> Result<HashMap<String, String>, String> {
+        let path = self.root.join("schedule.json");
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        // 깨진 파일에 막혀 스케줄이 영영 멈추지 않게 — 비우고 다시 쓴다(처음 켠 것처럼 now부터).
+        Ok(read_json(&path)
+            .inspect_err(|e| eprintln!("[ieum] 스케줄 기록을 읽지 못해 새로 시작해요: {e}"))
+            .unwrap_or_default())
     }
 
     pub fn get_settings(&self) -> Result<Settings, String> {

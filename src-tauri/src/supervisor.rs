@@ -8,12 +8,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
+use ieum_engine::schedule::{
+    Decision, GRACE, Schedule, decide, schedule_cron, schedule_output, to_quartz, triggered_at,
+};
 use ieum_engine::{
     BuiltinRunners, Catalog, ExecEvent, NodeRunner, NodeStatus, RunResult, RunStatus, Runners,
     ValidationError, Workflow, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
-use ieum_local::builder::{HttpLine, TestRun};
+use ieum_local::builder::{HttpLine, TestRun, TestTrigger};
 use ieum_local::{
     AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, HttpRunner,
     Journal, NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo,
@@ -109,15 +113,18 @@ pub struct Deps {
     pub ai: Arc<AiRunner>,
     pub emit: Emit,
     pub timing: WatchTiming,
-    /// 감시 폴더 재확인 간격(운영 30초).
+    /// 감시 폴더 재확인·스케줄 확인 간격(운영 30초).
     pub recheck: Duration,
+    /// 벽시계(운영 = `Utc::now`). 스케줄 차례 판정·트리거 출력에 쓴다.
+    pub now: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WatchState {
-    /// 꺼졌거나 폴더 트리거가 아님
+    /// 꺼졌거나 폴더·스케줄 트리거가 아님
     Off,
+    /// 폴더 감시 중이거나 스케줄이 켜져 있음
     Watching,
     WatchError,
 }
@@ -129,6 +136,88 @@ pub struct WorkflowEntry {
     pub workflow: StoredWorkflow,
     pub watch: WatchState,
     pub watch_message: Option<String>,
+    /// 다음 스케줄 차례(Asia/Seoul "YYYY-MM-DDTHH:MM:SS"). 꺼짐·스케줄 아님이면 None.
+    pub next_run: Option<String>,
+}
+
+/// 첫 TRIGGER 노드로 정한 트리거 종류.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TriggerKind {
+    Folder(PathBuf),
+    /// `quartz` = 칸·cron으로 만든 Quartz 식, 만들 수 없으면 이유.
+    Schedule {
+        event: String,
+        quartz: Result<String, String>,
+    },
+    Manual,
+    Unsupported,
+}
+
+pub fn trigger_kind(wf: &StoredWorkflow) -> TriggerKind {
+    let Some(node) = wf.workflow.nodes.iter().find(|n| {
+        n.r#type
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("TRIGGER"))
+    }) else {
+        return TriggerKind::Unsupported;
+    };
+    match node.event.as_str() {
+        "local.folder_new_file" => {
+            let folder = node.config.get("folder").and_then(Value::as_str);
+            TriggerKind::Folder(PathBuf::from(folder.unwrap_or("")))
+        }
+        "manual.run" => TriggerKind::Manual,
+        e if e.starts_with("schedule.") => TriggerKind::Schedule {
+            event: e.to_string(),
+            quartz: schedule_cron(e, &node.config)
+                .and_then(|c| to_quartz(&c))
+                .map_err(|e| e.0),
+        },
+        _ => TriggerKind::Unsupported,
+    }
+}
+
+/// 켜져 있고 폴더 트리거면 그 폴더.
+fn trigger_folder(wf: &StoredWorkflow) -> Option<PathBuf> {
+    match trigger_kind(wf) {
+        TriggerKind::Folder(f) if wf.enabled => Some(f),
+        _ => None,
+    }
+}
+
+/// 켜진 스케줄 워크플로우의 파싱된 식. 꺼짐·스케줄 아님 = None, 계산 못 함 = Some(Err(이유)).
+fn enabled_schedule(wf: &StoredWorkflow) -> Option<Result<Schedule, String>> {
+    let TriggerKind::Schedule { quartz, .. } = trigger_kind(wf) else {
+        return None;
+    };
+    if !wf.enabled {
+        return None;
+    }
+    Some(
+        quartz
+            .and_then(|q| Schedule::parse(&q).map_err(|e| e.0))
+            .map_err(|e| format!("스케줄을 계산하지 못했어요: {e}")),
+    )
+}
+
+/// `now` 다음 차례(Asia/Seoul 로컬 글). 다음 차례가 없으면(지난 연도만) 계산 못 함.
+fn next_slot(s: &Schedule, now: DateTime<Utc>) -> Result<String, String> {
+    s.next_after(now)
+        .map(triggered_at)
+        .ok_or_else(|| "스케줄을 계산하지 못했어요: 다음 실행 시각이 없어요".to_string())
+}
+
+/// 첫 TRIGGER 노드의 event·칸 — 저장 때 바뀌었는지 본다.
+fn trigger_sig(wf: &StoredWorkflow) -> Option<(String, Map<String, Value>)> {
+    wf.workflow
+        .nodes
+        .iter()
+        .find(|n| {
+            n.r#type
+                .as_deref()
+                .is_some_and(|t| t.eq_ignore_ascii_case("TRIGGER"))
+        })
+        .map(|n| (n.event.clone(), n.config.clone()))
 }
 
 struct Watch {
@@ -141,13 +230,30 @@ struct Watch {
 
 type Reply = oneshot::Sender<Result<String, String>>;
 
+/// 실행이 어디서 왔는가.
+enum JobSource {
+    /// 감시가 보냈다 — 그 감시 폴더.
+    Watch(PathBuf),
+    /// 스케줄 차례.
+    Schedule { slot: DateTime<Utc> },
+    /// 지금 실행(`run_now`).
+    Manual,
+    /// 채팅 빌더의 노드 테스트 — 저장본 대신 돌릴 그래프(대상까지 자른 것).
+    Test(Workflow),
+}
+
+enum Pushed {
+    Yes,
+    /// 그 워크플로우가 돌거나 기다리는 중(`push_if_idle`만).
+    Busy,
+    /// 감독이 멈춰 받지 않았다.
+    Stopped,
+}
+
 struct Job {
     trigger: Map<String, Value>,
-    /// 감시가 보낸 일이면 그 감시 폴더. 시험 실행(`run_now`)은 None.
-    folder: Option<PathBuf>,
+    source: JobSource,
     reply: Option<Reply>,
-    /// 채팅 빌더의 노드 테스트면 저장본 대신 돌릴 그래프(대상까지 자른 것).
-    test: Option<Workflow>,
 }
 
 #[derive(Default)]
@@ -172,6 +278,12 @@ struct Inner {
     http_gate: HttpConfirmGate,
     /// `stop()` 뒤 취소됨 — 새 감시·실행을 받지 않고 재확인 루프가 끝난다.
     stopped: CancellationToken,
+    /// 계산하지 못한 스케줄(워크플로우 id → 화면에 보일 이유).
+    schedule_errors: Mutex<HashMap<String, String>>,
+    /// 스케줄 확인을 차례로 — 루프·저장이 같은 차례를 두 번 넣지 않게.
+    tick_lock: Mutex<()>,
+    /// 저장소(`schedule.json`)에 쓰지 못한 차례(워크플로우 id → 차례). 저장소 값보다 앞선다.
+    slots: Mutex<HashMap<String, DateTime<Utc>>>,
 }
 
 #[derive(Clone)]
@@ -179,20 +291,6 @@ pub struct Supervisor(Arc<Inner>);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-/// 켜져 있고 폴더 트리거가 있으면 그 폴더.
-fn trigger_folder(wf: &StoredWorkflow) -> Option<PathBuf> {
-    if !wf.enabled {
-        return None;
-    }
-    let node = wf
-        .workflow
-        .nodes
-        .iter()
-        .find(|n| n.event == "local.folder_new_file")?;
-    let folder = node.config.get("folder").and_then(Value::as_str);
-    Some(PathBuf::from(folder.unwrap_or("")))
 }
 
 /// 트리거 출력(`path`·`name`·`extension`·`size`).
@@ -227,6 +325,9 @@ impl Supervisor {
             editing: Mutex::default(),
             http_gate: HttpConfirmGate::default(),
             stopped: CancellationToken::new(),
+            schedule_errors: Mutex::default(),
+            tick_lock: Mutex::default(),
+            slots: Mutex::default(),
         }));
         // 감시(`sync`)보다 먼저 — 되돌려진 파일이 새 파일로 잡히지 않는다.
         if close_unfinished {
@@ -241,7 +342,11 @@ impl Supervisor {
                     () = tokio::time::sleep(every) => {}
                 }
                 match weak.upgrade() {
-                    Some(inner) => Supervisor(inner).recheck(),
+                    Some(inner) => {
+                        let sup = Supervisor(inner);
+                        sup.recheck();
+                        sup.schedule_tick();
+                    }
                     None => break,
                 }
             }
@@ -319,19 +424,26 @@ impl Supervisor {
 
     pub fn list_workflows(&self) -> Result<Vec<WorkflowEntry>, String> {
         let list = self.store().list_workflows()?;
+        let now = (self.0.deps.now)();
         let watches = lock(&self.0.watches);
         Ok(list
             .into_iter()
             .map(|workflow| {
-                let (watch, watch_message) = match watches.get(&workflow.id) {
-                    None => (WatchState::Off, None),
-                    Some(w) if w.watcher.is_some() => (WatchState::Watching, None),
-                    Some(w) => (WatchState::WatchError, w.error.clone()),
+                let (mut watch, mut watch_message, mut next_run) = match watches.get(&workflow.id) {
+                    None => (WatchState::Off, None, None),
+                    Some(w) if w.watcher.is_some() => (WatchState::Watching, None, None),
+                    Some(w) => (WatchState::WatchError, w.error.clone(), None),
                 };
+                match enabled_schedule(&workflow).map(|s| s.and_then(|s| next_slot(&s, now))) {
+                    None => {}
+                    Some(Ok(next)) => (watch, next_run) = (WatchState::Watching, Some(next)),
+                    Some(Err(e)) => (watch, watch_message) = (WatchState::WatchError, Some(e)),
+                }
                 WorkflowEntry {
                     workflow,
                     watch,
                     watch_message,
+                    next_run,
                 }
             })
             .collect())
@@ -364,7 +476,22 @@ impl Supervisor {
     fn save_checked(&self, wf: StoredWorkflow) -> Result<StoredWorkflow, String> {
         self.check_folders(&wf.workflow)?;
         self.check_providers(&wf.workflow)?;
-        let saved = self.store().save_workflow(wf)?;
+        let before = (!wf.id.is_empty())
+            .then(|| self.store().get_workflow(&wf.id).ok())
+            .flatten();
+        // 저장과 차례 기록을 스케줄 확인과 같은 잠금 안에서 — 그 사이 배경 확인이 새 저장본을
+        // 옛 차례 기록으로 돌리지 않게.
+        let saved = {
+            let _one = lock(&self.0.tick_lock);
+            let saved = self.store().save_workflow(wf)?;
+            // 꺼짐→켜짐, 트리거 칸이 바뀜 = 지난 차례를 놓친 것으로 치지 않고 지금부터.
+            let restart =
+                before.is_none_or(|b| !b.enabled || trigger_sig(&b) != trigger_sig(&saved));
+            if restart && enabled_schedule(&saved).is_some() {
+                self.set_slot(&saved.id, (self.0.deps.now)());
+            }
+            saved
+        };
         self.sync();
         Ok(saved)
     }
@@ -418,13 +545,26 @@ impl Supervisor {
     pub fn delete_workflow(&self, id: &str) -> Result<(), String> {
         let _g = lock(&self.0.save_lock);
         self.store().delete_workflow(id)?;
+        {
+            let _one = lock(&self.0.tick_lock);
+            lock(&self.0.slots).remove(id);
+            if let Err(e) = self.store().remove_schedule_slot(id) {
+                eprintln!("[ieum] 스케줄 기록을 지우지 못했어요: {e}");
+            }
+        }
         self.sync();
         Ok(())
     }
 
-    /// 저장된 워크플로우에 맞춰 감시를 다시 건다. 폴더가 그대로이고 살아 있는 감시는 유지하고,
-    /// 오류 상태면 바로 다시 건다. 꺼지거나·지워지거나·폴더가 바뀐 워크플로우의 대기 실행은 버린다.
+    /// 저장된 워크플로우에 맞춰 감시를 다시 걸고 스케줄을 한 번 확인한다.
     pub fn sync(&self) {
+        self.sync_watches();
+        self.schedule_tick();
+    }
+
+    /// 폴더가 그대로이고 살아 있는 감시는 유지하고, 오류 상태면 바로 다시 건다.
+    /// 꺼지거나·지워지거나·폴더가 바뀐 워크플로우의 대기 실행은 버린다.
+    fn sync_watches(&self) {
         let mut watches = lock(&self.0.watches);
         // stop()은 취소 뒤 이 잠금을 잡고 비우므로, 잠금 안에서 보면 멈춘 뒤 감시를 새로 걸지 않는다.
         if self.is_stopped() {
@@ -552,26 +692,162 @@ impl Supervisor {
         }
     }
 
+    /// 차례 기록: 메모리에 먼저 넘기고 저장소에 쓴다. 쓰기가 되면 메모리 값은 지운다(저장소가 기준).
+    /// 쓰기가 실패하면 메모리 값이 남아 같은 프로세스 안에선 같은 차례를 다시 돌지 않는다 — 재시작하면
+    /// 그 차례가 한 번 더 돌 수 있다(로그만 남긴다). `tick_lock`을 잡은 채 부른다.
+    fn set_slot(&self, workflow_id: &str, slot: DateTime<Utc>) {
+        let mut pending = lock(&self.0.slots);
+        pending.insert(workflow_id.to_string(), slot);
+        match self.store().set_schedule_slot(workflow_id, slot) {
+            Ok(()) => {
+                pending.remove(workflow_id);
+            }
+            Err(e) => eprintln!("[ieum] 스케줄 기록을 쓰지 못했어요: {e}"),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn tick_for_test(&self) {
+        self.schedule_tick();
+    }
+
+    /// 켜진 스케줄 워크플로우마다 지난 차례를 판정한다(설계 "스케줄 루프"). 처음 보는 워크플로우는
+    /// 지금부터, 놓친 차례는 가장 최근 하나만 유예(2시간) 안이면 한 번, 실행 중이면 그 차례는 건너뛴다.
+    fn schedule_tick(&self) {
+        let _one = lock(&self.0.tick_lock);
+        if self.is_stopped() {
+            return;
+        }
+        let (list, mut slots) = match (
+            self.store().list_workflows(),
+            self.store().get_schedule_slots(),
+        ) {
+            (Ok(l), Ok(s)) => (l, s),
+            (Err(e), _) | (_, Err(e)) => {
+                return eprintln!("[ieum] 스케줄을 확인하지 못했어요: {e}");
+            }
+        };
+        // 저장소에 쓰지 못한 차례가 이긴다 — 같은 차례를 다시 돌지 않게.
+        slots.extend(lock(&self.0.slots).iter().map(|(k, v)| (k.clone(), *v)));
+        let now = (self.0.deps.now)();
+        let mut errors = HashMap::new();
+        for wf in &list {
+            let Some(schedule) = enabled_schedule(wf) else {
+                continue;
+            };
+            let schedule = match schedule {
+                Ok(s) => s,
+                Err(e) => {
+                    errors.insert(wf.id.clone(), e);
+                    continue;
+                }
+            };
+            let set = |slot| self.set_slot(&wf.id, slot);
+            let decision = match slots.get(&wf.id) {
+                None => {
+                    set(now);
+                    Decision::Nothing
+                }
+                Some(&last) => decide(&schedule, last, now),
+            };
+            match decision {
+                // 지난 차례를 다 처리했는데 다음 차례도 없을 때만 오류(연도 식의 마지막 차례는 돈다).
+                Decision::Nothing => {
+                    if let Err(e) = next_slot(&schedule, now) {
+                        errors.insert(wf.id.clone(), e);
+                    }
+                }
+                // 2시간 안으로 조금 뒤로 간 시계는 기록을 둔다 — 지금으로 덮으면 이미 돈 차례가 다시 돈다.
+                Decision::ClockBack => {
+                    if slots.get(&wf.id).is_some_and(|&last| last - now > GRACE) {
+                        set(now);
+                    }
+                }
+                Decision::Expired { slot } => set(slot),
+                Decision::Run { slot } => {
+                    // 차례를 먼저 넘긴다 — 기록을 못 쓰면 다음 확인에서 같은 차례를 다시 돌 수 있다.
+                    set(slot);
+                    let TriggerKind::Schedule { event, .. } = trigger_kind(wf) else {
+                        continue;
+                    };
+                    let config = trigger_sig(wf).map(|(_, c)| c).unwrap_or_default();
+                    let job = Job {
+                        trigger: schedule_output(&event, &config, now),
+                        source: JobSource::Schedule { slot },
+                        reply: None,
+                    };
+                    match self.push_if_idle(&wf.id, job) {
+                        Pushed::Yes => {}
+                        Pushed::Busy => eprintln!(
+                            "[ieum] 실행 중이라 스케줄 차례를 건너뛰었어요: 워크플로우 {} {}",
+                            wf.id,
+                            triggered_at(slot)
+                        ),
+                        // 멈춘 감독이 차례를 삼키지 않게 되돌린다 — 다음 감독(재시작·계정 복귀)이 돌린다.
+                        Pushed::Stopped => {
+                            if let Some(&last) = slots.get(&wf.id) {
+                                set(last);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut known = lock(&self.0.schedule_errors);
+        for (id, e) in &errors {
+            if known.get(id) != Some(e) {
+                self.emit_status(id, false, e.clone());
+            }
+        }
+        for id in known.keys() {
+            if !errors.contains_key(id) {
+                self.emit_status(id, true, String::new());
+            }
+        }
+        *known = errors;
+    }
+
     /// 감시 폴더 `folder`에서 온 트리거를 실행 줄에 넣는다. 같은 워크플로우는 한 번에 하나씩 돈다.
     pub fn enqueue(&self, workflow_id: &str, folder: &Path, trigger: Map<String, Value>) {
         self.push(
             workflow_id,
             Job {
                 trigger,
-                folder: Some(folder.to_path_buf()),
+                source: JobSource::Watch(folder.to_path_buf()),
                 reply: None,
-                test: None,
             },
         );
     }
 
+    /// 그 워크플로우가 돌거나 기다리는 실행이 없을 때만 넣는다(스케줄 차례는 줄 크기 1).
+    /// 확인과 넣기를 같은 잠금 안에서 한다.
+    fn push_if_idle(&self, workflow_id: &str, job: Job) -> Pushed {
+        let mut lanes = lock(&self.0.lanes);
+        if lanes
+            .get(workflow_id)
+            .is_some_and(|l| l.running || !l.jobs.is_empty())
+        {
+            return Pushed::Busy;
+        }
+        self.push_locked(&mut lanes, workflow_id, job)
+    }
+
     fn push(&self, workflow_id: &str, job: Job) {
         let mut lanes = lock(&self.0.lanes);
+        self.push_locked(&mut lanes, workflow_id, job);
+    }
+
+    fn push_locked(
+        &self,
+        lanes: &mut HashMap<String, Lane>,
+        workflow_id: &str,
+        job: Job,
+    ) -> Pushed {
         if self.is_stopped() {
             if let Some(reply) = job.reply {
                 let _ = reply.send(Err("계정이 바뀌거나 로그아웃되어 취소됐어요.".into()));
             }
-            return;
+            return Pushed::Stopped;
         }
         let lane = lanes.entry(workflow_id.to_string()).or_default();
         lane.jobs.push_back(job);
@@ -593,6 +869,7 @@ impl Supervisor {
             let (sup, id) = (self.clone(), workflow_id.to_string());
             self.0.rt.spawn(async move { sup.drain(&id).await });
         }
+        Pushed::Yes
     }
 
     async fn drain(&self, workflow_id: &str) {
@@ -608,9 +885,7 @@ impl Supervisor {
                     }
                 }
             };
-            let result = self
-                .run_one(workflow_id, job.folder, job.trigger, job.test)
-                .await;
+            let result = self.run_one(workflow_id, job.source, job.trigger).await;
             if let Err(e) = &result {
                 eprintln!("[ieum] 실행하지 못했어요: 워크플로우 {workflow_id}: {e}");
             }
@@ -624,25 +899,27 @@ impl Supervisor {
     async fn run_one(
         &self,
         workflow_id: &str,
-        folder: Option<PathBuf>,
+        source: JobSource,
         trigger: Map<String, Value>,
-        test: Option<Workflow>,
     ) -> Result<String, String> {
         let mut wf = self.store().get_workflow(workflow_id)?;
-        let run_trigger = match (&test, &folder) {
-            (Some(_), _) => RunTrigger::Test,
-            (None, Some(_)) => RunTrigger::Watch,
-            (None, None) => RunTrigger::Manual,
+        let (run_trigger, scheduled_for) = match &source {
+            JobSource::Test(_) => (RunTrigger::Test, None),
+            JobSource::Watch(_) => (RunTrigger::Watch, None),
+            JobSource::Manual => (RunTrigger::Manual, None),
+            JobSource::Schedule { slot } => (RunTrigger::Schedule, Some(triggered_at(*slot))),
         };
-        // 노드 테스트는 저장본 대신 대상까지 자른 그래프를 돌린다.
-        if let Some(test) = test {
-            wf.workflow = test;
-        }
-        // 감시가 보낸 뒤 꺼졌거나 폴더가 바뀐 워크플로우의 늦은 트리거는 버린다.
-        if let Some(f) = folder
-            && trigger_folder(&wf) != Some(f)
-        {
-            return Err("꺼졌거나 감시 폴더가 바뀌어 늦게 온 트리거를 버렸어요.".into());
+        match source {
+            // 노드 테스트는 저장본 대신 대상까지 자른 그래프를 돌린다.
+            JobSource::Test(test) => wf.workflow = test,
+            // 감시가 보낸 뒤 꺼졌거나 폴더가 바뀐 워크플로우의 늦은 트리거는 버린다.
+            JobSource::Watch(f) if trigger_folder(&wf).as_ref() != Some(&f) => {
+                return Err("꺼졌거나 감시 폴더가 바뀌어 늦게 온 트리거를 버렸어요.".into());
+            }
+            JobSource::Schedule { .. } if enabled_schedule(&wf).is_none() => {
+                return Err("꺼졌거나 스케줄이 아니게 되어 차례를 버렸어요.".into());
+            }
+            _ => {}
         }
         // 저장 때 검사했지만 저장소에 직접 심은 정의도 막는다.
         self.check_folders(&wf.workflow)?;
@@ -693,6 +970,7 @@ impl Supervisor {
             allowed_roots: roots.paths().to_vec(),
             undo: None,
             trigger: Some(run_trigger),
+            scheduled_for: scheduled_for.clone(),
         };
         let (tx, mut rx) = mpsc::unbounded_channel();
         let emit = self.0.deps.emit.clone();
@@ -801,11 +1079,23 @@ impl Supervisor {
         Ok(stored.run.run_id)
     }
 
-    /// 고른 파일로 시험 실행(같은 줄을 탄다). 끝나면 run_id.
-    /// 파일은 그 워크플로우의 허용 폴더 안 일반 파일(심볼릭 링크 아님)이어야 한다.
-    pub async fn run_now(&self, workflow_id: &str, file: &Path) -> Result<String, String> {
+    /// 지금 실행(같은 줄을 탄다, 기록 trigger = Manual). 끝나면 run_id.
+    /// 폴더 트리거는 `file`이 필수 — 그 워크플로우의 허용 폴더 안 일반 파일(심볼릭 링크 아님).
+    /// 스케줄은 지금 시각 출력, 수동은 빈 출력으로 `file` 없이 돈다 — 이때 `file`이 넘어와도 무시한다.
+    pub async fn run_now(&self, workflow_id: &str, file: Option<&Path>) -> Result<String, String> {
         let wf = self.store().get_workflow(workflow_id)?;
-        let trigger = self.file_trigger(&wf.workflow, file)?;
+        let trigger = match trigger_kind(&wf) {
+            TriggerKind::Folder(_) => {
+                let file = file.ok_or("파일을 골라 주세요")?;
+                self.file_trigger(&wf.workflow, file)?
+            }
+            TriggerKind::Schedule { event, .. } => {
+                let config = trigger_sig(&wf).map(|(_, c)| c).unwrap_or_default();
+                schedule_output(&event, &config, (self.0.deps.now)())
+            }
+            TriggerKind::Manual => Map::new(),
+            TriggerKind::Unsupported => return Err("이 트리거는 지금 실행할 수 없어요.".into()),
+        };
         self.queue(workflow_id, trigger, None).await
     }
 
@@ -821,23 +1111,25 @@ impl Supervisor {
             workflow_id,
             Job {
                 trigger,
-                folder: None,
+                source: test.map_or(JobSource::Manual, JobSource::Test),
                 reply: Some(tx),
-                test,
             },
         );
         rx.await.map_err(|_| "실행이 취소됐어요.".to_string())?
     }
 
-    /// `wf`를 `sample` 파일로 실행 줄에서 한 번 돌리고(기록 trigger = Test) 바로 되돌린다.
+    /// `wf`를 `trigger`(샘플 파일 또는 트리거 출력)로 실행 줄에서 한 번 돌리고(기록 trigger = Test) 바로 되돌린다.
     /// 되돌리기는 파일 작업이 없어도 항상 한다. 못 되돌린 것이 있으면 화면에 알린다(`TestUndoFailed`).
     pub async fn run_test(
         &self,
         workflow_id: &str,
         wf: Workflow,
-        sample: &Path,
+        trigger: TestTrigger,
     ) -> Result<TestRun, String> {
-        let trigger = self.file_trigger(&wf, sample)?;
+        let trigger = match trigger {
+            TestTrigger::File(sample) => self.file_trigger(&wf, &sample)?,
+            TestTrigger::Output(output) => output,
+        };
         // 되돌리기는 실행 줄(`run_one`)이 한다 — 이 future가 버려져도 끝까지 간다.
         let run_id = self.queue(workflow_id, trigger, Some(wf)).await?;
         let stored = self.store().get_run(&run_id)?;

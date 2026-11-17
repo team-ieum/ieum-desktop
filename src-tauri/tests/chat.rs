@@ -135,6 +135,7 @@ fn env(script: Arc<Script>) -> Env {
             recent_window: Duration::from_secs(10),
         },
         recheck: Duration::from_secs(30),
+        now: Arc::new(chrono::Utc::now),
     })
     .unwrap();
     Env {

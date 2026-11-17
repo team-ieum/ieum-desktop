@@ -9,6 +9,7 @@ async-trait = "0.1.92"
 bigdecimal = "0.4.11"
 chrono = "0.4.45"
 chrono-tz = "0.10.4"
+croner = "4.0.3"
 fancy-regex = "0.20.2"
 pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
 regex = "1.13.1"

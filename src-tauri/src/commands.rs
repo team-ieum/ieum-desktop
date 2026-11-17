@@ -125,13 +125,10 @@ pub async fn validate_workflow(
 pub async fn run_now(
     active: State<'_, Active>,
     id: String,
-    file_path: String,
+    file_path: Option<String>,
 ) -> Result<String, String> {
-    active
-        .sup()
-        .await?
-        .run_now(&id, &PathBuf::from(file_path))
-        .await
+    let file = file_path.map(PathBuf::from);
+    active.sup().await?.run_now(&id, file.as_deref()).await
 }
 
 #[tauri::command]

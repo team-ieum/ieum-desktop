@@ -1,8 +1,8 @@
-import { ArrowLeft, FileUp, Pencil } from "lucide-react";
+import { ArrowLeft, FileUp, Pencil, Play } from "lucide-react";
 import { useEffect } from "react";
 import { Canvas, nodeTitle, StatusIcon } from "../editor/Canvas";
 import { HttpConfirm } from "../editor/chat/HttpTestCard";
-import { useTestRun } from "../editor/useTestRun";
+import { runsWithoutFile, useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
 import { emptyLive, useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
@@ -20,6 +20,7 @@ export function RunView({ workflowId, onBack, onEdit }: { workflowId: string; on
   }, [entry, load]);
 
   const nodes = entry?.workflow.nodes ?? [];
+  const direct = runsWithoutFile(nodes);
   return (
     <div className="flex h-full flex-col">
       <header className="flex items-center gap-3 border-b border-neutral-200 bg-white px-4 py-3">
@@ -39,8 +40,8 @@ export function RunView({ workflowId, onBack, onEdit }: { workflowId: string; on
           {t("list.open")}
         </button>
         <button type="button" className={PRIMARY} disabled={running || !entry} onClick={testRun}>
-          <FileUp size={16} aria-hidden="true" />
-          {t("run.testWithFile")}
+          {direct ? <Play size={16} aria-hidden="true" /> : <FileUp size={16} aria-hidden="true" />}
+          {t(direct ? "run.now" : "run.testWithFile")}
         </button>
       </header>
       {error && <p className="border-b border-danger-300 bg-danger-100 px-4 py-2 typo-caption1_semibold text-danger-700">{error}</p>}

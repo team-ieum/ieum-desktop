@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use ieum_engine::Workflow;
 use ieum_local::builder::{
-    AiDefault, ChatFile, Doc, Host, HttpConfirm, HttpLine, SaveError, TestRun,
+    AiDefault, ChatFile, Doc, Host, HttpConfirm, HttpLine, SaveError, TestRun, TestTrigger,
 };
 use ieum_local::user_folders;
 
@@ -30,7 +30,7 @@ pub struct MemHost {
     pub ai: Mutex<Option<AiDefault>>,
     pub ai_ok: AtomicBool,
     pub test_runs: Mutex<VecDeque<Result<TestRun, String>>>,
-    pub tested: Mutex<Vec<(Workflow, PathBuf)>>,
+    pub tested: Mutex<Vec<(Workflow, TestTrigger)>>,
     /// `finish_pending`이 받은 워크플로우 id.
     pub pending_notices: Mutex<Vec<String>>,
     /// 성공한 `Host::save` 수(`put_doc`은 세지 않는다).
@@ -145,7 +145,7 @@ impl MemHost {
         self.test_runs.lock().unwrap().push_back(run);
     }
 
-    pub fn tested(&self) -> Vec<(Workflow, PathBuf)> {
+    pub fn tested(&self) -> Vec<(Workflow, TestTrigger)> {
         self.tested.lock().unwrap().clone()
     }
 
@@ -249,9 +249,9 @@ impl Host for MemHost {
         &self,
         _workflow_id: &str,
         wf: Workflow,
-        sample: &Path,
+        trigger: TestTrigger,
     ) -> Result<TestRun, String> {
-        self.tested.lock().unwrap().push((wf, sample.to_path_buf()));
+        self.tested.lock().unwrap().push((wf, trigger));
         let next = self.test_runs.lock().unwrap().pop_front();
         next.unwrap_or_else(|| Err("준비된 테스트 결과가 없음".into()))
     }

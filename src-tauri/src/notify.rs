@@ -166,7 +166,9 @@ pub fn route(n: &RunNotice, p: &Prefs, focused: bool, lang: Lang) -> Route {
             (None, true) => "실패했어요".into(),
             (None, false) => "Failed".into(),
         },
-        (RunTrigger::Watch, NoticeKind::Finished { .. }) if p.watch_end && !focused => {
+        (RunTrigger::Watch | RunTrigger::Schedule, NoticeKind::Finished { .. })
+            if p.watch_end && !focused =>
+        {
             return Route::Batch;
         }
         _ => return Route::Drop,
@@ -259,7 +261,10 @@ pub fn on_run_notice(app: &AppHandle, n: &RunNotice) {
     // 앞 여부(메인 루프를 기다림)는 감시 끝에만 쓴다 — 수동 알림은 기다리지 않게.
     let watch_end = matches!(
         (n.trigger, &n.kind),
-        (RunTrigger::Watch, NoticeKind::Finished { .. })
+        (
+            RunTrigger::Watch | RunTrigger::Schedule,
+            NoticeKind::Finished { .. }
+        )
     );
     let front = watch_end && focused(app);
     match route(n, &Prefs::from(&s), front, s.language.into()) {

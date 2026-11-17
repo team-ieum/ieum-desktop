@@ -18,7 +18,7 @@ use ieum_engine::{ExecEvent, RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::KeyError;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn, KeyStore};
-use ieum_local::builder::{Builder, Code, Host, Op, SaveError, TestStatus};
+use ieum_local::builder::{Builder, Code, Host, Op, SaveError, TestStatus, TestTrigger};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -111,6 +111,7 @@ fn env_with_providers(providers: &[&str]) -> Env {
             recent_window: Duration::from_secs(10),
         },
         recheck: Duration::from_secs(30),
+        now: Arc::new(chrono::Utc::now),
     })
     .unwrap();
     Env {
@@ -354,7 +355,7 @@ async fn test_run_is_undone_even_if_caller_goes_away() {
     let wf = env.store.get_workflow(&id).unwrap().workflow;
     // 테스트를 요청한 쪽이 결과를 기다리지 않고 사라진다(소켓 끊김·시간 초과).
     let sample = watch.join("a.txt");
-    let mut fut = Box::pin(env.sup.run_test(&id, wf, &sample));
+    let mut fut = Box::pin(env.sup.run_test(&id, wf, TestTrigger::File(sample.clone())));
     assert!(poll_once(&mut fut).await.is_pending());
     drop(fut);
     let runs = wait_runs(&env, &id, 1).await;
@@ -374,7 +375,7 @@ async fn run_queued_behind_test_starts_from_restored_files() {
     let id = save(&env, move_only_wf(&watch, &base), true);
     let wf = env.store.get_workflow(&id).unwrap().workflow;
     let sample = watch.join("a.txt");
-    let mut fut = Box::pin(env.sup.run_test(&id, wf, &sample));
+    let mut fut = Box::pin(env.sup.run_test(&id, wf, TestTrigger::File(sample.clone())));
     assert!(poll_once(&mut fut).await.is_pending());
     // 테스트 바로 뒤에 같은 파일의 감시 실행이 줄을 선다.
     let trigger = json!({"path": sample, "name": "a.txt", "extension": "txt", "size": 5});
@@ -401,7 +402,7 @@ async fn run_test_rejects_sample_outside_roots() {
     let wf = env.store.get_workflow(&id).unwrap().workflow;
     assert!(
         env.sup
-            .run_test(&id, wf, &env.root.join("secret.txt"))
+            .run_test(&id, wf, TestTrigger::File(env.root.join("secret.txt")))
             .await
             .is_err()
     );

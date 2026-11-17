@@ -332,6 +332,7 @@ export function Editor({
         dirty={unsaved}
         enabled={draft.enabled}
         onEnabled={(enabled) => setDraft({ ...draft, enabled })}
+        hideEnabled={wf.nodes.some((n) => n.event === "manual.run")}
         problems={errors.length}
         onBack={onBack}
         onOpenRuns={draft.id ? () => onOpenRuns(draft.id) : undefined}

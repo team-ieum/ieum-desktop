@@ -52,7 +52,7 @@ impl Code {
             UserEditing => "사용자가 캔버스에서 고치는 중입니다. 저장한 뒤 다시 시도하세요.",
             NodeNotFound => "그 id의 노드가 없음",
             EventUnknown => "쓸 수 없는 노드 종류. events로 목록을 볼 것",
-            TriggerRule => "첫 노드는 local.folder_new_file이어야 하고 트리거는 하나만 둘 수 있음",
+            TriggerRule => "첫 노드는 트리거 하나여야 해요(폴더에 새 파일·스케줄·수동 실행).",
             FieldUnknown => "그 노드에 없는 칸. fields로 칸을 볼 것",
             FieldLocked => {
                 "set으로 채울 수 없는 칸. 폴더 칸은 pick-folder, AI 연결 칸은 사용자가 캔버스에서 고름"

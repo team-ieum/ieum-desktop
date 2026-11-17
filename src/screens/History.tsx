@@ -36,6 +36,13 @@ const NODE_PILL: Record<string, string> = {
 
 const when = (iso: string) => (iso ? new Date(iso).toLocaleString(locale()) : "");
 
+/** 스케줄 실행이 차례(Asia/Seoul 로컬)보다 1분 넘게 늦게 돌았으면 "예정 HH:MM, 늦게 실행". */
+export function lateNote(run: Pick<StoredRun, "scheduledFor" | "startedAt">): string | null {
+  if (!run.scheduledFor) return null;
+  const late = Date.parse(run.startedAt) - Date.parse(`${run.scheduledFor}+09:00`);
+  return late > 60_000 ? t("history.late").replace("{t}", run.scheduledFor.slice(11, 16)) : null;
+}
+
 function UndoResult({ report }: { report: UndoReport }) {
   return (
     <section className="flex flex-col gap-2">
@@ -104,6 +111,8 @@ function RunDetail({ runId, onBack }: { runId: string; onBack: () => void }) {
           {run && (
             <p className="typo-body2_regular mt-0.5 text-neutral-500">
               {when(run.startedAt)} → {when(run.finishedAt)}
+              {run.trigger && ` · ${t(`dashboard.trigger.${run.trigger}`)}`}
+              {lateNote(run) && ` · ${lateNote(run)}`}
             </p>
           )}
         </div>

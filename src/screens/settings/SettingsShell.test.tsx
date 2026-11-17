@@ -254,7 +254,7 @@ test("notifications_page_has_toggles_and_test", async () => {
   await renderShell("notifications");
   expect(title()).toBe("알림");
   const page = within(document.getElementById("settings-notifications")!);
-  expect(page.getAllByRole("switch").map((s) => s.getAttribute("aria-label"))).toEqual(["수동 실행 시작", "수동 실행 끝·실패", "폴더 감시 끝·실패", "구독 한도에 닿으면 다른 계정 권하기"]);
+  expect(page.getAllByRole("switch").map((s) => s.getAttribute("aria-label"))).toEqual(["수동 실행 시작", "수동 실행 끝·실패", "자동 실행(폴더·스케줄) 끝·실패", "구독 한도에 닿으면 다른 계정 권하기"]);
   await act(async () => fireEvent.click(page.getByRole("button", { name: "테스트 알림 보내기" })));
   expect(send).toHaveBeenCalledTimes(1);
   await act(async () => fireEvent.click(page.getByRole("button", { name: "시스템 설정 열기" })));
@@ -692,7 +692,7 @@ test("permissions_pane_opens_files_settings_without_checking_folders", async () 
 test("notify_toggles_save_settings", async () => {
   const set = vi.spyOn(api, "setSettings").mockResolvedValue();
   await renderShell("notifications");
-  await act(async () => fireEvent.click(screen.getByRole("switch", { name: "폴더 감시 끝·실패" })));
+  await act(async () => fireEvent.click(screen.getByRole("switch", { name: "자동 실행(폴더·스케줄) 끝·실패" })));
   expect(set).toHaveBeenCalledWith(expect.objectContaining({ notifyWatchEnd: false, notifyManualStart: true }));
 });
 

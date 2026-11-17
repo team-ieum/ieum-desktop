@@ -3,14 +3,16 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
+use ieum_engine::schedule::schedule_output;
 use ieum_engine::{NodeStatus, RunStatus, Workflow, upstream_ids};
 use serde_json::{Map, Value, json};
 
 use super::finish::http_lines;
 use super::{
-    Builder, Code, Doc, HttpConfirm, HttpLine, Reply, TestEntry, TestStatus, node_hash,
-    workflow_hash,
+    Builder, Code, Doc, HttpConfirm, HttpLine, Reply, TestEntry, TestStatus, TestTrigger,
+    node_hash, workflow_hash,
 };
 
 /// 대상 + 조상만 남긴 그래프(노드는 원래 순서, 엣지는 양 끝이 다 남은 것만). 없는 id면 None.
@@ -89,14 +91,33 @@ impl Builder {
         if !errors.is_empty() {
             return Err(Reply::err_with(Code::Invalid, json!({"errors": errors})));
         }
-        // 검증을 통과했으니 트리거는 하나이고 폴더 칸이 차 있다.
-        let folder = sub
+        // 검증을 통과했으니 트리거는 하나다. 폴더 트리거면 그 폴더 칸이 차 있다.
+        // 스케줄·수동 트리거는 파일 없이 트리거 출력을 만든다 — `file`이 넘어와도 무시한다.
+        let trigger = sub
             .nodes
             .iter()
-            .filter(|n| n.event == "local.folder_new_file")
-            .find_map(|n| n.config.get("folder")?.as_str())
+            .find(|n| {
+                n.r#type
+                    .as_deref()
+                    .is_some_and(|t| t.eq_ignore_ascii_case("TRIGGER"))
+            })
             .ok_or(Code::FolderMissing)?;
-        let sample = pick_sample(Path::new(folder), file.map(Path::new))?;
+        let trigger = match trigger.event.as_str() {
+            e if e.starts_with("schedule.") => TestTrigger::Output(schedule_output(
+                e,
+                &trigger.config,
+                SystemTime::now().into(),
+            )),
+            "manual.run" => TestTrigger::Output(Map::new()),
+            _ => {
+                let folder = trigger
+                    .config
+                    .get("folder")
+                    .and_then(Value::as_str)
+                    .ok_or(Code::FolderMissing)?;
+                TestTrigger::File(pick_sample(Path::new(folder), file.map(Path::new))?)
+            }
+        };
         // HTTP 요청은 되돌릴 수 없고 참조식으로 값이 밖에 나갈 수 있다 — GET이어도 사람이 먼저 본다.
         let lines = http_lines(&sub);
         let sent = !lines.is_empty();
@@ -120,7 +141,7 @@ impl Builder {
         };
         let run = self
             .host
-            .run_test(id, sub.clone(), &sample)
+            .run_test(id, sub.clone(), trigger)
             .await
             .map_err(|_| Code::Internal)?;
         if run.status == RunStatus::Rejected {

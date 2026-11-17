@@ -27,6 +27,8 @@ export interface ToolbarProps {
   dirty: boolean;
   enabled: boolean;
   onEnabled: (enabled: boolean) => void;
+  /** 켜기 스위치를 숨긴다(수동 실행 워크플로우 — [실행]으로만 돈다). */
+  hideEnabled?: boolean;
   problems: number;
   onBack: () => void;
   /** 실행 기록(내 PC 실행 보기). 저장 전이면 없다. */
@@ -48,6 +50,7 @@ export function Toolbar({
   dirty,
   enabled,
   onEnabled,
+  hideEnabled,
   problems,
   onBack,
   onOpenRuns,
@@ -75,19 +78,21 @@ export function Toolbar({
         />
         {dirty && <span role="status" title={t("editor.unsaved")} aria-label={t("editor.unsaved")} className="size-2 shrink-0 rounded-full bg-amber-500" />}
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          aria-label={t("list.status.active")}
-          onClick={() => onEnabled(!enabled)}
-          className={`relative h-6 w-11 cursor-pointer select-none rounded-full transition-colors duration-200 ${enabled ? "bg-node-green" : "bg-neutral-300"}`}
-        >
-          <span className={`absolute left-0 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${enabled ? "translate-x-5" : "translate-x-0.5"}`} />
-        </button>
-        <span className={`text-xs font-semibold ${enabled ? "text-node-green" : "text-neutral-400"}`}>{status}</span>
-      </div>
+      {!hideEnabled && (
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            aria-label={t("list.status.active")}
+            onClick={() => onEnabled(!enabled)}
+            className={`relative h-6 w-11 cursor-pointer select-none rounded-full transition-colors duration-200 ${enabled ? "bg-node-green" : "bg-neutral-300"}`}
+          >
+            <span className={`absolute left-0 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${enabled ? "translate-x-5" : "translate-x-0.5"}`} />
+          </button>
+          <span className={`text-xs font-semibold ${enabled ? "text-node-green" : "text-neutral-400"}`}>{status}</span>
+        </div>
+      )}
       {problems === 0 ? (
         <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-node-green/15 bg-node-green/10 px-2.5 py-1 text-xs font-semibold text-node-green">
           <span className="h-1.5 w-1.5 rounded-full bg-[#006A4E]" />

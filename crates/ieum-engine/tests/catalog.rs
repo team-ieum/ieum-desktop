@@ -7,7 +7,7 @@ use ieum_engine::{Catalog, CatalogError, NodeType, Workflow};
 fn stage1_catalog_has_thirty_events() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = Catalog::stage1(&root).unwrap();
-    assert_eq!(catalog.events().len(), 30);
+    assert_eq!(catalog.events().len(), 36);
     for event in [
         "branch.if",
         "local.folder_new_file",
@@ -39,7 +39,7 @@ fn embedded_catalog_matches_disk() {
             events.push(path.file_stem().unwrap().to_string_lossy().into_owned());
         }
     }
-    for dir in ["transform", "formatter", "http"] {
+    for dir in ["transform", "formatter", "http", "schedule", "manual"] {
         for entry in std::fs::read_dir(root.join("catalog/events").join(dir)).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_some_and(|e| e == "json") {
@@ -48,8 +48,8 @@ fn embedded_catalog_matches_disk() {
             }
         }
     }
-    assert_eq!(events.len(), 30);
-    assert_eq!(disk.events().len(), 30);
+    assert_eq!(events.len(), 36);
+    assert_eq!(disk.events().len(), 36);
     for event in &events {
         let (d, e) = (disk.get(event).unwrap(), embedded.get(event));
         let e = e.unwrap_or_else(|| panic!("{event} 내장 안 됨"));
@@ -60,7 +60,7 @@ fn embedded_catalog_matches_disk() {
 #[test]
 fn embedded_has_builtin_24() {
     let c = Catalog::embedded().unwrap();
-    assert_eq!(c.events().len(), 30);
+    assert_eq!(c.events().len(), 36);
     assert_eq!(
         c.get("transform.map").unwrap().node_type,
         NodeType::Transform
@@ -193,11 +193,22 @@ fn workflow_roundtrip_keeps_unknown_keys() {
 fn events_listed_trigger_first_with_titles() {
     let c = Catalog::embedded().unwrap();
     let ids: Vec<&str> = c.events().iter().map(|e| e.event.as_str()).collect();
-    assert_eq!(ids.len(), 30);
-    assert_eq!(ids[0], "local.folder_new_file");
-    assert!(ids[1..].is_sorted(), "{ids:?}");
+    assert_eq!(ids.len(), 36);
     assert_eq!(
-        ids[1..8],
+        ids[..7],
+        [
+            "local.folder_new_file",
+            "manual.run",
+            "schedule.daily",
+            "schedule.every",
+            "schedule.hourly",
+            "schedule.monthly",
+            "schedule.weekly",
+        ]
+    );
+    assert!(ids[7..].is_sorted(), "{ids:?}");
+    assert_eq!(
+        ids[7..14],
         [
             "branch.if",
             "formatter.date_add",
@@ -209,7 +220,7 @@ fn events_listed_trigger_first_with_titles() {
         ]
     );
     assert_eq!(
-        ids[23..],
+        ids[29..],
         [
             "formatter.text_url_encode",
             "http.request",

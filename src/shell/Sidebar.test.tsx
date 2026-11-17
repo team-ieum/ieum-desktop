@@ -131,3 +131,9 @@ test("sidebar_brand_mark_is_svg_logo", () => {
   expect(mark?.getAttribute("d")).toBeTruthy();
   expect(container.querySelector("img")).toBeNull();
 });
+
+test("recent_manual_workflow_is_active_even_when_disabled", () => {
+  const manual = { ...local("m", "2026-11-13T00:00:00Z"), enabled: false, watch: "off", workflow: { nodes: [{ id: "t", event: "manual.run", config: {} }], edges: [] } } as WorkflowEntry;
+  const folder = { ...local("f", "2026-11-12T00:00:00Z"), enabled: false, watch: "off" } as WorkflowEntry;
+  expect(recentItems([manual, folder], []).map((r) => r.dot)).toEqual(["active", "paused"]);
+});

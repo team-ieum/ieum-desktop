@@ -548,7 +548,7 @@ fn instruction_is_local() {
     for gone in [
         "check_connection",
         "find_events",
-        "manual.run",
+        "schedule.every",
         "pick_model",
         "모델 카드",
         "list_options",
@@ -558,6 +558,11 @@ fn instruction_is_local() {
     }
     for must in [
         "local.folder_new_file",
+        "schedule.daily",
+        "manual.run",
+        "Asia/Seoul",
+        "MON~SUN",
+        r#""1"~"28" 또는 "L""#,
         "{{nodes.<노드 id>.output.<이름>}}",
         "pick-folder",
         "awaiting_user",
@@ -569,4 +574,5 @@ fn instruction_is_local() {
     ] {
         assert!(INSTRUCTION.contains(must), "{must}");
     }
+    assert!(!INSTRUCTION.contains("첫 노드는 항상 local.folder_new_file"));
 }

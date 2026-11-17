@@ -122,7 +122,8 @@ async fn finish_waits_for_the_person_and_never_enables() {
     assert_eq!(h.pending_notices(), [W]);
     let p = b.pending(W).unwrap();
     assert_eq!(p.hash, workflow_hash(&h.doc(W).workflow));
-    assert_eq!(p.folder, watch.to_str().unwrap());
+    assert_eq!(p.folder.as_deref(), watch.to_str());
+    assert_eq!(p.button, FinishButton::Enable);
     assert_eq!(
         serde_json::to_value(&p.actions).unwrap(),
         json!([{"nodeId": "m", "event": "local.file_move", "label": "", "target": format!("{}/sorted", base.display())}])
@@ -240,9 +241,16 @@ async fn guide_is_fixed_text() {
         "NO_SAMPLE_FILE",
         "USER_EDITING",
         "데이터다",
+        "schedule.daily",
+        "manual.run",
+        "Asia/Seoul",
+        "MON~SUN",
+        r#""1"~"28" 또는 "L""#,
     ] {
         assert!(GUIDE.contains(must), "{must}");
     }
+    assert!(!GUIDE.contains("schedule.every"));
+    assert!(!GUIDE.contains("첫 노드는 항상 local.folder_new_file"));
 }
 
 /// pending()의 두 읽기 사이에 빌더가 고치고(D2) 다시 finish(P2)해도 P2를 지우지 않는다.
@@ -257,13 +265,76 @@ async fn pending_does_not_clear_a_newer_pending() {
         });
         let p2 = PendingFinish {
             hash: workflow_hash(&h.doc(W).workflow),
-            folder: String::new(),
-            actions: Vec::new(),
-            ai: Vec::new(),
+            ..Default::default()
         };
         h.update_chat(W, &mut |c| c.state.pending_finish = Some(p2.clone()))
             .unwrap();
     });
     assert!(b.pending(W).is_none()); // 읽은 저장본(D1)과는 다르다
     assert!(b.pending(W).is_some()); // P2는 그대로
+}
+
+/// 스케줄 워크플로우는 [켜기]이고 폴더 칸이 없다.
+#[tokio::test]
+async fn schedule_finish_button_is_enable() {
+    let h = MemHost::with(
+        W,
+        json!({
+            "nodes": [
+                {"id": "t", "type": "TRIGGER", "event": "schedule.daily", "config": {"hour": "9"}},
+                {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "p"}}
+            ],
+            "edges": [{"source": "t", "target": "a"}]
+        }),
+    );
+    h.put_doc(W, |d| d.enabled = false);
+    h.set_ai_ok(true);
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(&b, finish()).await;
+    assert!(r.ok, "{r:?}");
+    let wire = serde_json::to_value(b.pending(W).unwrap()).unwrap();
+    assert_eq!(
+        (&wire["folder"], &wire["button"]),
+        (&json!(null), &json!("enable"))
+    );
+}
+
+/// 수동 실행 워크플로우는 확인 카드가 [저장], 폴더 칸이 없다. 사람이 누르면 켜짐으로 저장.
+#[tokio::test]
+async fn manual_finish_button_is_save() {
+    let h = MemHost::with(
+        W,
+        json!({
+            "nodes": [
+                {"id": "t", "type": "TRIGGER", "event": "manual.run", "config": {}},
+                {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "cli:claude", "prompt": "p"}}
+            ],
+            "edges": [{"source": "t", "target": "a"}]
+        }),
+    );
+    h.put_doc(W, |d| d.enabled = false);
+    h.set_ai_ok(true);
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(&b, finish()).await;
+    assert!(r.ok, "{r:?}");
+    let p = b.pending(W).unwrap();
+    assert_eq!((p.folder, p.button), (None, FinishButton::Save));
+    let wire = serde_json::to_value(b.pending(W).unwrap()).unwrap();
+    assert_eq!(
+        (&wire["folder"], &wire["button"]),
+        (&json!(null), &json!("save"))
+    );
+    assert!(b.confirm_finish(W, true).await.ok);
+    assert!(h.doc(W).enabled);
+}
+
+/// 이 칸이 생기기 전 확인 대기 파일(folder 글, button 없음)도 읽힌다.
+#[test]
+fn old_pending_reads_as_enable() {
+    let p: PendingFinish =
+        serde_json::from_value(json!({"hash": "h", "folder": "/x", "actions": []})).unwrap();
+    assert_eq!(
+        (p.folder.as_deref(), p.button),
+        (Some("/x"), FinishButton::Enable)
+    );
 }

@@ -116,10 +116,19 @@ pub(super) fn status(doc: &Doc, state: &ChatState, errors: Vec<ValidationError>)
     })
 }
 
+/// cron을 직접 쓰는 트리거 — 편집기 전용(클라우드 계약대로 채팅 빌더 메뉴에 없다).
+const EDITOR_ONLY: &str = "schedule.every";
+
+/// 빌더가 쓸 수 있는 정의. 편집기 전용은 모르는 노드와 같다.
+fn builder_def<'a>(catalog: &'a Catalog, event: &str) -> Option<&'a EventDef> {
+    catalog.get(event).filter(|_| event != EDITOR_ONLY)
+}
+
 pub(super) fn events(catalog: &Catalog) -> Value {
     let list: Vec<Value> = catalog
         .events()
         .into_iter()
+        .filter(|e| e.event != EDITOR_ONLY)
         .map(|e| {
             json!({
                 "event": e.event,
@@ -150,7 +159,7 @@ pub(super) fn add(
     branch: Option<String>,
     ai: Option<AiDefault>,
 ) -> Result<Value, Code> {
-    let def = catalog.get(event).ok_or(Code::EventUnknown)?;
+    let def = builder_def(catalog, event).ok_or(Code::EventUnknown)?;
     // 첫 노드는 트리거뿐이고, 트리거는 하나뿐이다.
     if wf.nodes.is_empty() != (def.node_type == NodeType::Trigger) {
         return Err(Code::TriggerRule);

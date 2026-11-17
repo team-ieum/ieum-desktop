@@ -23,6 +23,12 @@ import textTrim from "../../catalog/events/formatter/text_trim.json";
 import textTruncate from "../../catalog/events/formatter/text_truncate.json";
 import textUrlEncode from "../../catalog/events/formatter/text_url_encode.json";
 import httpRequest from "../../catalog/events/http/request.json";
+import manualRun from "../../catalog/events/manual/run.json";
+import scheduleDaily from "../../catalog/events/schedule/daily.json";
+import scheduleEvery from "../../catalog/events/schedule/every.json";
+import scheduleHourly from "../../catalog/events/schedule/hourly.json";
+import scheduleMonthly from "../../catalog/events/schedule/monthly.json";
+import scheduleWeekly from "../../catalog/events/schedule/weekly.json";
 import transformMap from "../../catalog/events/transform/map.json";
 import localAi from "../../crates/ieum-local/defs/local.ai.json";
 import fileMove from "../../crates/ieum-local/defs/local.file_move.json";
@@ -55,6 +61,12 @@ export interface NodeDef {
 
 const raw: [string, unknown][] = [
   ["local.folder_new_file", folderNewFile],
+  ["schedule.hourly", scheduleHourly],
+  ["schedule.daily", scheduleDaily],
+  ["schedule.weekly", scheduleWeekly],
+  ["schedule.monthly", scheduleMonthly],
+  ["schedule.every", scheduleEvery],
+  ["manual.run", manualRun],
   ["local.ai", localAi],
   ["local.file_move", fileMove],
   ["local.file_rename", fileRename],
@@ -86,9 +98,9 @@ const raw: [string, unknown][] = [
   ["http.request", httpRequest],
 ];
 
-/** 팔레트 순서 그대로. */
+/** 팔레트 순서 그대로. 입력 칸 없는 정의(`manual.run`)는 빈 목록. */
 export const DEFS: Record<string, NodeDef> = Object.fromEntries(
-  raw.map(([event, d]) => [event, { ...(d as Omit<NodeDef, "event">), event }]),
+  raw.map(([event, d]) => [event, { ...(d as Omit<NodeDef, "event">), inputFields: (d as Partial<NodeDef>).inputFields ?? [], event }]),
 );
 export const PALETTE = raw.map(([e]) => e);
 

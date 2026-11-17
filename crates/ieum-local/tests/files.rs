@@ -795,3 +795,16 @@ async fn file_errors_carry_safe_codes() {
         );
     }
 }
+
+#[test]
+fn user_folders_non_folder() {
+    let wf: Workflow = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "schedule.daily", "config": {"hour": "9", "folder": "/x/y"}},
+            {"id": "m", "type": "ACTION", "event": "local.file_move", "config": {"baseFolder": "/h/sorted"}}
+        ],
+        "edges": []
+    }))
+    .unwrap();
+    assert_eq!(ieum_local::user_folders(&wf), [PathBuf::from("/h/sorted")]);
+}

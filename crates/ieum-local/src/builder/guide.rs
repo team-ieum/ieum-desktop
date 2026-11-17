@@ -16,7 +16,11 @@ pub const GUIDE: &str = r#"IEUM 워크플로우 만들기 안내
 5. 사용자가 고치자고 하면 그 노드부터 set, test를 다시 한다.
 
 규칙
-- 첫 노드는 항상 local.folder_new_file(폴더에 새 파일)이다.
+- 첫 노드는 트리거 하나다. 고를 수 있는 트리거:
+  - local.folder_new_file(폴더에 새 파일) — 폴더에 파일이 생기면 시작.
+  - schedule.hourly(매시 정각)·schedule.daily(매일)·schedule.weekly(매주)·schedule.monthly(매월) — 정한 시각에 시작. 시각은 한국 시간(Asia/Seoul). 칸: hour는 글 "0"~"23", weekday는 MON~SUN, day는 글 "1"~"28" 또는 "L"(마지막 날), weekends는 불리언(false면 평일만).
+  - manual.run(수동 실행) — 사용자가 [실행]을 눌러야만 시작. 확인 카드는 [켜기] 대신 [저장]이다.
+- 스케줄·수동 트리거의 test는 파일 없이 돈다(스케줄 출력은 triggeredAt = 실행 시각).
 - 값을 다듬는 변환·포맷터 노드(formatter.*, transform.map)와 HTTP 요청 노드(http.request)도 있다. 자세한 것은 events로 본다.
 - 앞 노드 결과는 {{nodes.<id>.output.<이름>}} 으로 넣는다. 이름은 fields가 알려 준 것만 쓴다.
 - 폴더 칸(folder, baseFolder)은 set으로 채울 수 없다. `ieum workflow pick-folder <id> <칸>`을 실행하면 앱이 폴더 고르기 창을 띄우고 사용자가 고를 때까지 기다린다. 실행하기 전에 사용자에게 창이 뜬다고 알린다.
