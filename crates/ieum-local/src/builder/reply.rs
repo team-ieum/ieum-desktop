@@ -39,6 +39,18 @@ pub enum Code {
     HttpStatus,
     HttpUnreachable,
     TestDeclined,
+    GithubInput,
+    GithubNotConnected,
+    GithubAuth,
+    GithubUnreachable,
+    GithubRateLimit,
+    GithubForbidden,
+    GithubNotFound,
+    GithubMoved,
+    GithubGone,
+    GithubInvalid,
+    GithubStatus,
+    GithubTooLarge,
 }
 
 impl Code {
@@ -91,6 +103,28 @@ impl Code {
             TestDeclined => {
                 "사용자가 확인하지 않아 테스트를 돌리지 않음. 다시 시도하지 말고 사용자에게 알릴 것"
             }
+            GithubInput => {
+                "GitHub 노드 칸 값이 올바르지 않음. 노드 줄의 message가 어느 칸인지 알려 줌"
+            }
+            GithubNotConnected => {
+                "GitHub 연결이 없거나 gh 계정이 연결한 계정과 다름. 사용자가 설정 > 연동에서 확인해야 함"
+            }
+            GithubAuth => "GitHub 로그인이 만료됨. 사용자가 설정 > 연동에서 다시 연결해야 함",
+            GithubUnreachable => {
+                "GitHub에 닿지 못함(연결·시간 초과·서버 오류). 잠시 뒤 다시 시도할 것"
+            }
+            GithubRateLimit => "GitHub 요청 한도에 걸림. 잠시 뒤 다시 시도할 것",
+            GithubForbidden => "이 저장소에 쓸 권한이 없음. owner/repo와 사용자의 권한을 확인할 것",
+            GithubNotFound => {
+                "저장소나 이슈가 없음(또는 볼 권한이 없음). owner/repo·이슈 번호를 확인할 것"
+            }
+            GithubMoved => "저장소 주소가 바뀌었음. owner/repo를 확인할 것",
+            GithubGone => "이 저장소는 이슈를 쓰지 않음",
+            GithubInvalid => {
+                "GitHub가 칸 값을 받지 않음(422). 라벨·담당자·마일스톤 등 칸 값을 확인할 것"
+            }
+            GithubStatus => "GitHub가 요청을 거절함. field가 상태 코드",
+            GithubTooLarge => "GitHub 응답이 허용 크기를 넘음",
         }
     }
 
@@ -101,7 +135,10 @@ impl Code {
             BadRequest | Unauthorized => 3,
             Internal | NoSampleFile | FolderMissing | FileMissing | DestOccupied | FieldEmpty
             | FieldInvalid | MoveFailed | AiNotConnected | AiFailed | AiModelListFailed
-            | NodeFailed | UndoFailed | TooLarge | HttpStatus | HttpUnreachable => 1,
+            | NodeFailed | UndoFailed | TooLarge | HttpStatus | HttpUnreachable | GithubInput
+            | GithubNotConnected | GithubAuth | GithubUnreachable | GithubRateLimit
+            | GithubForbidden | GithubNotFound | GithubMoved | GithubGone | GithubInvalid
+            | GithubStatus | GithubTooLarge => 1,
             Stale | UserEditing | NodeNotFound | EventUnknown | TriggerRule | FieldUnknown
             | FieldLocked | NotFolderField | PickCancelled | FolderNotAllowed | EdgeInvalid
             | SaveRejected | Invalid | SampleNotAllowed | NotReady | TestDeclined => 2,

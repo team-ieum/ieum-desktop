@@ -255,6 +255,29 @@ async fn failure_codes_parse_field_and_fall_back() {
     }
 }
 
+/// GitHub 입력 검사 실패는 agent 고정 문구(사용자 값 없음)를 노드 줄에 그대로 싣는다 — AI가 어느 칸이 틀렸는지 알게.
+#[tokio::test]
+async fn github_input_failure_keeps_fixed_message() {
+    let (h, b, _w, _t) = setup();
+    let mut run_ = ok_run();
+    run_.nodes.insert(
+        "m".into(),
+        rec(
+            NodeStatus::Failed,
+            None,
+            Some("issue_number는 양의 정수여야 합니다."),
+            Some("GITHUB_INPUT"),
+        ),
+    );
+    h.push_test_run(Ok(run_));
+    let r = run(&b, test_op("m")).await;
+    assert_eq!(r.code, Some(Code::GithubInput));
+    assert_eq!(
+        r.data["nodes"][2]["message"],
+        json!("issue_number는 양의 정수여야 합니다.")
+    );
+}
+
 /// 실제 포맷터 러너가 낸 실패가 코드·칸만 남고 문구 원문은 빠진다.
 #[tokio::test]
 async fn test_reports_formatter_failure_code() {

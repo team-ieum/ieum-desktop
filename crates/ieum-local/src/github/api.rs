@@ -25,7 +25,7 @@ fn unreachable() -> NodeError {
     )
 }
 
-/// 호출 전에 입력을 거절할 때.
+/// 호출 전에 입력을 거절할 때. 문구는 빌더 AI에게 그대로 가므로 사용자 값을 넣지 않는다(builder `test.rs`).
 pub(crate) fn input_error(message: &str) -> NodeError {
     fail("GITHUB_INPUT", message)
 }
