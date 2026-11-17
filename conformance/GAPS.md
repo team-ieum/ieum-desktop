@@ -8,7 +8,7 @@
 
 ## 계약 문서가 말하지 않는 지점
 
-워크스페이스 `CLAUDE.md`는 참조식 문법·`conditionType` 값·분기 출력 키만 정한다. 아래는 현재 구현(실행 = BE, 검증 = agent)을 정답으로 삼았다.
+워크스페이스 `docs/cross-repo-contracts.md`는 참조식 문법·`conditionType` 값·분기 출력 키만 정한다. 아래는 현재 구현(실행 = BE, 검증 = agent)을 정답으로 삼았다.
 
 - 참조 값이 없을 때 — 출력이 빈 맵·키 없음·`null`이면 빈 문자열(`missing-ref-empty`, BE `ExecutionCursor.java:193`·`:215`).
 - 경로 중간에 스칼라를 만나면 남은 경로를 버리고 그 값을 쓴다(`nested-path-and-index`의 `items.0.name.extra` → `x`, `:207`).

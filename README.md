@@ -10,10 +10,10 @@ npm test
 ## 배포 빌드
 
 ```sh
-npm run tauri build   # → target/release/bundle/dmg/*.dmg
+npm run tauri:build   # ieum CLI 사이드카를 먼저 빌드해 넣는다 → target/release/bundle/dmg/*.dmg
 ```
 
-- 배포 산출물은 **반드시 `npm run tauri build`** 로 만든다. custom-protocol로 묶여 `dist`와 CSP가 적용된다. `cargo build --release`로 만든 바이너리는 `devUrl`(localhost:1420)을 불러오므로 배포하면 안 된다.
+- 배포 산출물은 **반드시 `npm run tauri:build`** 로 만든다(`npm run tauri build`는 사이드카가 빠진다). custom-protocol로 묶여 `dist`와 CSP가 적용된다. `cargo build --release`로 만든 바이너리는 `devUrl`(localhost:1420)을 불러오므로 배포하면 안 된다.
 - 설치 안내(공증 전 "그래도 열기"): [docs/INSTALL.md](docs/INSTALL.md)
 
 ## 릴리스와 자동 업데이트
