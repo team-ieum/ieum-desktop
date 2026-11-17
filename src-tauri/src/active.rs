@@ -9,9 +9,11 @@ use std::time::Duration;
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::{ScopedKeys, copy_legacy_keys, delete_legacy_keys};
 use ieum_local::ai::{AiRunner, KeyStore};
+use ieum_local::github::{GithubApi, GithubRunner};
 
 use crate::account::{AccountId, account_key, account_root, claim_legacy};
 use crate::credentials::AccountCredentials;
+use crate::github::GhToken;
 use crate::store::Store;
 use crate::supervisor::{Deps, Emit, Supervisor};
 use crate::web::validate_server_url;
@@ -136,6 +138,13 @@ impl Active {
                     (b.ai_factory)(Arc::new(ScopedKeys::new(b.keys.clone(), &key)))
                         .with_resolver(Arc::new(self.credentials_of(&key))),
                 ),
+                github: Arc::new(GithubRunner::new(
+                    GithubApi::new(),
+                    Arc::new(GhToken {
+                        app_data: b.app_data.clone(),
+                        account_dir: account_root(&b.app_data, &key),
+                    }),
+                )),
                 emit: b.emit.clone(),
                 timing: b.timing,
                 recheck: b.recheck,

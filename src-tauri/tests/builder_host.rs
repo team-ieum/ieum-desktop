@@ -1,5 +1,7 @@
 //! 채팅 빌더의 앱 쪽 Host(`AppHost`). 모든 파일은 임시 폴더 안, AI는 가짜 러너, 키체인은 가짜.
 
+mod github_support;
+
 use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
@@ -10,6 +12,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use github_support::no_github;
 use ieum_desktop_lib::builder_host::{AppHost, PickFolder, no_pick};
 use ieum_desktop_lib::credentials::AccountCredentials;
 use ieum_desktop_lib::store::{RunSummary, RunTrigger, Store, StoredWorkflow};
@@ -99,6 +102,7 @@ fn env_with_providers(providers: &[&str]) -> Env {
         home: root.clone(),
         trash_dir: root.join("trash"),
         ai: Arc::new(ai.with_resolver(Arc::new(creds.clone()))),
+        github: no_github(),
         emit: Arc::new(move |e| {
             if let Some(f) = hook.lock().unwrap().as_mut() {
                 f(&e);

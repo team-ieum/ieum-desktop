@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use ieum_engine::NodeError;
 use ieum_local::ai::{sh_quote, shell_output, shell_run};
+use ieum_local::github::GithubToken;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -329,6 +331,91 @@ fn status_at(app_data: &Path, dir: &Path) -> Result<GithubStatus, String> {
     };
     let auth = gh_auth(&gh.path)?;
     Ok(derive_status(read_record(dir).as_deref(), &auth))
+}
+
+/// `gh auth token` 상한.
+const TOKEN_TIMEOUT: Duration = Duration::from_secs(10);
+const UNREACHABLE: &str = "GitHub에 닿지 못했어요. 잠시 뒤 다시 실행해 주세요.";
+
+fn not_connected(message: &str) -> NodeError {
+    NodeError {
+        message: message.into(),
+        code: Some("GITHUB_NOT_CONNECTED".into()),
+    }
+}
+
+/// 노드가 토큰을 읽어도 되는지: (gh 경로, 연결한 login, 환경변수 토큰 여부) 또는 실패.
+/// 연결한 계정이 gh 활성 계정일 때만 통과한다 — `gh auth switch`로 바뀐 계정으로 쓰지 않게.
+pub fn token_login(
+    found: Result<GhFound, GithubStatus>,
+    recorded: Option<&str>,
+    auth: Result<GhAuth, String>,
+) -> Result<(PathBuf, String, bool), NodeError> {
+    let gh = found.map_err(|_| {
+        not_connected("GitHub를 쓰려면 gh CLI가 필요해요. 설정 > 연동을 확인해 주세요.")
+    })?;
+    let auth = auth.map_err(|_| not_connected(UNREACHABLE))?;
+    match derive_status(recorded, &auth) {
+        GithubStatus::Connected { login, env_token } => Ok((gh.path, login, env_token)),
+        GithubStatus::AccountChanged { .. } => Err(not_connected(
+            "gh 계정이 연결한 계정과 달라요. 설정 > 연동을 확인해 주세요.",
+        )),
+        GithubStatus::NeedsLogin { .. } => Err(not_connected(
+            "GitHub 로그인이 만료됐어요. 설정 > 연동에서 다시 연결해 주세요.",
+        )),
+        // gh 오류 문구는 싣지 않는다(주소·사용자 이름이 들어 있을 수 있음).
+        GithubStatus::Unreachable { .. } => Err(not_connected(UNREACHABLE)),
+        _ => Err(not_connected(
+            "GitHub 연결이 필요해요. 설정 > 연동에서 연결해 주세요.",
+        )),
+    }
+}
+
+/// 토큰 읽기 명령. 환경변수 토큰(GH_TOKEN·GITHUB_TOKEN)은 gh가 `--user`로 고를 수 없어 빼고 활성 토큰을 읽는다
+/// — 활성 계정이 연결한 계정인지는 `token_login`이 이미 확인했다.
+pub fn token_cmd(gh: &Path, login: &str, env_token: bool) -> String {
+    let gh = sh_quote(&gh.to_string_lossy());
+    if env_token {
+        format!("{gh} auth token --hostname github.com")
+    } else {
+        format!(
+            "{gh} auth token --hostname github.com --user {}",
+            sh_quote(login)
+        )
+    }
+}
+
+/// 앱의 GitHub 토큰 공급: 노드마다 gh에서 읽는다. 캐시하지 않는다.
+pub struct GhToken {
+    pub app_data: PathBuf,
+    pub account_dir: PathBuf,
+}
+
+#[async_trait::async_trait]
+impl GithubToken for GhToken {
+    async fn token(&self) -> Result<String, NodeError> {
+        let (app_data, dir) = (self.app_data.clone(), self.account_dir.clone());
+        tauri::async_runtime::spawn_blocking(move || {
+            let found = find_gh(&app_data);
+            let auth = match &found {
+                Ok(g) => gh_auth(&g.path),
+                Err(_) => Ok(GhAuth::LoggedOut), // 쓰이지 않는다 — gh가 없으면 token_login이 먼저 실패.
+            };
+            let (gh, login, env_token) = token_login(found, read_record(&dir).as_deref(), auth)?;
+            let cmd = token_cmd(&gh, &login, env_token);
+            let failed = || not_connected("gh에서 GitHub 토큰을 읽지 못했어요.");
+            // stderr는 싣지 않는다.
+            let r = shell_run(&cmd, TOKEN_TIMEOUT, &AtomicBool::new(false), &mut |_| {})
+                .map_err(|_| failed())?;
+            let token = r.stdout.trim();
+            if r.code != Some(0) || token.is_empty() {
+                return Err(failed());
+            }
+            Ok(token.to_string())
+        })
+        .await
+        .map_err(|_| not_connected("gh에서 GitHub 토큰을 읽지 못했어요."))?
+    }
 }
 
 async fn status_of(active: &Active) -> Result<GithubStatus, String> {

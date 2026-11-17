@@ -1,5 +1,7 @@
 //! 실행 감독. 모든 파일은 임시 폴더 안, AI는 가짜 러너.
 
+mod github_support;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -8,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use github_support::no_github;
 use ieum_desktop_lib::store::{RunTrigger, Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{
     AppEvent, Deps, NoticeKind, QUEUE_CAP, RunNotice, Supervisor, WatchState,
@@ -90,6 +93,7 @@ fn env_full(ai: FakeAi, recheck: Duration, repeat_window: Duration) -> Env {
         home: root.clone(),
         trash_dir: root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", ai.clone())),
+        github: no_github(),
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),
@@ -611,6 +615,7 @@ fn restart(env: &Env) -> Supervisor {
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty()),
+        github: no_github(),
         emit: Arc::new(|_| {}),
         timing: WatchTiming::default(),
         recheck: Duration::from_secs(30),
@@ -696,6 +701,7 @@ async fn run_finished_emitted_after_final_save() {
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", env.ai.clone())),
+        github: no_github(),
         emit: Arc::new(move |e| {
             if let AppEvent::Exec {
                 event: ExecEvent::RunFinished { .. },
@@ -939,6 +945,7 @@ async fn unfinished_test_run_undone_on_next_start() {
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty()),
+        github: no_github(),
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming::default(),
         recheck: Duration::from_secs(30),
@@ -1214,6 +1221,7 @@ async fn restart_no_duplicate() {
             home: env.root.clone(),
             trash_dir: env.root.join("trash"),
             ai: Arc::new(AiRunner::empty().with_provider("fake", env.ai.clone())),
+            github: no_github(),
             emit: Arc::new(|_| {}),
             timing: WatchTiming::default(),
             recheck: Duration::from_secs(30),
@@ -1447,4 +1455,26 @@ async fn delete_removes_slot() {
     assert!(slot(&env, &id).is_some());
     env.sup.delete_workflow(&id).unwrap();
     assert_eq!(slot(&env, &id), None);
+}
+
+/// GitHub 노드는 앱 러너에 등록돼 토큰 공급까지 간다(테스트 토큰은 늘 실패).
+#[tokio::test(flavor = "multi_thread")]
+async fn github_node_reaches_token() {
+    let env = env();
+    let wf: Workflow = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "manual.run", "config": {}},
+            {"id": "g", "type": "ACTION", "event": "github.find_issue", "config": {"owner": "o", "repo": "r", "search_by": "number", "value": "1"}}
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "g"}]
+    }))
+    .unwrap();
+    let id = save(&env, wf, true);
+    let run_id = env.sup.run_now(&id, None).await.unwrap();
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.run.nodes["g"].status, NodeStatus::Failed);
+    assert_eq!(
+        run.run.nodes["g"].error.as_deref(),
+        Some("GitHub 연결이 필요해요. 설정 > 연동에서 연결해 주세요.")
+    );
 }
