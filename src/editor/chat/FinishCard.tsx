@@ -65,7 +65,9 @@ export function FinishCard({ workflowId, version }: { workflowId: string; versio
                     <li key={a.nodeId} className="flex flex-col gap-0.5">
                       <span className="typo-caption1_semibold text-neutral-800">{a.label}</span>
                       {/* 옛 확인 대기에는 `http`가 없다 — 그때는 target 원문 그대로. */}
-                      {a.http && what ? (
+                      {a.http?.github ? (
+                        <HttpRequest line={a.http} />
+                      ) : a.http && what ? (
                         <HttpRequest line={a.http} prefix={what.replace("{target}", "")} />
                       ) : (
                         what && <span className="break-all">{what.replace("{target}", () => a.target ?? "")}</span>

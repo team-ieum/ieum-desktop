@@ -43,7 +43,7 @@ export function HttpRequest({ line, prefix = "" }: { line: HttpLine; prefix?: st
     <>
       <span data-testid="http-request" className="break-all font-mono text-xs">
         {line.github ? (
-          `${prefix}${line.label || t("http.confirm.github")} · ${showRefs(line.github.repo)} · ${showRefs(line.github.summary)}`
+          `${prefix}${nodeTitle(line.github.event)} · ${showRefs(line.github.repo)} · ${showRefs(line.github.summary)}`
         ) : (
           `${prefix}${line.method} `
         )}
@@ -95,12 +95,16 @@ export function HttpConfirm({
         </p>
       )}
       <ul className={`flex flex-col gap-2 typo-caption1_medium text-neutral-700 ${CARD_SCROLL}`}>
-        {lines.map((l) => (
-          <li key={l.nodeId} className="flex flex-col gap-0.5">
-            <span className="typo-caption1_semibold text-neutral-800">{l.label || (l.github ? t("http.confirm.github") : nodeTitle("http.request"))}</span>
-            <HttpRequest line={l} />
-          </li>
-        ))}
+        {lines.map((l) => {
+          // GitHub 줄은 본문이 노드 제목으로 시작한다 — 머리에는 사용자 label만(없으면 생략).
+          const head = l.label || (l.github ? "" : nodeTitle("http.request"));
+          return (
+            <li key={l.nodeId} className="flex flex-col gap-0.5">
+              {head && <span className="typo-caption1_semibold text-neutral-800">{head}</span>}
+              <HttpRequest line={l} />
+            </li>
+          );
+        })}
       </ul>
       <p className="typo-caption1_semibold text-danger-700">{t("http.confirm.note")}</p>
       <div className="flex justify-end gap-2">

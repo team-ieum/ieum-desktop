@@ -39,7 +39,11 @@ function httpLine(n: WfNode, nodes: WfNode[]): HttpLine {
 
 const GITHUB_WRITE = ["create_issue", "update_issue", "find_or_create_issue", "add_labels", "create_comment"].map((k) => `github.${k}`);
 const isGithubWrite = (n: WfNode) => GITHUB_WRITE.includes(n.event);
-const raw = (n: WfNode, k: string) => (typeof n.config[k] === "string" ? (n.config[k] as string) : "");
+/** 칸 원문 — 참조식·AI가 JSON 숫자로 넣은 번호도 글로(빌더 `finish::raw`와 같게). */
+const raw = (n: WfNode, k: string) => {
+  const v = n.config[k];
+  return typeof v === "string" || typeof v === "number" ? String(v) : "";
+};
 
 /** 빌더 `finish::github_line`과 같은 줄 — config 전체의 참조식을 `sends`로. */
 function githubLine(n: WfNode, nodes: WfNode[]): HttpLine {
@@ -52,7 +56,7 @@ function githubLine(n: WfNode, nodes: WfNode[]): HttpLine {
     headerKeys: [],
     sends: sendsOf(Object.values(n.config), nodes),
     hasBody: raw(n, "body").trim() !== "",
-    github: { repo: `${raw(n, "owner")}/${raw(n, "repo")}`, summary: create ? raw(n, "title") : `#${raw(n, "issue_number")}` },
+    github: { event: n.event, repo: `${raw(n, "owner")}/${raw(n, "repo")}`, summary: create ? raw(n, "title") : `#${raw(n, "issue_number")}` },
   };
 }
 

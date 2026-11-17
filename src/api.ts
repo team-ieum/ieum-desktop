@@ -409,8 +409,8 @@ export interface HttpLine {
   /** url·headers·body의 참조식이 가리키는 앞 노드 출력 — 값은 오지 않는다. */
   sends: { nodeId: string; nodeLabel: string; output: string }[];
   hasBody: boolean;
-  /** GitHub 쓰기 노드 줄 — 있으면 method·url 대신 저장소와 요약을 보인다. */
-  github?: { repo: string; summary: string };
+  /** GitHub 쓰기 노드 줄 — 있으면 method·url 대신 노드 제목·저장소·요약을 보인다. */
+  github?: { event: string; repo: string; summary: string };
 }
 export interface HttpTestConfirm {
   id: string;

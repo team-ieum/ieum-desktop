@@ -273,13 +273,15 @@ test("renders_github_line", async () => {
     label: "",
     method: "",
     url: "",
-    github: { repo: "a/b", summary: "#{{nodes.t.output.n}}" },
+    github: { event: "github.add_labels", repo: "a/b", summary: "#{{nodes.t.output.n}}" },
     headerKeys: ["X"],
     sends: [{ nodeId: "t", nodeLabel: "", output: "n" }],
   });
   await emit({ id: "w1", lines: [gh] });
   const card = screen.getByRole("dialog");
-  expect(requests(card)).toEqual(["GitHub 쓰기 · a/b · #〈앞 노드 값〉"]);
+  // 줄 머리는 노드 제목 — 만들기·라벨·댓글을 가린다. label이 없으면 제목을 두 번 쓰지 않는다.
+  expect(requests(card)).toEqual(["GitHub 이슈에 라벨 추가 · a/b · #〈앞 노드 값〉"]);
+  expect(within(card).getAllByText(/GitHub 이슈에 라벨 추가/)).toHaveLength(1);
   expect(within(card).getByText("함께 보내는 값: t 의 n")).toBeTruthy();
   expect(within(card).queryByText(/머리말/)).toBeNull();
 });
@@ -291,10 +293,19 @@ test("test_run_asks_for_github_write_only", async () => {
   const r = render(<Harness nodes={[gh("github.add_labels")]} />);
   await act(async () => fireEvent.click(screen.getByText("run")));
   const card = screen.getByRole("dialog", { name: "테스트로 실제 요청을 보낼까요?" });
-  expect(requests(card)).toEqual(["GitHub 쓰기 · a/b · #〈앞 노드 값〉"]);
+  expect(requests(card)).toEqual(["GitHub 이슈에 라벨 추가 · a/b · #〈앞 노드 값〉"]);
   expect(runNow).not.toHaveBeenCalled();
 
   r.rerender(<Harness nodes={[gh("github.find_issue")]} />);
   await act(async () => fireEvent.click(screen.getByText("run")));
   expect(runNow).toHaveBeenCalledTimes(1);
+});
+
+test("test_run_github_line_shows_numeric_issue_number", async () => {
+  vi.spyOn(api, "pickPath").mockResolvedValue("/tmp/a.txt");
+  vi.spyOn(api, "runNow").mockResolvedValue("r1");
+  const n: WfNode = { id: "u", event: "github.update_issue", config: { owner: "a", repo: "b", issue_number: 12, state: "closed" } };
+  render(<Harness nodes={[n]} />);
+  await act(async () => fireEvent.click(screen.getByText("run")));
+  expect(requests(screen.getByRole("dialog"))).toEqual(["GitHub 이슈 수정 · a/b · #12"]);
 });

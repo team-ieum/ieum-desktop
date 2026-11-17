@@ -76,6 +76,8 @@ pub struct HttpLine {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct GithubTarget {
+    /// 노드 종류 — 카드가 줄 머리를 노드 제목으로 보인다(만들기·수정·라벨·댓글을 가리게).
+    pub event: String,
     /// `owner/repo`
     pub repo: String,
     /// 이슈 만들기는 제목, 나머지는 `#번호`.

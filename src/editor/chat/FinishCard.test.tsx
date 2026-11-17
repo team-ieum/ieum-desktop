@@ -82,6 +82,36 @@ test("finish_card_shows_http_line_like_confirm_card", async () => {
   expect(card.querySelector(".overflow-y-auto")).toBeTruthy();
 });
 
+test("finish_card_shows_github_write_line", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({
+    ...P,
+    actions: [
+      {
+        nodeId: "g",
+        event: "github.create_issue",
+        label: "",
+        target: "a/b",
+        http: {
+          nodeId: "g",
+          label: "",
+          method: "",
+          url: "",
+          headerKeys: [],
+          sends: [{ nodeId: "t", nodeLabel: "", output: "name" }],
+          hasBody: true,
+          github: { event: "github.create_issue", repo: "a/b", summary: "{{nodes.t.output.name}}" },
+        },
+      },
+    ],
+  });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  // 스케줄·폴더 실행은 확인 없이 돈다 — 켜기 전에 어느 저장소에 무엇을 쓰는지 보여야 한다.
+  expect(within(card).getByTestId("http-request").textContent).toBe("GitHub 이슈 만들기 · a/b · 〈앞 노드 값〉");
+  expect(within(card).getByText("본문 있음")).toBeTruthy();
+  expect(within(card).getByText("함께 보내는 값: t 의 name")).toBeTruthy();
+});
+
 test("card_lists_ai_nodes_and_marks_file_content_sending", async () => {
   vi.spyOn(api, "pendingFinish").mockResolvedValue({
     ...P,

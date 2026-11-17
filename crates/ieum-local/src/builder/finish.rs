@@ -54,12 +54,13 @@ fn http_url(n: &Node) -> String {
         .to_string()
 }
 
+/// 칸 원문 — 참조식·AI가 JSON 숫자로 넣은 번호도 글로 보인다(노드가 숫자 번호를 받으므로).
 fn raw(n: &Node, key: &str) -> String {
-    n.config
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+    match n.config.get(key) {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Number(x)) => x.to_string(),
+        _ => String::new(),
+    }
 }
 
 fn is_github_write(n: &Node) -> bool {
@@ -74,10 +75,11 @@ fn github_line(wf: &Workflow, n: &Node) -> HttpLine {
     };
     let mut line = http_line_with(wf, n, n.config.values());
     line.github = Some(GithubTarget {
+        event: n.event.clone(),
         repo: format!("{}/{}", raw(n, "owner"), raw(n, "repo")),
         summary,
     });
-    line.has_body = text(n, "body").is_some();
+    line.has_body = !raw(n, "body").trim().is_empty();
     line
 }
 
@@ -348,17 +350,19 @@ mod tests {
             "nodes": [
                 {"id": "c", "event": "github.create_issue", "config": {"owner": "a", "repo": "b", "title": "{{nodes.t.output.name}}", "body": "x"}},
                 {"id": "r", "event": "github.find_issue", "config": {"owner": "a", "repo": "b", "title": "x"}},
-                {"id": "m", "event": "github.add_labels", "config": {"owner": "a", "repo": "b", "issue_number": "{{nodes.t.output.no}}", "labels": "bug"}}
+                {"id": "m", "event": "github.add_labels", "config": {"owner": "a", "repo": "b", "issue_number": "{{nodes.t.output.no}}", "labels": "bug"}},
+                {"id": "u", "event": "github.update_issue", "config": {"owner": "a", "repo": "b", "issue_number": 12, "state": "closed"}}
             ],
             "edges": []
         }))
         .unwrap();
         let lines = http_lines(&wf);
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 3);
         let c = &lines[0];
         assert_eq!(
             c.github,
             Some(GithubTarget {
+                event: "github.create_issue".into(),
                 repo: "a/b".into(),
                 summary: "{{nodes.t.output.name}}".into()
             })
@@ -375,8 +379,14 @@ mod tests {
         let m = &lines[1];
         assert_eq!(m.github.as_ref().unwrap().summary, "#{{nodes.t.output.no}}");
         assert!(!m.has_body);
+        // 참조식·AI가 번호를 JSON 숫자로 넣어도 어느 이슈인지 보인다.
+        let u = lines[2].github.as_ref().unwrap();
+        assert_eq!(
+            (u.event.as_str(), u.summary.as_str()),
+            ("github.update_issue", "#12")
+        );
         let acts = actions(&wf);
-        assert_eq!(acts.len(), 2);
+        assert_eq!(acts.len(), 3);
         assert_eq!(acts[0].target.as_deref(), Some("a/b"));
         assert!(acts[0].http.is_some());
     }
