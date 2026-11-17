@@ -624,3 +624,91 @@ async fn list_issues_shape() {
         .is_err()
     );
 }
+
+/// 검색(GET)에는 `search`, 만들기(POST)에는 201 이슈를 주는 서버.
+async fn find_or_create_server(search: Value) -> (String, Log) {
+    let (l, base) = bind().await;
+    let log = serve(l, move |r| {
+        if r.method == "POST" {
+            resp(201, "", issue(json!([])).to_string().as_bytes())
+        } else {
+            resp(200, "", search.to_string().as_bytes())
+        }
+    });
+    (base, log)
+}
+
+fn titled(titles: &[&str]) -> Value {
+    let items: Vec<Value> = found(titles.len(), false)
+        .into_iter()
+        .zip(titles)
+        .map(|(mut v, t)| {
+            v["title"] = json!(t);
+            v["repository_url"] = json!("https://api.github.com/repos/a/b");
+            v
+        })
+        .collect();
+    json!({ "items": items })
+}
+
+fn foc_cfg(value: &str, title: &str) -> Value {
+    let mut c = find_cfg("title", json!(value));
+    c["title"] = json!(title);
+    c
+}
+
+#[tokio::test]
+async fn find_or_create_title_exact() {
+    let (base, log) = find_or_create_server(titled(&["일일 리포트 11-16", "일일  리포트"])).await;
+    let out = run(
+        &base,
+        "github.find_or_create_issue",
+        foc_cfg("일일 리포트", "일일 리포트"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        Value::Object(out),
+        json!({"created": false, "number": 2, "url": "https://github.com/a/b/issues/2",
+               "title": "일일  리포트", "state": "open", "warnings": []})
+    );
+    {
+        let log = log.lock().unwrap();
+        assert_eq!(log.len(), 1);
+        assert!(log[0].path.contains("per_page=100"));
+    }
+
+    let (base, log) = find_or_create_server(titled(&["일일 리포트 11-16"])).await;
+    let out = run(
+        &base,
+        "github.find_or_create_issue",
+        foc_cfg("일일 리포트", "일일 리포트"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        Value::Object(out),
+        json!({"created": true, "number": 7, "url": "https://github.com/a/b/issues/7",
+               "title": "T", "state": "open", "warnings": []})
+    );
+    let log = log.lock().unwrap();
+    assert_eq!(log.len(), 2);
+    assert_eq!(
+        (log[1].method.as_str(), log[1].path.as_str()),
+        ("POST", "/repos/a/b/issues")
+    );
+    assert_eq!(log[1].json(), json!({"title": "일일 리포트", "body": ""}));
+}
+
+#[tokio::test]
+async fn find_or_create_non_title_limit_one_and_blank_title() {
+    let (base, log) = find_or_create_server(json!([])).await;
+    let mut c = find_cfg("label", json!("bug"));
+    c["title"] = json!("x");
+    run(&base, "github.find_or_create_issue", c).await.unwrap();
+    assert_eq!(log.lock().unwrap().len(), 2);
+    let (base, log) = find_or_create_server(json!([])).await;
+    let m = message(run(&base, "github.find_or_create_issue", foc_cfg("a", " ")).await);
+    assert_eq!(m, "title을 입력해 주세요.");
+    assert!(log.lock().unwrap().is_empty());
+}

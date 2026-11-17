@@ -62,6 +62,17 @@ pub(crate) fn text(v: &Value) -> String {
     v.as_str().map(|s| s.trim().to_string()).unwrap_or_default()
 }
 
+/// 제목 비교용 — 앞뒤·연속 공백을 하나로, 대소문자 무시.
+pub(crate) fn same_title(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    norm(a) == norm(b)
+}
+
 /// GitHub login(사용자·조직).
 pub(crate) fn is_login(v: &Value) -> bool {
     v.as_str().is_some_and(|s| {

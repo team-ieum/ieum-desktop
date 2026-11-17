@@ -47,6 +47,7 @@ impl NodeRunner for GithubRunner {
             match ctx.node.event.as_str() {
                 "github.create_issue" => issues::create_issue(api, token, c).await,
                 "github.update_issue" => issues::update_issue(api, token, c).await,
+                "github.find_or_create_issue" => issues::find_or_create_issue(api, token, c).await,
                 "github.find_issue" => issues::find_issue(api, token, c).await,
                 "github.list_issues" => issues::list_issues(api, token, c).await,
                 "github.add_labels" => issues::add_labels(api, token, c).await,

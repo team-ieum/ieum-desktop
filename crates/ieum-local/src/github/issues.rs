@@ -7,7 +7,9 @@ use serde_json::{Map, Value, json};
 
 use super::GithubToken;
 use super::api::{GithubApi, input_error};
-use super::input::{csv, dropped, is_login, is_path_name, issue_fields, issue_no, text, to_int};
+use super::input::{
+    csv, dropped, is_login, is_path_name, issue_fields, issue_no, same_title, text, to_int,
+};
 
 const MAX_COMMENT_BODY: usize = 65536;
 const SEARCH_BY: [&str; 6] = ["number", "label", "assignee", "author", "title", "body"];
@@ -43,6 +45,31 @@ fn object(v: Value) -> Map<String, Value> {
     }
 }
 
+/// 이슈 만들기 POST — title·body는 원문 그대로(빈 값도) 보낸다. 만든 이슈 응답을 돌려준다.
+async fn post_issue(
+    api: &GithubApi,
+    token: &dyn GithubToken,
+    c: &Map<String, Value>,
+    repo: &str,
+    fields: &Map<String, Value>,
+) -> Result<Value, NodeError> {
+    let mut payload = Map::new();
+    for key in ["title", "body"] {
+        payload.insert(key.into(), c.get(key).cloned().unwrap_or(json!("")));
+    }
+    payload.extend(fields.clone());
+    let t = token.token().await?;
+    api.call(
+        &t,
+        Method::POST,
+        &format!("{repo}/issues"),
+        &[],
+        Some(&Value::Object(payload)),
+    )
+    .await?
+    .expect(201)
+}
+
 pub(crate) async fn create_issue(
     api: &GithubApi,
     token: &dyn GithubToken,
@@ -50,23 +77,7 @@ pub(crate) async fn create_issue(
 ) -> Result<Map<String, Value>, NodeError> {
     let repo = repo_path(c)?;
     let fields = issue_fields(get(c, "labels"), get(c, "assignees"), get(c, "milestone"))?;
-    // title·body는 원문 그대로(빈 값도) 보낸다.
-    let mut payload = Map::new();
-    for key in ["title", "body"] {
-        payload.insert(key.into(), c.get(key).cloned().unwrap_or(json!("")));
-    }
-    payload.extend(fields.clone());
-    let t = token.token().await?;
-    let issue = api
-        .call(
-            &t,
-            Method::POST,
-            &format!("{repo}/issues"),
-            &[],
-            Some(&Value::Object(payload)),
-        )
-        .await?
-        .expect(201)?;
+    let issue = post_issue(api, token, c, &repo, &fields).await?;
     Ok(object(json!({
         "number": issue["number"],
         "url": issue["html_url"],
@@ -433,4 +444,43 @@ pub(crate) async fn list_issues(
         })
         .collect();
     Ok(object(json!({ "total": issues.len(), "issues": issues })))
+}
+
+pub(crate) async fn find_or_create_issue(
+    api: &GithubApi,
+    token: &dyn GithubToken,
+    c: &Map<String, Value>,
+) -> Result<Map<String, Value>, NodeError> {
+    let repo = repo_path(c)?;
+    let fields = issue_fields(get(c, "labels"), get(c, "assignees"), get(c, "milestone"))?;
+    if text(get(c, "title")).is_empty() {
+        return Err(input_error("title을 입력해 주세요."));
+    }
+    let (search_by, value, state) = (get(c, "search_by"), get(c, "value"), get(c, "state"));
+    find_issues_check(search_by, value, state)?;
+    let t = token.token().await?;
+    let (o, r) = (text(get(c, "owner")), text(get(c, "repo")));
+    // 제목 검색은 토큰 일치라 부분 일치도 걸린다 → 100건 받아 제목 완전 일치만 남긴다.
+    let by_title = search_by.as_str() == Some("title");
+    let limit = if by_title { 100 } else { 1 };
+    let mut items = find_issues(api, &t, &o, &r, search_by, value, state, limit).await?;
+    if by_title {
+        let want = text(value);
+        items.retain(|i| same_title(i["title"].as_str().unwrap_or(""), &want));
+    }
+    if let Some(i) = items.first() {
+        return Ok(object(json!({
+            "created": false, "number": i["number"], "url": i["url"],
+            "title": i["title"], "state": i["state"], "warnings": [],
+        })));
+    }
+    let issue = post_issue(api, token, c, &repo, &fields).await?;
+    Ok(object(json!({
+        "created": true,
+        "number": issue["number"],
+        "url": issue["html_url"],
+        "title": issue["title"],
+        "state": issue.get("state").filter(|s| s.is_string()).cloned().unwrap_or(json!("open")),
+        "warnings": dropped(&fields, &issue),
+    })))
 }
