@@ -2,6 +2,20 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use serde_json::{Map, Value, json};
+
+/// 데스크톱이 러너를 가진 GitHub 이슈 노드. 카탈로그엔 이 밖에도 있지만 싣지 않는다.
+pub const GITHUB_EVENTS: [&str; 7] = [
+    "github.create_issue",
+    "github.update_issue",
+    "github.find_issue",
+    "github.find_or_create_issue",
+    "github.list_issues",
+    "github.add_labels",
+    "github.create_comment",
+];
+
+const GITHUB_INPUTS: &str = include_str!("../../ieum-local/github_inputs.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeType {
@@ -102,6 +116,9 @@ struct RawEvent {
     outputs_from: Option<String>,
     #[serde(default)]
     input_fields: Vec<InputField>,
+    /// 카탈로그의 칸 설명(제목·선택지 등). 필수·기본값은 없어 데스크톱 표와 합친다.
+    #[serde(default)]
+    fields: Option<Map<String, Value>>,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +128,10 @@ struct RawField {
 
 impl Catalog {
     pub fn load(files: &[(String, PathBuf)]) -> Result<Catalog, CatalogError> {
+        Self::load_with(files, GITHUB_INPUTS)
+    }
+
+    fn load_with(files: &[(String, PathBuf)], table: &str) -> Result<Catalog, CatalogError> {
         let mut sources = Vec::new();
         for (event, path) in files {
             let text = std::fs::read_to_string(path).map_err(|source| CatalogError::Io {
@@ -119,14 +140,14 @@ impl Catalog {
             })?;
             sources.push((event.clone(), path.clone(), text));
         }
-        Self::parse(sources)
+        Self::parse(sources, &github_table(table)?)
     }
 
     /// 실행 파일에 묶은 노드 정의(`stage1`과 같은 파일들).
     /// 배포된 CLI·앱은 이걸 쓴다. `stage1`(디스크)은 테스트·개발용.
     pub fn embedded() -> Result<Catalog, CatalogError> {
         macro_rules! src {
-            ($event:literal, $rel:literal) => {
+            ($event:expr, $rel:expr) => {
                 (
                     $event.to_string(),
                     PathBuf::from($rel),
@@ -134,7 +155,7 @@ impl Catalog {
                 )
             };
         }
-        Self::parse(vec![
+        let mut sources = vec![
             src!("branch.if", "catalog/events/branch/if.json"),
             src!("local.ai", "crates/ieum-local/defs/local.ai.json"),
             src!(
@@ -249,11 +270,32 @@ impl Catalog {
                 "formatter.text_url_encode",
                 "catalog/events/formatter/text_url_encode.json"
             ),
-        ])
+        ];
+        macro_rules! github {
+            ($($name:literal),*) => {
+                $(sources.push(src!(
+                    concat!("github.", $name),
+                    concat!("catalog/events/github/", $name, ".json")
+                ));)*
+            };
+        }
+        github!(
+            "create_issue",
+            "update_issue",
+            "find_issue",
+            "find_or_create_issue",
+            "list_issues",
+            "add_labels",
+            "create_comment"
+        );
+        Self::parse(sources, &github_table(GITHUB_INPUTS)?)
     }
 
     /// (event, 에러에 쓸 경로, JSON 본문).
-    fn parse(sources: Vec<(String, PathBuf, String)>) -> Result<Catalog, CatalogError> {
+    fn parse(
+        sources: Vec<(String, PathBuf, String)>,
+        inputs: &Map<String, Value>,
+    ) -> Result<Catalog, CatalogError> {
         let mut events = HashMap::new();
         for (event, path, text) in &sources {
             let raw: RawEvent =
@@ -284,6 +326,11 @@ impl Catalog {
                     .get_or_insert_with(BTreeSet::new)
                     .insert("output".to_string());
             }
+            let input_fields = if raw.input_fields.is_empty() {
+                merge_fields(path, inputs.get(event), raw.fields.as_ref())?
+            } else {
+                raw.input_fields
+            };
             events.insert(
                 event.clone(),
                 EventDef {
@@ -294,7 +341,7 @@ impl Catalog {
                     output_keys,
                     output_dynamic: raw.output_dynamic,
                     outputs_from: raw.outputs_from,
-                    input_fields: raw.input_fields,
+                    input_fields,
                 },
             );
         }
@@ -328,8 +375,54 @@ impl Catalog {
                 &mut files,
             )?;
         }
-        Catalog::load(&files)
+        for event in GITHUB_EVENTS {
+            let name = event.trim_start_matches("github.");
+            files.push((
+                event.to_string(),
+                repo_root.join(format!("catalog/events/github/{name}.json")),
+            ));
+        }
+        let table_path = repo_root.join("crates/ieum-local/github_inputs.json");
+        let table = std::fs::read_to_string(&table_path).map_err(|source| CatalogError::Io {
+            path: table_path.clone(),
+            source,
+        })?;
+        Self::load_with(&files, &table)
     }
+}
+
+fn github_table(text: &str) -> Result<Map<String, Value>, CatalogError> {
+    serde_json::from_str(text).map_err(|source| CatalogError::Json {
+        path: PathBuf::from("crates/ieum-local/github_inputs.json"),
+        source,
+    })
+}
+
+/// 칸 하나 = `{key, type: string}` ← 데스크톱 표 항목 ← 카탈로그 `fields[key]`(뒤가 앞을 덮는다).
+fn merge_fields(
+    path: &Path,
+    rows: Option<&Value>,
+    fields: Option<&Map<String, Value>>,
+) -> Result<Vec<InputField>, CatalogError> {
+    let Some(rows) = rows.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    rows.iter()
+        .map(|row| {
+            let mut merged = json!({"type": "string"}).as_object().cloned().unwrap();
+            if let Some(row) = row.as_object() {
+                merged.extend(row.clone());
+            }
+            let key = merged.get("key").and_then(Value::as_str).unwrap_or("");
+            if let Some(over) = fields.and_then(|f| f.get(key)).and_then(Value::as_object) {
+                merged.extend(over.clone());
+            }
+            serde_json::from_value(Value::Object(merged)).map_err(|source| CatalogError::Json {
+                path: path.to_path_buf(),
+                source,
+            })
+        })
+        .collect()
 }
 
 fn json_files(
