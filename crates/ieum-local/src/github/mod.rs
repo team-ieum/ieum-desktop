@@ -46,6 +46,7 @@ impl NodeRunner for GithubRunner {
         let work = async {
             match ctx.node.event.as_str() {
                 "github.create_issue" => issues::create_issue(api, token, c).await,
+                "github.update_issue" => issues::update_issue(api, token, c).await,
                 "github.add_labels" => issues::add_labels(api, token, c).await,
                 "github.create_comment" => issues::create_comment(api, token, c).await,
                 other => Err(NodeError {

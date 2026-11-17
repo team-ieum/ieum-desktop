@@ -294,3 +294,82 @@ fn write_events_are_github_events() {
         assert!(GITHUB_EVENTS.contains(&e), "{e}");
     }
 }
+
+#[tokio::test]
+async fn update_issue_rules() {
+    let mut body = issue(json!([]));
+    body["state"] = json!("closed");
+    let (base, log) = server(200, body).await;
+    let c = |extra: Value| {
+        let mut m = json!({"owner": "a", "repo": "b", "issue_number": "7"});
+        m.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        m
+    };
+    let out = run(
+        &base,
+        "github.update_issue",
+        c(json!({"state": "closed", "state_reason": "completed", "title": " "})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        Value::Object(out),
+        json!({
+            "number": 7,
+            "url": "https://github.com/a/b/issues/7",
+            "title": "T",
+            "state": "closed",
+            "warnings": []
+        })
+    );
+    let out = run(
+        &base,
+        "github.update_issue",
+        c(json!({"state_reason": "completed", "title": "새"})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out["warnings"][0], "닫는 이유는 상태를 바꿀 때만 적용돼요.");
+    {
+        let log = log.lock().unwrap();
+        assert_eq!(log.len(), 2);
+        assert_eq!(
+            (log[0].method.as_str(), log[0].path.as_str()),
+            ("PATCH", "/repos/a/b/issues/7")
+        );
+        assert_eq!(
+            log[0].json(),
+            json!({"state": "closed", "state_reason": "completed"})
+        );
+        assert_eq!(log[1].json(), json!({"title": "새"}));
+    }
+    assert_eq!(
+        message(
+            run(
+                &base,
+                "github.update_issue",
+                c(json!({"title": "", "body": " ", "state": "", "state_reason": ""}))
+            )
+            .await
+        ),
+        "바꿀 칸이 없습니다."
+    );
+    assert_eq!(
+        message(run(&base, "github.update_issue", c(json!({"state": "merged"}))).await),
+        "state는 open, closed 중 하나여야 합니다."
+    );
+    assert_eq!(
+        message(
+            run(
+                &base,
+                "github.update_issue",
+                c(json!({"state_reason": "x"}))
+            )
+            .await
+        ),
+        "state_reason은 completed, not_planned, duplicate, reopened 중 하나여야 합니다."
+    );
+    assert_eq!(log.lock().unwrap().len(), 2);
+}
