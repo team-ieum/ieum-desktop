@@ -18,13 +18,13 @@ push·PR 생성·머지·태그 push·게시는 매번 사용자에게 확인받
 - 세 곳의 `version`을 고친다: `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`
 - 잠금 파일 갱신: `npm install --package-lock-only --ignore-scripts`, `cargo check -p ieum-desktop`
 - `git diff --stat`이 정확히 5개 파일(위 3개 + `package-lock.json`·`Cargo.lock`)인지 확인
-- 커밋 `chore: 버전 <버전>` → push → `dev`로 PR(제목 `[chore] 버전 <버전>`) → 머지 커밋으로 머지
+- 커밋 `chore: 버전 <버전>` → push → `dev`로 PR(제목 `[chore] 버전 <버전>`) → 머지 커밋으로 머지(`--subject "<PR 제목> (#<번호>)"`)
 
 ## 3. 배포 PR (dev → main)
 - 지난 태그 이후 `dev`에 머지된 PR을 모은다: `git log --first-parent --format='%s' v<지난 버전>..origin/dev`
-- 제목: `[feat] <주요 변경 요약> (<버전>)` (예: `[feat] 화면 개편·여러 계정·캔버스 채팅·업데이트 알림 (0.1.1)`)
+- 제목: `[feat] <주요 변경 요약> (v<버전>)` (예: `[feat] 스케줄 트리거·GitHub 연결 (v0.1.2)`)
 - 본문 `## 무엇`: 사용자에게 보이는 변경만 PR당 한 줄, `(#PR번호)`를 단다
-- 머지 커밋으로 머지(squash 금지)
+- 머지 커밋으로 머지(squash 금지, `--subject "<PR 제목> (#<번호>)"`)
 
 ## 4. 태그
 - `git checkout main && git pull --rebase` 후 HEAD가 방금 머지한 커밋인지 확인

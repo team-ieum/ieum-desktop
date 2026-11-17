@@ -10,3 +10,4 @@
 
 # 머지
 - PR은 머지 커밋으로 합친다(squash·rebase 머지 안 함) — 작업 커밋 이력을 남긴다
+- 머지 커밋 제목은 `<PR 제목> (#<PR번호>)`: `gh pr merge <번호> --merge --subject "<PR 제목> (#<번호>)"` — 빼먹으면 `Merge pull request #…`로 들어간다
