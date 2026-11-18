@@ -278,3 +278,38 @@ test("plans_cleared_when_ieum_account_changes", async () => {
   await act(async () => useWeb.setState({ account: null }));
   expect(sub).toHaveBeenCalledTimes(1);
 });
+
+const later = () => {
+  let done: (s: UsageSummary) => void = () => {};
+  const p = new Promise<UsageSummary>((r) => (done = r));
+  return { p, done };
+};
+
+test("api_refresh_keeps_numbers_while_loading", async () => {
+  const slow = later();
+  const summary = vi.spyOn(api, "usageSummary").mockResolvedValueOnce(SUMMARY).mockReturnValueOnce(slow.p);
+  await act(async () => {
+    render(<UsageCard hidden={false} onUsage={() => {}} onAccounts={() => {}} />);
+  });
+  const btn = screen.getByRole("button", { name: "API 사용량 새로 고침" });
+  await act(async () => fireEvent.click(btn));
+  expect(screen.getByText("$1.85")).toBeTruthy();
+  expect(btn.querySelector("svg")?.getAttribute("class")).toContain("animate-spin");
+  // 도는 중 다시 누르면 무시
+  await act(async () => fireEvent.click(btn));
+  expect(summary).toHaveBeenCalledTimes(2);
+  await act(async () => slow.done({ ...SUMMARY, totalUsd: 2 }));
+  expect(screen.getByText("$2.00")).toBeTruthy();
+  expect(btn.querySelector("svg")?.getAttribute("class")).not.toContain("animate-spin");
+  expect(summary).toHaveBeenNthCalledWith(1, "today");
+  expect(summary).toHaveBeenNthCalledWith(2, "today");
+});
+
+test("api_refresh_failure_keeps_old", async () => {
+  vi.spyOn(api, "usageSummary").mockResolvedValueOnce(SUMMARY).mockRejectedValueOnce(new Error("x"));
+  await act(async () => {
+    render(<UsageCard hidden={false} onUsage={() => {}} onAccounts={() => {}} />);
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "API 사용량 새로 고침" })));
+  expect(screen.getByText("$1.85")).toBeTruthy();
+});

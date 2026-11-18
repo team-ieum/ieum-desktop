@@ -1,5 +1,5 @@
 import { ChevronRight, RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type UsageRange, type UsageSummary } from "../api";
 import { ProviderLogo } from "../assets/providers";
 import { formatRelative } from "./format";
@@ -30,11 +30,31 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
   });
   // undefined = 읽는 중, null = 못 읽음
   const [sum, setSum] = useState<UsageSummary | null | undefined>(undefined);
+  const [refreshing, setRefreshing] = useState(false);
+  // 기간이 바뀌면 올라가 — 늦게 온 옛 새로고침 결과가 새 기간을 덮지 않게
+  const gen = useRef(0);
   const workflows = useWorkflows((s) => s.list);
+
+  const refreshApi = () => {
+    if (refreshing) return;
+    const mine = gen.current;
+    setRefreshing(true);
+    api.usageSummary(range).then(
+      (s) => {
+        if (gen.current === mine) {
+          setSum(s);
+          setRefreshing(false);
+        }
+      },
+      () => gen.current === mine && setRefreshing(false), // 실패하면 이전 결과를 둔다
+    );
+  };
 
   useEffect(() => {
     if (hidden) return;
     let live = true;
+    gen.current++;
+    setRefreshing(false);
     setSum(undefined);
     api.usageSummary(range).then(
       (s) => live && setSum(s),
@@ -75,6 +95,15 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
         <section aria-label={t("usage.apiSection")}>
           <div className="flex items-center justify-between gap-4 px-5 pt-3">
             <h4 className="typo-caption1_semibold tracking-[.04em] text-main-gray">{t("usage.apiSection")}</h4>
+            <button
+              type="button"
+              aria-label={t("usage.refreshApi")}
+              title={t("usage.refreshApi")}
+              className="mr-auto -ml-2 grid size-7 shrink-0 place-items-center rounded-lg text-neutral-500 hover:bg-neutral-100"
+              onClick={refreshApi}
+            >
+              <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin motion-reduce:animate-none" : ""}`} aria-hidden="true" />
+            </button>
             <div role="tablist" className="inline-flex rounded-lg border border-neutral-200 bg-neutral-100 p-0.5">
               {RANGES.map((r) => (
                 <button
@@ -95,7 +124,7 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
           ) : sum === null ? (
             <p className="px-5 py-8 text-center typo-body3_regular text-neutral-500">{t("usage.empty")}</p>
           ) : (
-            <div className="grid grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)] gap-6 px-5 py-4">
+            <div className={`grid grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)] gap-6 px-5 py-4 ${refreshing ? "opacity-50" : ""}`}>
               <div>
                 <p className="typo-caption1_semibold text-neutral-500">{t("usage.estimated")}</p>
                 <p className="mt-1 text-[28px] font-bold tabular-nums text-main-deep-blue">{formatUsd(sum.totalUsd)}</p>
