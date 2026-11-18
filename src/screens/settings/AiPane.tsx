@@ -1,5 +1,5 @@
 import { Copy, Plus, ShieldAlert } from "lucide-react";
-import { useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useContext, useEffect, useId, useState, type ReactNode } from "react";
 import {
   api,
   keyStates,
@@ -519,6 +519,7 @@ function KeyLimit({ source, id, view }: { source: ApiProvider; id: string; view:
   const [draft, setDraft] = useState(limit === null ? "" : String(limit));
   const [bad, setBad] = useState(false);
   const { error, run } = useRun(reloadLimits);
+  const badId = useId();
   const save = () => {
     const v = draft.trim();
     const usd = v === "" ? null : Number(v);
@@ -533,6 +534,8 @@ function KeyLimit({ source, id, view }: { source: ApiProvider; id: string; view:
         <span aria-hidden="true">{t("keyLimit.input")}</span>
         <input
           aria-label={t("keyLimit.input")}
+          aria-invalid={bad}
+          aria-describedby={bad ? badId : undefined}
           inputMode="decimal"
           className={`${INPUT} h-8 max-w-28`}
           value={draft}
@@ -541,7 +544,11 @@ function KeyLimit({ source, id, view }: { source: ApiProvider; id: string; view:
           onBlur={save}
         />
       </div>
-      {bad && <p className="typo-caption1_semibold text-danger-700">{t("keyLimit.bad")}</p>}
+      {bad && (
+        <p id={badId} className="typo-caption1_semibold text-danger-700">
+          {t("keyLimit.bad")}
+        </p>
+      )}
       {error && <p className="typo-caption1_semibold text-danger-700">{error}</p>}
     </div>
   );
@@ -580,7 +587,7 @@ function ApiKeyBody({ p, keys, state, refresh, limits }: { p: (typeof PROVIDERS)
               info={
                 <>
                   {k.last4 && <span className="typo-caption1_regular font-mono text-neutral-500">…{k.last4}</span>}
-                  {limits && limitView && <KeyLimit source={p.id} id={k.id} view={limitView} />}
+                  {limits && limitView && <KeyLimit key={String(limitView.limits[`${p.id}:${k.id}`] ?? "none")} source={p.id} id={k.id} view={limitView} />}
                 </>
               }
               removeLabel={t("common.delete")}

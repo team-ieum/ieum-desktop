@@ -39,15 +39,14 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
   const workflows = useWorkflows((s) => s.list);
   const limitView = useKeyLimits((s) => s.view);
 
-  // 한도 막대는 기간 탭과 무관하게 이번 달 — 한 번 읽는다. 못 읽으면 막대만 없다.
-  useEffect(() => {
-    useKeyLimits.getState().load().catch(() => {});
-  }, []);
+  // 한도 막대는 기간 탭과 무관하게 이번 달 — 사용량을 다시 읽을 때 같이 읽어 금액과 어긋나지 않게. 못 읽으면 막대만 없다.
+  const reloadLimits = () => useKeyLimits.getState().load().catch(() => {});
 
   const refreshApi = () => {
     if (refreshing) return;
     const mine = gen.current;
     setRefreshing(true);
+    reloadLimits();
     api.usageSummary(range).then(
       (s) => {
         if (gen.current === mine) {
@@ -65,6 +64,7 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
     gen.current++;
     setRefreshing(false);
     setSum(undefined);
+    reloadLimits();
     api.usageSummary(range).then(
       (s) => live && setSum(s),
       () => live && setSum(null),

@@ -376,3 +376,17 @@ test("limited_unused_key_shows_row", async () => {
   expect(screen.getByText("예비")).toBeTruthy();
   expect(screen.getByText(/\/ \$10/)).toBeTruthy();
 });
+
+test("api_refresh_reloads_key_limits", async () => {
+  mockKeys({ ...KEYS_SUM, byCredential: KEYS_SUM.byCredential.slice(1) });
+  const limits = vi
+    .spyOn(api, "keyLimits")
+    .mockResolvedValueOnce({ limits: { "anthropic:k1": 10 }, spend: { "anthropic:k1": 3.2 } })
+    .mockResolvedValueOnce({ limits: { "anthropic:k1": 10 }, spend: { "anthropic:k1": 5 } });
+  await mountCard();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "키별 보기" })));
+  expect(screen.getByText("이번 달 $3.20 / $10")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "API 사용량 새로 고침" })));
+  expect(limits).toHaveBeenCalledTimes(2);
+  expect(screen.getByText("이번 달 $5.00 / $10")).toBeTruthy();
+});

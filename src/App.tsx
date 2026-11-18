@@ -19,6 +19,7 @@ import { NAV, type Page, type View } from "./shell/nav";
 import { recentItems, Sidebar, useSidebarCollapsed } from "./shell/Sidebar";
 import { accountsOf } from "./screens/settings/AiPane";
 import { useCredentials } from "./stores/credentials";
+import { useKeyLimits } from "./stores/keyLimits";
 import { usePendingFinish } from "./stores/pendingFinish";
 import { subscribeExecEvents } from "./stores/runs";
 import { useSettings } from "./stores/settings";
@@ -158,7 +159,9 @@ function AppBody() {
       // 이미 그 편집 화면이면 그대로 둔다 — 다시 마운트하면 터미널 세션 자리가 사라진다.
       if (t.kind === "workflow" && editorId.current === t.id) return;
       // aiSettings는 view를 직접 쓴다 — 의존성에 view가 없어 openAiSettings가 낡은 view를 볼 수 있다.
-      const go = () =>
+      const go = () => {
+        // 이미 설정 › AI면 화면이 다시 마운트되지 않는다 — 한도 막대가 넘기 전 값에 머물지 않게 다시 읽는다.
+        if (t.kind === "aiSettings") useKeyLimits.getState().load().catch(() => {});
         setView(
           t.kind === "workflow"
             ? { page: "local", editor: t.id }
@@ -168,6 +171,7 @@ function AppBody() {
                 ? { page: "settings", section: "ai" }
                 : { page: "history" },
         );
+      };
       if (dirty && askDiscard) setPending(() => go);
       else go();
     });

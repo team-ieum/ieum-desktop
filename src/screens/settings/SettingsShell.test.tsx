@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, expect, onTestFinished, test, vi } fr
 import App from "../../App";
 import { api, type CliAccountMeta, type CredentialsView, type KeyLimitsView, type ProviderReport, type UsageProvider, type UsageReport } from "../../api";
 import { setLang } from "../../i18n";
+import { useKeyLimits } from "../../stores/keyLimits";
 import { useSettings } from "../../stores/settings";
 import { useWeb } from "../../stores/web";
 import { SettingsShell, type SettingsSection } from "./SettingsShell";
@@ -547,12 +548,25 @@ test("bad_limit_shows_error", async () => {
   await renderShell("ai");
   const key = row(keys("OpenAI"), "기본");
   const input = key.getByLabelText("월 한도 $");
-  for (const v of ["0", "-3", "abc"]) {
+  for (const v of ["0", "-3", "abc", "1e999"]) {
     await act(async () => fireEvent.change(input, { target: { value: v } }));
     await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
-    expect(key.getByText("0보다 큰 금액을 넣어 주세요")).toBeTruthy();
+    const msg = key.getByText("0보다 큰 금액을 넣어 주세요");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(msg.id);
   }
   expect(set).not.toHaveBeenCalled();
+});
+
+test("limit_input_follows_changed_limit", async () => {
+  useLimits({ limits: { "openai:default": 10 }, spend: {} });
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const input = () => row(keys("OpenAI"), "기본").getByLabelText("월 한도 $") as HTMLInputElement;
+  expect(input().value).toBe("10");
+  // 다른 곳(새로 읽기)에서 한도가 바뀌면 칸도 따라간다.
+  await act(async () => useKeyLimits.setState({ view: { limits: { "openai:default": 20 }, spend: {} } }));
+  expect(input().value).toBe("20");
 });
 
 test("limited_unused_key_shows_zero", async () => {
