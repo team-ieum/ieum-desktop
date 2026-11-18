@@ -2,8 +2,10 @@ import { expect, test } from "vitest";
 import type { WfNode } from "../api";
 import { DEFS, mergeGithubFields, newBranchKey, newNode, nextPosition, outputKeys } from "./defs";
 
-test("defs_has_49_and_transform_map_outputs_follow_mappings", () => {
-  expect(Object.keys(DEFS).length).toBe(49);
+test("defs_has_57_and_transform_map_outputs_follow_mappings", () => {
+  expect(Object.keys(DEFS).length).toBe(57);
+  expect(DEFS["github.submit_pr_review"].inputFields.find((f) => f.key === "author")?.choices?.map((c) => c.id)).toEqual(["me"]);
+  expect(DEFS["github.get_pr_files"].inputFields.find((f) => f.key === "max_files")?.type).toBe("integer");
   const map = (config: Record<string, unknown>): WfNode => ({ id: "t", event: "transform.map", type: "TRANSFORM", config });
   expect(outputKeys(map({ mappings: { a: "1", b: "2" } }))).toEqual(["a", "b"]);
   expect(outputKeys(map({}))).toEqual([]);

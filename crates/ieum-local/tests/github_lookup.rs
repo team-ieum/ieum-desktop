@@ -533,5 +533,5 @@ async fn every_event_has_runner() {
             assert!(!err.message.contains("아직 실행할 수 없어요"), "{e}");
         }
     }
-    assert_eq!(ieum_engine::GITHUB_EVENTS.len(), 13);
+    assert_eq!(ieum_engine::GITHUB_EVENTS.len(), 21);
 }

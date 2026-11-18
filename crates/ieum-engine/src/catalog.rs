@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-/// 데스크톱이 러너를 가진 GitHub 이슈·조회 노드. 카탈로그엔 이 밖에도 있지만 싣지 않는다.
-pub const GITHUB_EVENTS: [&str; 13] = [
+/// 데스크톱이 러너를 가진 GitHub 이슈·PR·조회 노드. 카탈로그엔 이 밖에도 있지만 싣지 않는다.
+pub const GITHUB_EVENTS: [&str; 21] = [
     "github.create_issue",
     "github.update_issue",
     "github.find_issue",
@@ -19,6 +19,14 @@ pub const GITHUB_EVENTS: [&str; 13] = [
     "github.find_user",
     "github.get_file",
     "github.check_org_membership",
+    "github.create_pull_request",
+    "github.update_pull_request",
+    "github.request_reviewers",
+    "github.find_pull_request",
+    "github.find_or_create_pull_request",
+    "github.get_pr_files",
+    "github.get_pr_reviews",
+    "github.submit_pr_review",
 ];
 
 const GITHUB_INPUTS: &str = include_str!("../../ieum-local/github_inputs.json");
@@ -298,7 +306,15 @@ impl Catalog {
             "find_repo",
             "find_user",
             "get_file",
-            "check_org_membership"
+            "check_org_membership",
+            "create_pull_request",
+            "update_pull_request",
+            "request_reviewers",
+            "find_pull_request",
+            "find_or_create_pull_request",
+            "get_pr_files",
+            "get_pr_reviews",
+            "submit_pr_review"
         );
         Self::parse(sources, &github_table(GITHUB_INPUTS)?)
     }
