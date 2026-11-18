@@ -73,10 +73,15 @@ export interface NodeDef {
   outputsFrom?: string;
 }
 
-/** 카탈로그 github 정의에 입력 표(`github_inputs.json`)를 합친다 — 엔진(`catalog.rs`)과 같은 규칙: `{key, type:"string"} ← 표 ← fields[key]`. */
+/** 입력 표 칸 + 카탈로그 칸 합치기 — 엔진(`catalog.rs`)과 같은 순서: `{key, type:"string"} ← 표(desktop 뺀 것) ← fields[key] ← desktop`. */
+export function mergeGithubFields(rows: (Partial<Field> & { desktop?: Partial<Field> })[], fields: Record<string, Partial<Field>>): Field[] {
+  return rows.map(({ desktop, ...row }) => ({ key: row.key, type: "string", ...row, ...fields[row.key!], ...desktop }) as Field);
+}
+
+/** 카탈로그 github 정의에 입력 표(`github_inputs.json`)를 합친다. */
 function githubDef(event: string, d: { fields: Record<string, Partial<Field>> }) {
-  const table = (githubInputs as Record<string, Partial<Field>[]>)[event];
-  return { ...d, inputFields: table.map((row) => ({ key: row.key, type: "string", ...row, ...d.fields[row.key!] })) };
+  const table = (githubInputs as Record<string, (Partial<Field> & { desktop?: Partial<Field> })[]>)[event];
+  return { ...d, inputFields: mergeGithubFields(table, d.fields) };
 }
 
 const raw: [string, unknown][] = [

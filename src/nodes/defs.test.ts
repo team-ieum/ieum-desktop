@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { WfNode } from "../api";
-import { DEFS, newBranchKey, newNode, nextPosition, outputKeys } from "./defs";
+import { DEFS, mergeGithubFields, newBranchKey, newNode, nextPosition, outputKeys } from "./defs";
 
 test("defs_has_49_and_transform_map_outputs_follow_mappings", () => {
   expect(Object.keys(DEFS).length).toBe(49);
@@ -39,4 +39,15 @@ test("github_defs_merge_table_and_catalog", () => {
 
 test("github_get_file_fields", () => {
   expect(DEFS["github.get_file"].inputFields.map((x) => x.key)).toEqual(["owner", "repo", "path", "ref"]);
+});
+
+test("merge_github_fields_desktop_last", () => {
+  const out = mergeGithubFields(
+    [{ key: "author", desktop: { default: "me", choices: [{ id: "me", name: "내 GitHub 계정" }] } }],
+    { author: { title: "리뷰 작성자", default: "bot", choices: [{ id: "bot", name: "IEUM 봇" }, { id: "me", name: "내 GitHub 계정" }] } },
+  );
+  expect(out.length).toBe(1);
+  expect(out[0].default).toBe("me");
+  expect(out[0].choices?.length).toBe(1);
+  expect("desktop" in out[0]).toBe(false);
 });
