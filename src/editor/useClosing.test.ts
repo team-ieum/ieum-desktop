@@ -30,6 +30,7 @@ describe("useClosing", () => {
 		expect(onClose).toHaveBeenCalledTimes(0);
 		act(() => void vi.advanceTimersByTime(1));
 		expect(onClose).toHaveBeenCalledTimes(1);
+		expect(result.current.closing).toBe(false); // 닫힘이 끝나면 다음 열기를 위해 되돌린다
 	});
 
 	it("reopen_cancels_pending_close", () => {
