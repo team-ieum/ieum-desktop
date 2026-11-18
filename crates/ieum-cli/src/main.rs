@@ -227,7 +227,9 @@ fn human_line(e: &ExecEvent, names: &HashMap<&str, &str>) -> Option<String> {
     let name = |id: &String| names.get(id.as_str()).copied().unwrap_or(id).to_string();
     Some(match e {
         ExecEvent::NodeSucceeded { node_id, .. } => format!("성공    {}", name(node_id)),
-        ExecEvent::NodeFailed { node_id, message } => {
+        ExecEvent::NodeFailed {
+            node_id, message, ..
+        } => {
             format!("실패    {} — {message}", name(node_id))
         }
         ExecEvent::NodeSkipped { node_id } => format!("건너뜀  {}", name(node_id)),

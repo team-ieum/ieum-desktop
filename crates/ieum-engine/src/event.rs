@@ -34,6 +34,8 @@ pub enum ExecEvent {
     NodeFailed {
         node_id: String,
         message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
     NodeSkipped {
         node_id: String,

@@ -296,10 +296,11 @@ pub async fn run_workflow(
             Err(e) => {
                 rec.status = NodeStatus::Failed;
                 rec.error = Some(e.message.clone());
-                rec.error_code = e.code;
+                rec.error_code = e.code.clone();
                 send(ExecEvent::NodeFailed {
                     node_id: node.id.clone(),
                     message: e.message,
+                    code: e.code,
                 });
                 status = if cancel.is_cancelled() {
                     RunStatus::Cancelled
