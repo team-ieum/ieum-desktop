@@ -10,7 +10,7 @@ import { useCredentials } from "../stores/credentials";
 import { useDefaultPlans } from "../stores/plans";
 import { useWorkflows } from "../stores/workflows";
 import { formatTokens, formatUsd } from "../usage/format";
-import { Dropdown, hot, usedOf, WindowMeter } from "../usage/parts";
+import { credName, Dropdown, hot, usedOf, WindowMeter } from "../usage/parts";
 
 const RANGES: UsageRange[] = ["today", "week", "month"];
 const tokens = (x: { input: number; output: number }) => x.input + x.output;
@@ -31,6 +31,8 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
   // undefined = 읽는 중, null = 못 읽음
   const [sum, setSum] = useState<UsageSummary | null | undefined>(undefined);
   const [refreshing, setRefreshing] = useState(false);
+  // 키별로 펼친 공급원 — 새로 고침·기간 전환에도 유지
+  const [open, setOpen] = useState<Record<string, boolean>>({});
   // 기간이 바뀌면 올라가 — 늦게 온 옛 새로고침 결과가 새 기간을 덮지 않게
   const gen = useRef(0);
   const workflows = useWorkflows((s) => s.list);
@@ -139,10 +141,27 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
                     {PROVIDERS.map((p) => {
                       const s = sum.bySource.find((x) => x.source === p.id);
                       const n = s ? tokens(s) : 0;
+                      const keys = sum.byCredential.filter((c) => c.source === p.id).sort((a, b) => tokens(b) - tokens(a));
+                      const expandable = keys.length >= 2;
+                      const isOpen = expandable && !!open[p.id];
+                      const stored = Object.values(view?.apiKeys ?? {}).flat();
                       return (
                         <li key={p.id} className="typo-caption1_medium text-neutral-700">
                           <div className="flex justify-between gap-2">
-                            <span>{apiName(p.name)}</span>
+                            <span className="inline-flex items-center gap-0.5">
+                              {expandable && (
+                                <button
+                                  type="button"
+                                  aria-label={t("usage.showKeys")}
+                                  aria-expanded={isOpen}
+                                  className="-ml-1 grid size-5 place-items-center rounded text-neutral-500 hover:bg-neutral-100"
+                                  onClick={() => setOpen((o) => ({ ...o, [p.id]: !o[p.id] }))}
+                                >
+                                  <ChevronRight className={`size-3.5 transition-transform ${isOpen ? "rotate-90" : ""}`} aria-hidden="true" />
+                                </button>
+                              )}
+                              {apiName(p.name)}
+                            </span>
                             <span className="tabular-nums text-neutral-500">
                               {formatTokens(n)} {t("usage.tokens")} · {formatUsd(s ? s.usd : 0)}
                             </span>
@@ -150,6 +169,31 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
                           <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-100">
                             <div className="h-full rounded-full bg-main-blue" style={{ width: `${total ? (n / total) * 100 : 0}%` }} />
                           </div>
+                          {isOpen && (
+                            <ul className="ml-3 mt-2 flex flex-col gap-2 border-l-2 border-neutral-100 pl-2.5">
+                              {keys.map((c) => {
+                                const meta = stored.find((k) => k.id === c.credential);
+                                const known = meta || c.credential === "system" || c.credential === "default";
+                                const cn = tokens(c);
+                                return (
+                                  <li key={c.credential}>
+                                    <div className="flex justify-between gap-2">
+                                      <span>
+                                        {known ? credName(view, c.credential) : t("usage.deletedKey")}
+                                        {meta && <span className="ml-1 font-mono text-neutral-400">…{meta.last4}</span>}
+                                      </span>
+                                      <span className="tabular-nums text-neutral-500">
+                                        {formatTokens(cn)} {t("usage.tokens")} · {formatUsd(c.usd ?? 0)}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 h-1 overflow-hidden rounded-full bg-neutral-100">
+                                      <div className="h-full rounded-full bg-main-blue/50" style={{ width: `${total ? (cn / total) * 100 : 0}%` }} />
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
                         </li>
                       );
                     })}
