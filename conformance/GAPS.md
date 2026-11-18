@@ -83,3 +83,4 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `github.*` | — | 오류 문구: `GitHub API 오류 (코드): <응답 본문>` → 상태 코드별 정해 둔 문구(본문 안 실음) | `crates/ieum-local/tests/github_api.rs` `status_table` |
 | `github.*` | — | 응답 크기: 상한 없음 → 응답 하나당 32MB 넘으면 실패 | `github_api.rs` `too_large_fails` |
 | `github.*` | — | 조회 노드: 403 문구가 읽기·쓰기로 나뉨(agent는 응답 본문을 실음), 드롭다운(`github.owners`·`repos`·`branches`) 없음 → 직접 입력 | `crates/ieum-local/tests/github_api.rs` `status_table` |
+| `github.*` | — | PR 리뷰 작성자: `bot` 없음(데스크톱은 `me`만, 그 밖은 입력 오류) · `include_comments` 글 `"false"`를 거짓으로 처리 · PR 노드도 오류 문구에 응답 본문을 안 실음 | `crates/ieum-local/src/github/review.rs`·`pulls.rs` |
