@@ -50,6 +50,14 @@ test("ai_limit_opens_ai_settings", () => {
   expect(screen.queryByText("설정 > 연동 열기")).toBeNull();
 });
 
+test("narrow_canvas_shrinks_card", () => {
+  render(<RunErrorCard live={failed("r1", { m: "AI_KEY_LIMIT" })} nodes={nodes} right={980} onShow={() => {}} onOpenAiSettings={() => {}} />);
+  const card = screen.getByRole("alert");
+  // 채팅창·노드 패널이 넓게 덮어도 남은 폭 안에 들어가 왼쪽이 잘리지 않는다.
+  expect(card.style.maxWidth).toBe("calc(100% - 996px)");
+  expect(screen.getByText("설정 > AI 열기").parentElement?.className).toContain("flex-wrap");
+});
+
 // Editor처럼 실행마다 key를 준다.
 const card = (live: Live) => <RunErrorCard key={live.runId ?? ""} live={live} nodes={nodes} right={0} onShow={() => {}} />;
 
