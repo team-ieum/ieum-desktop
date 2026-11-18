@@ -6,7 +6,7 @@ import { type Live, opensIntegrations } from "../stores/runs";
 import { nodeTitle } from "./Canvas";
 import { useClosing } from "./useClosing";
 
-/** 실행이 실패하면 우측 하단에 뜨는 카드 — 화면 밖 노드의 실패도 놓치지 않게. 닫음은 실행(runId) 단위로 기억한다. */
+/** 실행이 실패하면 우측 하단에 뜨는 카드 — 화면 밖 노드의 실패도 놓치지 않게. 부르는 쪽이 key={runId}로 실행마다 새로 그려 닫음을 실행 단위로 둔다. */
 export function RunErrorCard({
   live,
   nodes,
@@ -20,10 +20,10 @@ export function RunErrorCard({
   onShow: (nodeId: string) => void;
   onOpenIntegrations?: () => void;
 }) {
-  const [dismissedRun, setDismissedRun] = useState<string | null>(null);
-  const { closing, close } = useClosing(() => setDismissedRun(live.runId));
+  const [dismissed, setDismissed] = useState(false);
+  const { closing, close } = useClosing(() => setDismissed(true));
   const idx = nodes.findIndex((n) => live.nodes[n.id] === "failed" && live.errors[n.id]);
-  if (live.status === "cancelled" || idx < 0 || live.runId === dismissedRun) return null;
+  if (live.status === "cancelled" || idx < 0 || dismissed) return null;
   const node = nodes[idx];
   const name = node.label || nodeTitle(node.event);
   return (

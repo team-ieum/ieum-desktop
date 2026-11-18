@@ -372,6 +372,23 @@ test("cancelled_run_no_strip", async () => {
   expect(screen.queryByText(GH_MSG)).toBeNull();
 });
 
+test("next_failure_shows_card_again_after_dismiss_with_motion", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true }));
+  vi.useFakeTimers();
+  try {
+    failRun();
+    await openSaved(entry([N("m", 0)], "v1"));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "오류 알림 닫기" })));
+    await act(async () => void vi.advanceTimersByTime(160));
+    expect(screen.queryByRole("alert")).toBeNull();
+    // 다음 실행(r2)도 실패 — 닫는 동안 다음 실행이 끼어도 새 카드가 닫히지 않게 실행마다 새로 그린다.
+    act(() => useRuns.setState({ live: { w1: { ...useRuns.getState().live.w1!, runId: "r2" } } }));
+    expect(screen.getByRole("alert").className).toContain("ieum-grow-br");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 test("card_sits_left_of_widest_panel", async () => {
   failRun();
   const r = await openSaved(entry([N("m", 0)], "v1"));

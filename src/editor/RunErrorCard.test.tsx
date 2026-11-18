@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { WfNode } from "../api";
 import { setLang } from "../i18n";
@@ -42,15 +42,51 @@ test("buttons_call_back", () => {
   expect(screen.queryByText("설정 > 연동 열기")).toBeNull();
 });
 
+// Editor처럼 실행마다 key를 준다.
+const card = (live: Live) => <RunErrorCard key={live.runId ?? ""} live={live} nodes={nodes} right={0} onShow={() => {}} />;
+
 test("dismiss_is_per_run", () => {
   const live = failed();
-  const { rerender } = render(<RunErrorCard live={live} nodes={nodes} right={0} onShow={() => {}} />);
+  const { rerender } = render(card(live));
   fireEvent.click(screen.getByLabelText("오류 알림 닫기"));
   expect(screen.queryByRole("alert")).toBeNull();
-  rerender(<RunErrorCard live={live} nodes={nodes} right={0} onShow={() => {}} />);
+  rerender(card(live));
   expect(screen.queryByRole("alert")).toBeNull();
-  rerender(<RunErrorCard live={failed("r2")} nodes={nodes} right={0} onShow={() => {}} />);
+  rerender(card(failed("r2")));
   expect(screen.getByRole("alert")).toBeTruthy();
+});
+
+test("dismiss_with_motion_then_next_run_grows_again", () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true }));
+  vi.useFakeTimers();
+  try {
+    const { rerender } = render(card(failed()));
+    fireEvent.click(screen.getByLabelText("오류 알림 닫기"));
+    expect(screen.getByRole("alert").className).toContain("ieum-slide-out");
+    act(() => void vi.advanceTimersByTime(160));
+    expect(screen.queryByRole("alert")).toBeNull();
+    rerender(card(failed("r2")));
+    expect(screen.getByRole("alert").className).toContain("ieum-grow-br");
+    expect(screen.getByRole("alert").className).not.toContain("ieum-slide-out");
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+test("new_run_during_close_is_not_dismissed", () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true }));
+  vi.useFakeTimers();
+  try {
+    const { rerender } = render(card(failed()));
+    fireEvent.click(screen.getByLabelText("오류 알림 닫기"));
+    rerender(card(failed("r2"))); // 빠지는 0.16초 안에 다음 실행이 실패
+    act(() => void vi.advanceTimersByTime(160));
+    expect(screen.getByRole("alert").className).toContain("ieum-grow-br");
+  } finally {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
 });
 
 test("cancelled_run_shows_nothing", () => {

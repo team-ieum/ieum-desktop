@@ -384,6 +384,7 @@ export function Editor({
         <FinishCard workflowId={draft.id} version={base.updatedAt} />
         <HttpTestCard key={draft.id} workflowId={draft.id} />
         <RunErrorCard
+          key={live.runId ?? ""}
           live={live}
           nodes={wf.nodes}
           right={16 + Math.max(cover, selected ? 400 : 0)}
