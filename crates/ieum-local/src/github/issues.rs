@@ -17,12 +17,12 @@ const MAX_PAGES: usize = 10;
 const MAX_SEARCH_VALUE: usize = 200;
 const STATE_REASONS: [&str; 4] = ["completed", "not_planned", "duplicate", "reopened"];
 
-fn get<'a>(c: &'a Map<String, Value>, key: &str) -> &'a Value {
+pub(super) fn get<'a>(c: &'a Map<String, Value>, key: &str) -> &'a Value {
     c.get(key).unwrap_or(&Value::Null)
 }
 
 /// 검사를 통과한 `/repos/{owner}/{repo}`.
-fn repo_path(c: &Map<String, Value>) -> Result<String, NodeError> {
+pub(super) fn repo_path(c: &Map<String, Value>) -> Result<String, NodeError> {
     match (get(c, "owner"), get(c, "repo")) {
         (o, r) if is_path_name(o) && is_path_name(r) => Ok(format!(
             "/repos/{}/{}",
@@ -38,7 +38,7 @@ fn number(c: &Map<String, Value>) -> Result<u64, NodeError> {
         .ok_or_else(|| input_error("issue_number는 양의 정수여야 합니다."))
 }
 
-fn object(v: Value) -> Map<String, Value> {
+pub(super) fn object(v: Value) -> Map<String, Value> {
     match v {
         Value::Object(m) => m,
         _ => Map::new(),

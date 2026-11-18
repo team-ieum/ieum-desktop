@@ -4,6 +4,7 @@ mod api;
 mod input;
 mod issues;
 mod lookup;
+mod pulls;
 
 use std::sync::Arc;
 
@@ -59,6 +60,12 @@ impl NodeRunner for GithubRunner {
                 "github.check_org_membership" => lookup::check_org_membership(api, token, c).await,
                 "github.find_branch" => lookup::find_branch(api, token, c).await,
                 "github.get_file" => lookup::get_file(api, token, c).await,
+                "github.create_pull_request" => pulls::create_pull_request(api, token, c).await,
+                "github.update_pull_request" => pulls::update_pull_request(api, token, c).await,
+                "github.request_reviewers" => pulls::request_reviewers(api, token, c).await,
+                "github.find_or_create_pull_request" => {
+                    pulls::find_or_create_pull_request(api, token, c).await
+                }
                 other => Err(NodeError {
                     message: format!("{other} 노드는 아직 실행할 수 없어요."),
                     code: None,
