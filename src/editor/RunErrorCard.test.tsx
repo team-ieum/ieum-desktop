@@ -1,0 +1,64 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeAll, expect, test, vi } from "vitest";
+import type { WfNode } from "../api";
+import { setLang } from "../i18n";
+import { emptyLive, type Live } from "../stores/runs";
+import { RunErrorCard } from "./RunErrorCard";
+
+beforeAll(() => setLang("ko"));
+afterEach(cleanup);
+
+const nodes = [
+  { id: "t", event: "manual_trigger", type: "TRIGGER", config: {} },
+  { id: "m", event: "http_request", type: "ACTION", config: {}, label: "m 제목" },
+] as unknown as WfNode[];
+const failed = (runId = "r1", codes: Record<string, string> = {}): Live => ({
+  ...emptyLive("w"),
+  runId,
+  status: "failed",
+  nodes: { t: "succeeded", m: "failed" },
+  errors: { m: "x" },
+  codes,
+});
+
+test("shows_first_failed_node", () => {
+  render(<RunErrorCard live={failed()} nodes={nodes} right={0} onShow={() => {}} />);
+  expect(screen.getByText("2")).toBeTruthy();
+  expect(screen.getByText("m 제목에서 멈췄어요")).toBeTruthy();
+  expect(screen.getByRole("alert").className).toContain("ieum-grow-br");
+});
+
+test("buttons_call_back", () => {
+  const onShow = vi.fn();
+  const onOpenIntegrations = vi.fn();
+  const live = failed("r1", { m: "GITHUB_AUTH" });
+  const { rerender } = render(<RunErrorCard live={live} nodes={nodes} right={0} onShow={onShow} onOpenIntegrations={onOpenIntegrations} />);
+  fireEvent.click(screen.getByText("설정 > 연동 열기"));
+  fireEvent.click(screen.getByText("노드 보기"));
+  expect(onOpenIntegrations).toHaveBeenCalledTimes(1);
+  expect(onShow).toHaveBeenCalledWith("m");
+  rerender(<RunErrorCard live={live} nodes={nodes} right={0} onShow={onShow} />);
+  expect(screen.queryByText("설정 > 연동 열기")).toBeNull();
+});
+
+test("dismiss_is_per_run", () => {
+  const live = failed();
+  const { rerender } = render(<RunErrorCard live={live} nodes={nodes} right={0} onShow={() => {}} />);
+  fireEvent.click(screen.getByLabelText("오류 알림 닫기"));
+  expect(screen.queryByRole("alert")).toBeNull();
+  rerender(<RunErrorCard live={live} nodes={nodes} right={0} onShow={() => {}} />);
+  expect(screen.queryByRole("alert")).toBeNull();
+  rerender(<RunErrorCard live={failed("r2")} nodes={nodes} right={0} onShow={() => {}} />);
+  expect(screen.getByRole("alert")).toBeTruthy();
+});
+
+test("cancelled_run_shows_nothing", () => {
+  render(<RunErrorCard live={{ ...failed(), status: "cancelled" }} nodes={nodes} right={0} onShow={() => {}} />);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("right_offset_applied", () => {
+  render(<RunErrorCard live={failed()} nodes={nodes} right={592} onShow={() => {}} />);
+  expect(screen.getByRole("alert").style.right).toBe("592px");
+});
