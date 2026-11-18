@@ -126,7 +126,7 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
   return (
     <article
       style={toneStyle(meta)}
-      className={`relative w-66 rounded-[1.2rem] border-2 border-(--node-color) bg-white shadow-[0.5rem_0.6rem_0_var(--node-tint),0_14px_30px_rgba(65,52,139,0.1)] ${
+      className={`relative w-66 rounded-[1.2rem] border-2 border-(--node-color) bg-white shadow-[0.5rem_0.6rem_0_var(--node-shadow),0_14px_30px_rgba(65,52,139,0.1)] ${
         selected ? "outline-2 outline-offset-4 outline-main-blue" : ""
       }`}
     >
@@ -138,8 +138,8 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
         </ul>
       )}
       {kind !== "TRIGGER" && <Handle type="target" position={Position.Left} className={HANDLE} isConnectable={isConnectable} />}
-      <header className="flex min-h-[2.9rem] items-center gap-[0.45rem] rounded-t-[1rem] border-b border-b-[color-mix(in_srgb,var(--node-color)_28%,white)] bg-(--node-tint) px-[0.65rem] py-[0.45rem] text-[0.72rem] font-bold text-(--node-color)">
-        <span className="grid size-8 shrink-0 place-items-center rounded-[0.65rem] bg-(--node-color) text-white [box-shadow:0_4px_0_color-mix(in_srgb,var(--node-color)_78%,black)]">
+      <header className="flex min-h-[2.9rem] items-center gap-[0.45rem] rounded-t-[1rem] border-b border-b-(--node-head-line) bg-(--node-head) px-[0.65rem] py-[0.45rem] text-[0.72rem] font-bold text-(--node-head-fg)">
+        <span className="grid size-8 shrink-0 place-items-center rounded-[0.65rem] bg-(--node-icon-bg) text-(--node-icon-fg) [box-shadow:var(--node-icon-shadow)]">
           {meta.icon}
         </span>
         <span className="min-w-0 truncate">{meta.label}</span>
@@ -395,7 +395,7 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
       <Controls showInteractive={false} />
       <Follow count={workflow.nodes.length} cover={rightCover} move={move} />
       {/* 오른쪽은 떠 있는 패널 자리 — 미니맵은 왼쪽 아래, 줌 버튼 옆. */}
-      <MiniMap position="bottom-left" style={{ marginLeft: 56 }} pannable zoomable nodeStrokeWidth={3} nodeColor={(n) => minimapMeta(n).tint} nodeStrokeColor={(n) => minimapMeta(n).color} />
+      <MiniMap position="bottom-left" style={{ marginLeft: 56 }} pannable zoomable nodeStrokeWidth={3} nodeColor={(n) => minimapMeta(n).head ?? minimapMeta(n).tint} nodeStrokeColor={(n) => minimapMeta(n).color} />
     </ReactFlow>
   );
 }
