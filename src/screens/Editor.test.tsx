@@ -383,7 +383,7 @@ test("next_failure_shows_card_again_after_dismiss_with_motion", async () => {
     expect(screen.queryByRole("alert")).toBeNull();
     // 다음 실행(r2)도 실패 — 닫는 동안 다음 실행이 끼어도 새 카드가 닫히지 않게 실행마다 새로 그린다.
     act(() => useRuns.setState({ live: { w1: { ...useRuns.getState().live.w1!, runId: "r2" } } }));
-    expect(screen.getByRole("alert").className).toContain("ieum-grow-br");
+    expect(screen.getByRole("alert").className).toContain("ieum-rise-in");
   } finally {
     vi.unstubAllGlobals();
   }

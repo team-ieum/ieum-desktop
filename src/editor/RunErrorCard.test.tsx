@@ -26,7 +26,7 @@ test("shows_first_failed_node", () => {
   render(<RunErrorCard live={failed()} nodes={nodes} right={0} onShow={() => {}} />);
   expect(screen.getByText("2")).toBeTruthy();
   expect(screen.getByText("m 제목에서 멈췄어요")).toBeTruthy();
-  expect(screen.getByRole("alert").className).toContain("ieum-grow-br");
+  expect(screen.getByRole("alert").className).toContain("ieum-rise-in");
 });
 
 test("buttons_call_back", () => {
@@ -82,7 +82,7 @@ test("dismiss_with_motion_then_next_run_grows_again", () => {
     act(() => void vi.advanceTimersByTime(160));
     expect(screen.queryByRole("alert")).toBeNull();
     rerender(card(failed("r2")));
-    expect(screen.getByRole("alert").className).toContain("ieum-grow-br");
+    expect(screen.getByRole("alert").className).toContain("ieum-rise-in");
     expect(screen.getByRole("alert").className).not.toContain("ieum-slide-out");
   } finally {
     vi.useRealTimers();
@@ -98,7 +98,7 @@ test("new_run_during_close_is_not_dismissed", () => {
     fireEvent.click(screen.getByLabelText("오류 알림 닫기"));
     rerender(card(failed("r2"))); // 빠지는 0.16초 안에 다음 실행이 실패
     act(() => void vi.advanceTimersByTime(160));
-    expect(screen.getByRole("alert").className).toContain("ieum-grow-br");
+    expect(screen.getByRole("alert").className).toContain("ieum-rise-in");
   } finally {
     vi.useRealTimers();
     vi.unstubAllGlobals();
