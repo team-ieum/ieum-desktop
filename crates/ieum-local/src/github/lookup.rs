@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 
 use super::GithubToken;
 use super::api::{GithubApi, input_error};
-use super::input::{is_login, is_path_name, text};
+use super::input::{base_ref, encode_segment, is_login, is_path_name, ref_path, text};
 
 fn get<'a>(c: &'a Map<String, Value>, key: &str) -> &'a Value {
     c.get(key).unwrap_or(&Value::Null)
@@ -174,4 +174,146 @@ pub(crate) async fn check_org_membership(
     let mut out = found(items, message);
     out.insert("member".into(), member.into());
     Ok(out)
+}
+
+const MAX_FILE_CHARS: usize = 100_000;
+const MAX_FILE_BYTES: u64 = 1_048_576;
+const MAX_DIR_ITEMS: usize = 1000;
+
+fn repo_of(c: &Map<String, Value>) -> Result<String, NodeError> {
+    let (o, r) = (get(c, "owner"), get(c, "repo"));
+    if !(is_path_name(o) && is_path_name(r)) {
+        return Err(input_error("owner/repo 형식이 올바르지 않습니다."));
+    }
+    Ok(format!(
+        "/repos/{}/{}",
+        o.as_str().unwrap_or(""),
+        r.as_str().unwrap_or("")
+    ))
+}
+
+pub(crate) async fn find_branch(
+    api: &GithubApi,
+    token: &dyn GithubToken,
+    c: &Map<String, Value>,
+) -> Result<Map<String, Value>, NodeError> {
+    let base = repo_of(c)?;
+    let branch = get(c, "branch");
+    let name = text(branch);
+    let (path, query) = if name.is_empty() {
+        (
+            format!("{base}/branches"),
+            vec![("per_page", "100".to_string())],
+        )
+    } else {
+        if ref_path(branch).is_none() {
+            return Err(input_error("브랜치 형식이 올바르지 않습니다."));
+        }
+        // 이름 전체를 한 조각으로 — `/`가 남으면 …/branches/main/protection 같은 하위 API로 닿는다.
+        (format!("{base}/branches/{}", encode_segment(&name)), vec![])
+    };
+    let t = token.token().await?;
+    let data = get_found(api, &t, &path, &query).await?;
+    let list = match data {
+        Some(Value::Array(a)) => a,
+        Some(v @ Value::Object(_)) => vec![v],
+        _ => vec![],
+    };
+    let items = list
+        .iter()
+        .take(100)
+        .map(|b| {
+            json!({
+                "name": b["name"],
+                "sha": b["commit"]["sha"],
+                "protected": b["protected"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect();
+    Ok(found(items, None))
+}
+
+fn file_item(e: &Value, content: String, truncated: bool) -> Value {
+    json!({
+        "name": e["name"], "path": e["path"], "type": e["type"], "sha": e["sha"],
+        "size": e["size"], "content": content, "truncated": truncated,
+    })
+}
+
+/// (content, truncated). 1MB 넘는 파일은 GitHub가 내용을 주지 않는다(encoding none). 바이너리는 "".
+fn file_content(e: &Value) -> (String, bool) {
+    if e["size"].as_u64().unwrap_or(0) > MAX_FILE_BYTES || e["encoding"] == "none" {
+        return (String::new(), true);
+    }
+    let text =
+        base64_decode(e["content"].as_str().unwrap_or("")).and_then(|b| String::from_utf8(b).ok());
+    match text {
+        // 글자(문자) 단위로 자른다 — 바이트로 자르면 한글이 깨진다.
+        Some(t) if t.chars().count() > MAX_FILE_CHARS => {
+            (t.chars().take(MAX_FILE_CHARS).collect(), true)
+        }
+        Some(t) => (t, false),
+        None => (String::new(), false),
+    }
+}
+
+/// 표준 base64 해독. 공백·줄바꿈은 무시하고 패딩은 받는다. 잘못된 입력은 None.
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let (mut out, mut acc, mut bits, mut pad) = (Vec::new(), 0u32, 0u32, 0);
+    for b in s.bytes().filter(|b| !b.is_ascii_whitespace()) {
+        let v = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => {
+                pad += 1;
+                continue;
+            }
+            _ => return None,
+        };
+        if pad > 0 {
+            return None;
+        }
+        acc = acc << 6 | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+pub(crate) async fn get_file(
+    api: &GithubApi,
+    token: &dyn GithubToken,
+    c: &Map<String, Value>,
+) -> Result<Map<String, Value>, NodeError> {
+    let base = repo_of(c)?;
+    let file_path =
+        ref_path(get(c, "path")).ok_or_else(|| input_error("path 형식이 올바르지 않습니다."))?;
+    let mut query = vec![];
+    if !text(get(c, "ref")).is_empty() {
+        let r =
+            base_ref(get(c, "ref")).ok_or_else(|| input_error("ref 형식이 올바르지 않습니다."))?;
+        query.push(("ref", r));
+    }
+    let t = token.token().await?;
+    let data = get_found(api, &t, &format!("{base}/contents/{file_path}"), &query).await?;
+    let items = match data {
+        None => vec![],
+        Some(Value::Array(a)) => a
+            .iter()
+            .take(MAX_DIR_ITEMS)
+            .map(|e| file_item(e, String::new(), false))
+            .collect(),
+        Some(e) => {
+            let (content, truncated) = file_content(&e);
+            vec![file_item(&e, content, truncated)]
+        }
+    };
+    Ok(found(items, None))
 }

@@ -279,3 +279,205 @@ async fn lookup_403_reads_message() {
     );
     assert_eq!(m, "이 저장소·조직을 읽을 권한이 없어요.");
 }
+
+#[tokio::test]
+async fn find_branch_list_and_one() {
+    let (base, log) = server(
+        200,
+        json!([
+            {"name": "main", "commit": {"sha": "s1"}, "protected": true, "x": 1},
+            {"name": "dev", "commit": {"sha": "s2"}}
+        ]),
+    )
+    .await;
+    let out = run(
+        &base,
+        "github.find_branch",
+        json!({"owner": "a", "repo": "b", "branch": ""}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out["items"],
+        json!([
+            {"name": "main", "sha": "s1", "protected": true},
+            {"name": "dev", "sha": "s2", "protected": false}
+        ])
+    );
+    assert_eq!(req_paths(&log), ["/repos/a/b/branches?per_page=100"]);
+
+    let (base, log) = server(
+        200,
+        json!({"name": "main", "commit": {"sha": "s1"}, "protected": false}),
+    )
+    .await;
+    let out = run(
+        &base,
+        "github.find_branch",
+        json!({"owner": "a", "repo": "b", "branch": " main "}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out["total"], json!(1));
+    assert_eq!(req_paths(&log), ["/repos/a/b/branches/main"]);
+}
+
+#[tokio::test]
+async fn find_branch_encodes_slash() {
+    let (base, log) = server(200, json!({"name": "feat/x", "commit": {"sha": "s"}})).await;
+    run(
+        &base,
+        "github.find_branch",
+        json!({"owner": "a", "repo": "b", "branch": "feat/x"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(req_paths(&log), ["/repos/a/b/branches/feat%2Fx"]);
+}
+
+#[tokio::test]
+async fn find_branch_rejects() {
+    for bad in ["../x", "a//b", "a\\b", "a\nb"] {
+        let (base, log) = server(200, json!({})).await;
+        let tok = Arc::new(CountingToken::default());
+        let r = run_full(
+            &base,
+            tok.clone(),
+            "github.find_branch",
+            json!({"owner": "a", "repo": "b", "branch": bad}),
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(message(r), "브랜치 형식이 올바르지 않습니다.", "{bad:?}");
+        assert_eq!(tok.0.load(Ordering::SeqCst), 0);
+        assert!(log.lock().unwrap().is_empty());
+    }
+}
+
+fn file_cfg(path: &str) -> Value {
+    json!({"owner": "a", "repo": "b", "path": path})
+}
+
+#[tokio::test]
+async fn get_file_text() {
+    let (base, log) = server(
+        200,
+        json!({"name": "main.rs", "path": "src/main.rs", "type": "file", "sha": "s", "size": 5,
+               "encoding": "base64", "content": "aGVs\nbG8=\n"}),
+    )
+    .await;
+    let mut cfg = file_cfg("src/main.rs");
+    cfg["ref"] = json!("dev");
+    let out = run(&base, "github.get_file", cfg).await.unwrap();
+    assert_eq!(
+        out["items"],
+        json!([{"name": "main.rs", "path": "src/main.rs", "type": "file", "sha": "s", "size": 5,
+                "content": "hello", "truncated": false}])
+    );
+    assert_eq!(req_paths(&log), ["/repos/a/b/contents/src/main.rs?ref=dev"]);
+}
+
+async fn one_file(entry: Value) -> Value {
+    let (base, _) = server(200, entry).await;
+    let out = run(&base, "github.get_file", file_cfg("f")).await.unwrap();
+    out["items"][0].clone()
+}
+
+fn b64(bytes: &[u8]) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::new();
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                s.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                s.push('=');
+            }
+        }
+    }
+    s
+}
+
+#[tokio::test]
+async fn get_file_content_limits() {
+    let big = one_file(json!({"size": 2_000_000, "content": "aGk="})).await;
+    assert_eq!(
+        (big["content"].clone(), big["truncated"].clone()),
+        (json!(""), json!(true))
+    );
+    let none = one_file(json!({"size": 5, "encoding": "none", "content": ""})).await;
+    assert_eq!(
+        (none["content"].clone(), none["truncated"].clone()),
+        (json!(""), json!(true))
+    );
+    let bin = one_file(json!({"size": 2, "content": b64(&[0xff, 0xfe])})).await;
+    assert_eq!(
+        (bin["content"].clone(), bin["truncated"].clone()),
+        (json!(""), json!(false))
+    );
+    let bad = one_file(json!({"size": 2, "content": "!!!!"})).await;
+    assert_eq!(
+        (bad["content"].clone(), bad["truncated"].clone()),
+        (json!(""), json!(false))
+    );
+    let long = "가".repeat(100_001);
+    let t = one_file(json!({"size": 300_003, "content": b64(long.as_bytes())})).await;
+    assert_eq!(t["content"], json!("가".repeat(100_000)));
+    assert_eq!(t["truncated"], json!(true));
+}
+
+#[tokio::test]
+async fn get_file_dir() {
+    let entries: Vec<Value> = (0..1001)
+        .map(|i| json!({"name": format!("f{i}"), "path": format!("d/f{i}"), "type": "file", "sha": "s", "size": 1}))
+        .collect();
+    let (base, _) = server(200, Value::Array(entries)).await;
+    let out = run(&base, "github.get_file", file_cfg("d")).await.unwrap();
+    let items = out["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1000);
+    assert_eq!(items[0]["content"], json!(""));
+    assert_eq!(items[0]["truncated"], json!(false));
+}
+
+#[tokio::test]
+async fn get_file_rejects() {
+    let long = "a".repeat(1025);
+    let cases = [
+        (file_cfg("../a"), "path 형식이 올바르지 않습니다."),
+        (file_cfg("a//b"), "path 형식이 올바르지 않습니다."),
+        (file_cfg("a\\b"), "path 형식이 올바르지 않습니다."),
+        (file_cfg("\na"), "path 형식이 올바르지 않습니다."),
+        (file_cfg(&long), "path 형식이 올바르지 않습니다."),
+        (
+            json!({"owner": "a", "repo": "b", "path": "x", "ref": "u:main"}),
+            "ref 형식이 올바르지 않습니다.",
+        ),
+    ];
+    for (cfg, want) in cases {
+        let (base, log) = server(200, json!({})).await;
+        let tok = Arc::new(CountingToken::default());
+        let r = run_full(
+            &base,
+            tok.clone(),
+            "github.get_file",
+            cfg,
+            CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(message(r), want);
+        assert_eq!(tok.0.load(Ordering::SeqCst), 0);
+        assert!(log.lock().unwrap().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn get_file_encodes_segments() {
+    let (base, log) = server(404, json!({})).await;
+    run(&base, "github.get_file", file_cfg("docs/a b.md"))
+        .await
+        .unwrap();
+    assert_eq!(req_paths(&log), ["/repos/a/b/contents/docs/a%20b.md"]);
+}

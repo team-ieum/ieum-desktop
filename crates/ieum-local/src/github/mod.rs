@@ -57,6 +57,8 @@ impl NodeRunner for GithubRunner {
                 "github.find_org" => lookup::find_org(api, token, c).await,
                 "github.find_user" => lookup::find_user(api, token, c).await,
                 "github.check_org_membership" => lookup::check_org_membership(api, token, c).await,
+                "github.find_branch" => lookup::find_branch(api, token, c).await,
+                "github.get_file" => lookup::get_file(api, token, c).await,
                 other => Err(NodeError {
                     message: format!("{other} 노드는 아직 실행할 수 없어요."),
                     code: None,
