@@ -459,3 +459,275 @@ async fn reviews_rejects() {
     }
     assert_eq!(log.lock().unwrap().len(), 0);
 }
+
+// ---- submit_pr_review ----
+
+async fn run_sub_with(
+    base: &str,
+    token: Arc<dyn GithubToken>,
+    config: Value,
+) -> Result<Map<String, Value>, NodeError> {
+    run_event("github.submit_pr_review", base, token, config).await
+}
+
+async fn run_sub(base: &str, config: Value) -> Result<Map<String, Value>, NodeError> {
+    run_sub_with(base, Arc::new(CountingToken::default()), config).await
+}
+
+/// files GET에는 `files`(첫 쪽만), `/user`는 me1, PR 작성자는 `pr_login`.
+/// 리뷰 POST는 앞의 `fail_posts`번은 422, 그 뒤 200.
+async fn sub_server(files: Vec<Value>, pr_login: &'static str, fail_posts: usize) -> (String, Log) {
+    let (l, base) = bind().await;
+    let posts = AtomicUsize::new(0);
+    let log = serve(l, move |r| {
+        let body = if r.method == "POST" {
+            if posts.fetch_add(1, Ordering::SeqCst) < fail_posts {
+                return resp(422, "", b"{\"message\":\"secret\"}");
+            }
+            json!({"id": 9, "html_url": "https://g/r/9", "state": "COMMENTED"})
+        } else if r.path.starts_with("/repos/a/b/pulls/3/files") {
+            Value::Array(if page_of(r) <= 1 {
+                files.clone()
+            } else {
+                vec![]
+            })
+        } else if r.path == "/user" {
+            json!({"login": "me1"})
+        } else {
+            json!({"number": 3, "user": {"login": pr_login}})
+        };
+        resp(200, "", body.to_string().as_bytes())
+    });
+    (base, log)
+}
+
+fn posts(log: &Log) -> Vec<Value> {
+    log.lock()
+        .unwrap()
+        .iter()
+        .filter(|r| r.method == "POST")
+        .map(|r| {
+            assert_eq!(r.path, "/repos/a/b/pulls/3/reviews");
+            r.json()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn author_bot_rejected() {
+    let (base, log) = sub_server(vec![], "x", 0).await;
+    let tok = Arc::new(CountingToken::default());
+    let err = run_sub_with(
+        &base,
+        tok.clone(),
+        cfg(json!({"author": "bot", "body": "b"})),
+    )
+    .await
+    .expect_err("실패");
+    assert_eq!(
+        err.message,
+        "데스크톱에서는 내 GitHub 계정으로만 리뷰를 남길 수 있어요."
+    );
+    assert_eq!(err.code.as_deref(), Some("GITHUB_INPUT"));
+    assert_eq!(tok.0.load(Ordering::SeqCst), 0);
+    assert_eq!(log.lock().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn comments_unreadable_and_invalid() {
+    let (base, log) = sub_server(vec![], "x", 0).await;
+    let out = run_sub(&base, cfg(json!({"body": "b", "comments": "{}"})))
+        .await
+        .unwrap();
+    assert_eq!(
+        out["warnings"],
+        json!(["줄 코멘트를 읽지 못해 본문만 제출했습니다."])
+    );
+    assert_eq!(posts(&log)[0]["body"], "b\n\n줄 코멘트를 읽지 못했습니다");
+
+    let (base, log) = sub_server(vec![], "x", 0).await;
+    let comments =
+        json!([{"path": "", "line": 1, "body": "x"}, {"path": "a", "line": "2", "body": "y"}]);
+    let out = run_sub(&base, cfg(json!({"comments": comments})))
+        .await
+        .unwrap();
+    assert_eq!(
+        out["warnings"],
+        json!(["형식이 틀린 줄 코멘트 1개를 버렸습니다."])
+    );
+    // line "2"는 받는다 — files에 없으니 본문으로.
+    assert_eq!(out["moved_comments"], 1);
+    assert_eq!(posts(&log)[0]["body"], "### 다른 줄에 대한 의견\n- a:2 — y");
+}
+
+#[tokio::test]
+async fn inline_vs_moved() {
+    let patch = "@@ -1,2 +10,3 @@\n a\n-b\n+c\n d";
+    let (base, log) = sub_server(vec![file("a.rs", Some(patch))], "x", 0).await;
+    let comments = json!([{"path": "a.rs", "line": 11, "body": "x"}, {"path": "a.rs", "line": 50, "body": "y"}]);
+    let out = run_sub(
+        &base,
+        cfg(json!({"body": "총평", "comments": comments.to_string(), "commit_id": " c1 "})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        Value::Object(out),
+        json!({"review_id": 9, "url": "https://g/r/9", "state": "COMMENTED",
+               "posted_comments": 1, "moved_comments": 1, "warnings": []})
+    );
+    let sent = &posts(&log)[0];
+    assert_eq!(
+        *sent,
+        json!({"event": "COMMENT",
+               "body": "총평\n\n### 다른 줄에 대한 의견\n- a.rs:50 — y",
+               "comments": [{"path": "a.rs", "line": 11, "side": "RIGHT", "body": "x"}],
+               "commit_id": "c1"})
+    );
+}
+
+#[tokio::test]
+async fn retry_on_422() {
+    let (base, log) = sub_server(vec![file("a.rs", Some("@@ -1 +1 @@\n+x"))], "x", 1).await;
+    let out = run_sub(
+        &base,
+        cfg(json!({"comments": [{"path": "a.rs", "line": 1, "body": "x"}]})),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        out["warnings"],
+        json!(["GitHub가 줄 코멘트를 받지 않아 1개를 본문으로 옮겨 다시 제출했습니다."])
+    );
+    assert_eq!(out["posted_comments"], 0);
+    assert_eq!(out["moved_comments"], 1);
+    let sent = posts(&log);
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[0]["comments"].as_array().unwrap().len(), 1);
+    assert_eq!(sent[1]["comments"], json!([]));
+    assert_eq!(sent[1]["body"], "### 다른 줄에 대한 의견\n- a.rs:1 — x");
+
+    // 두 번째도 422면 expect 오류(본문은 싣지 않는다).
+    let (base, _) = sub_server(vec![file("a.rs", Some("@@ -1 +1 @@\n+x"))], "x", 2).await;
+    let err = run_sub(
+        &base,
+        cfg(json!({"comments": [{"path": "a.rs", "line": 1, "body": "x"}]})),
+    )
+    .await
+    .expect_err("실패");
+    assert_eq!(err.code.as_deref(), Some("GITHUB_INVALID"));
+    assert!(!err.message.contains("secret"));
+}
+
+#[tokio::test]
+async fn self_pr_approve_becomes_comment() {
+    let (base, log) = sub_server(vec![], "me1", 0).await;
+    let out = run_sub(&base, cfg(json!({"event": "APPROVE", "body": "좋아요"})))
+        .await
+        .unwrap();
+    assert_eq!(
+        out["warnings"],
+        json!(["자기 PR에는 APPROVE를 할 수 없어 코멘트로 제출했습니다."])
+    );
+    assert_eq!(posts(&log)[0]["event"], "COMMENT");
+    let paths: Vec<String> = log.lock().unwrap().iter().map(|r| r.path.clone()).collect();
+    assert_eq!(
+        paths,
+        ["/user", "/repos/a/b/pulls/3", "/repos/a/b/pulls/3/reviews"]
+    );
+}
+
+#[tokio::test]
+async fn empty_review_rejected() {
+    let (base, log) = sub_server(vec![], "x", 0).await;
+    for event in [json!("COMMENT"), json!(""), json!("REQUEST_CHANGES")] {
+        let tok = Arc::new(CountingToken::default());
+        let err = run_sub_with(
+            &base,
+            tok.clone(),
+            cfg(json!({"event": event, "body": "  "})),
+        )
+        .await
+        .expect_err("실패");
+        assert_eq!(err.message, "리뷰 내용이 없습니다.");
+        assert_eq!(tok.0.load(Ordering::SeqCst), 0);
+    }
+    assert_eq!(log.lock().unwrap().len(), 0);
+
+    let out = run_sub(&base, cfg(json!({"event": "APPROVE"})))
+        .await
+        .unwrap();
+    assert_eq!(out["warnings"], json!([]));
+    let sent = &posts(&log)[0];
+    assert_eq!(sent["event"], "APPROVE");
+    assert_eq!(sent["body"], "");
+
+    // 자기 PR이라 COMMENT로 낮춰지면 빈 리뷰가 된다.
+    let (base, log) = sub_server(vec![], "me1", 0).await;
+    let err = run_sub(&base, cfg(json!({"event": "APPROVE"})))
+        .await
+        .expect_err("실패");
+    assert_eq!(err.message, "리뷰 내용이 없습니다.");
+    assert!(posts(&log).is_empty());
+}
+
+#[tokio::test]
+async fn review_body_cut_chars() {
+    let (base, log) = sub_server(vec![], "x", 0).await;
+    let out = run_sub(&base, cfg(json!({"body": "가".repeat(70000)})))
+        .await
+        .unwrap();
+    assert_eq!(
+        out["warnings"],
+        json!(["본문이 65536자를 넘어 잘랐습니다."])
+    );
+    assert_eq!(
+        posts(&log)[0]["body"].as_str().unwrap().chars().count(),
+        65536
+    );
+}
+
+#[tokio::test]
+async fn comments_cap_50() {
+    let (base, log) = sub_server(vec![], "x", 0).await;
+    let many: Vec<Value> = (1..=52)
+        .map(|i| json!({"path": "a.rs", "line": i, "body": "x"}))
+        .collect();
+    let out = run_sub(&base, cfg(json!({"comments": many})))
+        .await
+        .unwrap();
+    assert_eq!(
+        out["warnings"],
+        json!(["줄 코멘트는 50개까지라 2개를 버렸습니다."])
+    );
+    assert_eq!(out["moved_comments"], 50);
+    assert_eq!(posts(&log).len(), 1);
+}
+
+#[tokio::test]
+async fn submit_rejects() {
+    let (base, log) = sub_server(vec![], "x", 0).await;
+    for (c, msg) in [
+        (
+            json!({"pull_number": "#3"}),
+            "pull_number는 양의 정수여야 합니다.",
+        ),
+        (
+            json!({"event": "approve"}),
+            "event는 COMMENT, APPROVE, REQUEST_CHANGES 중 하나여야 합니다.",
+        ),
+        (
+            json!({"author": "me "}),
+            "데스크톱에서는 내 GitHub 계정으로만 리뷰를 남길 수 있어요.",
+        ),
+    ] {
+        let tok = Arc::new(CountingToken::default());
+        let err = run_sub_with(&base, tok.clone(), cfg(c))
+            .await
+            .expect_err("실패");
+        assert_eq!(err.message, msg);
+        assert_eq!(err.code.as_deref(), Some("GITHUB_INPUT"));
+        assert_eq!(tok.0.load(Ordering::SeqCst), 0);
+    }
+    assert_eq!(log.lock().unwrap().len(), 0);
+}

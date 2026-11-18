@@ -70,6 +70,7 @@ impl NodeRunner for GithubRunner {
                 }
                 "github.get_pr_files" => review::get_pr_files(api, token, c).await,
                 "github.get_pr_reviews" => review::get_pr_reviews(api, token, c).await,
+                "github.submit_pr_review" => review::submit_pr_review(api, token, c).await,
                 other => Err(NodeError {
                     message: format!("{other} 노드는 아직 실행할 수 없어요."),
                     code: None,
