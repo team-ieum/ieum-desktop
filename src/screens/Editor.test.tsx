@@ -396,3 +396,12 @@ test("card_sits_left_of_widest_panel", async () => {
   await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
   expect(screen.getByRole("alert").style.right).toBe("416px");
 });
+
+test("node_panel_sits_left_of_open_chat", async () => {
+  failRun();
+  const r = await openSaved(entry([N("m", 0)], "v1"));
+  await openAssistant(); // 채팅 탭 폭 380 + 16 = cover 396
+  await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
+  expect(screen.getByRole("complementary", { name: "m" }).style.right).toBe("408px");
+  expect(screen.getByRole("alert").style.right).toBe("808px");
+});

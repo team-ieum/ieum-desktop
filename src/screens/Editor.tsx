@@ -43,13 +43,27 @@ export function useEscape(onEscape: () => void, active = true) {
  * 캔버스 위 오른쪽에 떠 있는 카드 — 머리 + [X]. Esc로도 닫힌다.
  * 부모는 `relative`, 캔버스는 그 안에서 `absolute inset-0`(패널 뒤로 전체 폭).
  */
-export function SidePanel({ label, header, onClose, children }: { label: string; header: ReactNode; onClose: () => void; children: ReactNode }) {
+export function SidePanel({
+  label,
+  header,
+  onClose,
+  right,
+  children,
+}: {
+  label: string;
+  header: ReactNode;
+  onClose: () => void;
+  /** 오른쪽 여백(px). 없으면 right-4 — 채팅창이 열려 있으면 그 왼쪽으로 비킨다. */
+  right?: number;
+  children: ReactNode;
+}) {
   const { closing, close } = useClosing(onClose);
   useEscape(close);
   return (
     <aside
       aria-label={label}
-      className={`absolute top-4 right-4 bottom-4 z-20 flex w-96 flex-col overflow-y-auto rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] ${
+      style={right === undefined ? undefined : { right }}
+      className={`absolute top-4 ${right === undefined ? "right-4" : ""} bottom-4 z-20 flex w-96 flex-col overflow-y-auto rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] ${
         closing ? "ieum-slide-out" : "ieum-slide-in"
       }`}
     >
@@ -324,10 +338,12 @@ export function Editor({
   const nodeStatus = selected && live.nodes[selected.id];
   // 취소한 실행은 실패로 보이지 않는다.
   const showRun = live.status !== "cancelled";
+  const nodeRight = cover > 0 ? cover + 12 + 384 : 400;
+  const occupied = selected ? nodeRight : cover;
   const showNode = (nodeId: string) => {
     setSelectedId(nodeId);
-    // 노드 패널(w-96 384 + 여백 16)과 채팅 패널 중 넓은 쪽에 가리지 않게.
-    setFocus((f) => ({ id: nodeId, nonce: (f?.nonce ?? 0) + 1, right: Math.max(cover, 400) }));
+    // 노드 패널(w-96 384)은 채팅창 왼쪽(cover + 12)에 놓인다. 채팅창이 없으면 오른쪽 여백 16.
+    setFocus((f) => ({ id: nodeId, nonce: (f?.nonce ?? 0) + 1, right: nodeRight }));
   };
 
   return (
@@ -387,13 +403,14 @@ export function Editor({
           key={live.runId ?? ""}
           live={live}
           nodes={wf.nodes}
-          right={16 + Math.max(cover, selected ? 400 : 0)}
+          right={occupied > 0 ? occupied + 16 : 16}
           onShow={showNode}
           onOpenIntegrations={onOpenIntegrations}
         />
         {testRun.ask && <HttpConfirm lines={testRun.ask} skipLabel={t("common.cancel")} onAnswer={testRun.answer} />}
         {selected && (
           <SidePanel
+            right={cover > 0 ? cover + 12 : undefined}
             label={selected.label || nodeTitle(selected.event)}
             onClose={() => setSelectedId(null)}
             header={
