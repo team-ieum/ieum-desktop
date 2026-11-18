@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import App from "../../App";
-import { api, type CliAccountMeta, type CredentialsView, type ProviderReport, type UsageProvider, type UsageReport } from "../../api";
+import { api, type CliAccountMeta, type CredentialsView, type KeyLimitsView, type ProviderReport, type UsageProvider, type UsageReport } from "../../api";
 import { setLang } from "../../i18n";
 import { useSettings } from "../../stores/settings";
 import { useWeb } from "../../stores/web";
@@ -28,6 +28,12 @@ const useCreds = (v: CredentialsView) => {
   onTestFinished(() => void spy.mockResolvedValue(creds([])));
   return spy;
 };
+/** 이 테스트 동안만 키 한도·지출을 바꾼다. */
+const useLimits = (v: KeyLimitsView) => {
+  const spy = vi.spyOn(api, "keyLimits").mockClear().mockResolvedValue(v);
+  onTestFinished(() => void spy.mockResolvedValue({ limits: {}, spend: {} }));
+  return spy;
+};
 
 beforeAll(() => {
   setLang("ko");
@@ -47,6 +53,7 @@ beforeAll(() => {
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
   vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
   vi.spyOn(api, "usageReport").mockRejectedValue("no command");
+  vi.spyOn(api, "keyLimits").mockResolvedValue({ limits: {}, spend: {} });
 });
 beforeEach(() => {
   useSettings.setState({ settings: { language: "ko", autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true } });
@@ -504,6 +511,69 @@ test("api_card_lists_keys_with_last4_and_default", async () => {
   expect(row(openai, "기본").getByTestId("default-badge")).toBeTruthy();
   expect(row(openai, "회사").queryByTestId("default-badge")).toBeNull();
   expect(document.getElementById("settings-ai")!.textContent).not.toMatch(/sk-/);
+});
+
+test("key_row_shows_meter_and_saves_limit", async () => {
+  const limits = useLimits({ limits: { "openai:default": 10 }, spend: { "openai:default": 3.2 } });
+  const set = vi.spyOn(api, "setKeyLimit").mockClear().mockResolvedValue();
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const key = row(keys("OpenAI"), "기본");
+  expect(key.getByText("이번 달 $3.20 / $10")).toBeTruthy();
+  expect(key.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("32");
+  const input = key.getByLabelText("월 한도 $");
+  const before = limits.mock.calls.length;
+  await act(async () => fireEvent.change(input, { target: { value: "5" } }));
+  await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+  expect(set).toHaveBeenCalledWith("openai", "default", 5);
+  expect(limits.mock.calls.length).toBeGreaterThan(before);
+});
+
+test("clearing_limit_sends_null", async () => {
+  useLimits({ limits: { "openai:default": 10 }, spend: {} });
+  const set = vi.spyOn(api, "setKeyLimit").mockClear().mockResolvedValue();
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const input = row(keys("OpenAI"), "기본").getByLabelText("월 한도 $") as HTMLInputElement;
+  expect(input.value).toBe("10");
+  await act(async () => fireEvent.change(input, { target: { value: "" } }));
+  await act(async () => fireEvent.blur(input));
+  expect(set).toHaveBeenCalledWith("openai", "default", null);
+});
+
+test("bad_limit_shows_error", async () => {
+  const set = vi.spyOn(api, "setKeyLimit").mockClear().mockResolvedValue();
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const key = row(keys("OpenAI"), "기본");
+  const input = key.getByLabelText("월 한도 $");
+  for (const v of ["0", "-3", "abc"]) {
+    await act(async () => fireEvent.change(input, { target: { value: v } }));
+    await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+    expect(key.getByText("0보다 큰 금액을 넣어 주세요")).toBeTruthy();
+  }
+  expect(set).not.toHaveBeenCalled();
+});
+
+test("limited_unused_key_shows_zero", async () => {
+  useLimits({ limits: { "openai:default": 10 }, spend: {} });
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  expect(row(keys("OpenAI"), "기본").getByText("이번 달 $0.00 / $10")).toBeTruthy();
+});
+
+test("deleting_key_reloads_limits", async () => {
+  const limits = useLimits({ limits: {}, spend: {} });
+  const del = vi.spyOn(api, "deleteCredential").mockClear().mockResolvedValue();
+  onTestFinished(() => void del.mockClear());
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const key = row(keys("OpenAI"), "기본");
+  expect(key.getByText("이번 달 $0.00 · 한도 없음")).toBeTruthy();
+  const before = limits.mock.calls.length;
+  await act(async () => fireEvent.click(key.getByRole("button", { name: "삭제" })));
+  await act(async () => fireEvent.click(key.getByRole("button", { name: "정말 삭제" })));
+  expect(limits.mock.calls.length).toBeGreaterThan(before);
 });
 
 test("add_key_then_set_default_and_delete_with_confirm", async () => {

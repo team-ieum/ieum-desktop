@@ -79,7 +79,7 @@ export function SettingsShell({ onBack, version, initial = "account", header }: 
 
   const panes: Record<Id, ReactNode> = {
     account: <AccountPane />,
-    ai: <AiProvidersPane view={view} plans={plans} refreshPlan={refreshPlan} refreshCreds={refresh} />,
+    ai: <AiProvidersPane view={view} plans={plans} refreshPlan={refreshPlan} refreshCreds={refresh} limits />,
     usage: <UsagePane view={view} plans={plans} refreshPlans={() => refreshPlan()} />,
     integrations: <IntegrationsPane />,
     general: <GeneralPane version={version} />,

@@ -171,7 +171,13 @@ export type OpenTarget =
   | { kind: "run"; runId: string }
   | { kind: "history" }
   | { kind: "suggest" }
-  | { kind: "workflow"; id: string };
+  | { kind: "workflow"; id: string }
+  | { kind: "aiSettings" };
+/** 키별 월 한도와 이번 달 지출(Rust `KeyLimitsView`) — 키는 `"<source>:<id>"`. spend에는 이번 달 쓴 키만 있다. */
+export interface KeyLimitsView {
+  limits: Record<string, number>;
+  spend: Record<string, number>;
+}
 /** 계정 = 서버 + 이메일. */
 export interface AccountId {
   email: string;
@@ -500,6 +506,9 @@ export const api = {
   renameCredential: (kind: CredentialKind, id: string, label: string) => invoke<void>("rename_credential", { kind, id, label }),
   setDefaultCredential: (kind: CredentialKind, id: string) => invoke<void>("set_default_credential", { kind, id }),
   deleteCredential: (kind: CredentialKind, id: string) => invoke<void>("delete_credential", { kind, id }),
+  keyLimits: () => invoke<KeyLimitsView>("key_limits"),
+  /** `usd`가 null이면 한도를 푼다. */
+  setKeyLimit: (source: ApiProvider, id: string, usd: number | null) => invoke<void>("set_key_limit", { source, id, usd }),
   webLogin: (email: string, password: string) => invoke<WebAccount>("web_login", { email, password }),
   webLogout: () => invoke<void>("web_logout"),
   webAccount: () => invoke<WebAccount | null>("web_account"),

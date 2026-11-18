@@ -9,12 +9,15 @@ import {
   type CliAccountMeta,
   type CredentialKind,
   type CredentialsView,
+  type KeyLimitsView,
   type KeyState,
   type PlanUsage,
   type SubKind,
 } from "../../api";
 import { ProviderLogo, type LogoId } from "../../assets/providers";
 import { t, type Key } from "../../i18n";
+import { useKeyLimits } from "../../stores/keyLimits";
+import { LimitMeter } from "../../usage/parts";
 import { GHOST, matches, QueryContext } from "./Row";
 
 // 키 받기 주소는 Rust 고정값(open_provider_console) — 화면은 주소를 들고 있지 않는다.
@@ -507,10 +510,49 @@ function KeyBadge({ state }: { state?: KeyState }) {
   return null;
 }
 
+const reloadLimits = () => void useKeyLimits.getState().load().catch(() => {});
+
+/** 키 한 줄의 이번 달 지출 막대와 월 한도 칸 — Enter·blur에 저장, 빈칸이면 한도를 푼다. */
+function KeyLimit({ source, id, view }: { source: ApiProvider; id: string; view: KeyLimitsView }) {
+  const key = `${source}:${id}`;
+  const limit = view.limits[key] ?? null;
+  const [draft, setDraft] = useState(limit === null ? "" : String(limit));
+  const [bad, setBad] = useState(false);
+  const { error, run } = useRun(reloadLimits);
+  const save = () => {
+    const v = draft.trim();
+    const usd = v === "" ? null : Number(v);
+    const ok = usd === null || (Number.isFinite(usd) && usd > 0);
+    setBad(!ok);
+    if (ok && usd !== limit) void run(api.setKeyLimit(source, id, usd));
+  };
+  return (
+    <div className="flex flex-col gap-1.5">
+      <LimitMeter spend={view.spend[key] ?? 0} limit={limit} />
+      <div className="flex items-center gap-2 typo-caption1_medium text-neutral-600">
+        <span aria-hidden="true">{t("keyLimit.input")}</span>
+        <input
+          aria-label={t("keyLimit.input")}
+          inputMode="decimal"
+          className={`${INPUT} h-8 max-w-28`}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && save()}
+          onBlur={save}
+        />
+      </div>
+      {bad && <p className="typo-caption1_semibold text-danger-700">{t("keyLimit.bad")}</p>}
+      {error && <p className="typo-caption1_semibold text-danger-700">{error}</p>}
+    </div>
+  );
+}
+
 const BADGE_TEXT: Record<KeyState, Key> = { stored: "settings.keyStored", missing: "settings.keyMissing", error: "settings.keyError" };
 
-/** Anthropic·OpenAI·Gemini 키 목록 + [키 추가]. 키 입력란은 보내기 전에 비운다(키를 상태에 남기지 않는다). */
-function ApiKeyBody({ p, keys, state, refresh }: { p: (typeof PROVIDERS)[number]; keys: ApiKeyMeta[]; state?: KeyState; refresh: () => void }) {
+/** Anthropic·OpenAI·Gemini 키 목록 + [키 추가]. 키 입력란은 보내기 전에 비운다(키를 상태에 남기지 않는다).
+ *  `limits`면 키마다 이번 달 지출 막대와 월 한도 칸(설정에서만). */
+function ApiKeyBody({ p, keys, state, refresh, limits }: { p: (typeof PROVIDERS)[number]; keys: ApiKeyMeta[]; state?: KeyState; refresh: () => void; limits: boolean }) {
+  const limitView = useKeyLimits((s) => s.view);
   const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState("");
   const [draft, setDraft] = useState("");
@@ -535,11 +577,20 @@ function ApiKeyBody({ p, keys, state, refresh }: { p: (typeof PROVIDERS)[number]
               key={k.id}
               kind={p.id}
               m={k}
-              info={k.last4 && <span className="typo-caption1_regular font-mono text-neutral-500">…{k.last4}</span>}
+              info={
+                <>
+                  {k.last4 && <span className="typo-caption1_regular font-mono text-neutral-500">…{k.last4}</span>}
+                  {limits && limitView && <KeyLimit source={p.id} id={k.id} view={limitView} />}
+                </>
+              }
               removeLabel={t("common.delete")}
               confirmLabel={t("common.confirmDelete")}
               confirmText={t("settings.deleteKeyConfirm")}
-              onRemove={() => api.deleteCredential(p.id, k.id)}
+              onRemove={() =>
+                api.deleteCredential(p.id, k.id).then(() => {
+                  if (limits) reloadLimits();
+                })
+              }
               refresh={refresh}
             />
           ))}
@@ -608,19 +659,24 @@ const partHeads = (b: (typeof BOXES)[number], view: CredentialsView | null | und
 export const aiTexts = (plans: Plans, view: CredentialsView | null | undefined) =>
   BOXES.flatMap((b) => [b.name, t(`settings.boxDesc.${b.id}`), ...partHeads(b, view, plans).flatMap((p) => [p.title, p.desc, ...p.texts])]);
 
-/** AI 제공자 — 회사별 박스 3개(구독 + API 키). 설정과 온보딩이 같이 쓴다. */
+/** AI 제공자 — 회사별 박스 3개(구독 + API 키). 설정과 온보딩이 같이 쓴다. `limits` = 키별 월 한도(설정에서만). */
 export function AiProvidersPane({
   view,
   plans,
   refreshPlan,
   refreshCreds,
+  limits = false,
 }: {
   view: CredentialsView | null | undefined;
   plans: Plans;
   refreshPlan: (id: SubId) => void;
   refreshCreds: () => void;
+  limits?: boolean;
 }) {
   const keychain = view ? keyStates(view) : null;
+  useEffect(() => {
+    if (limits) reloadLimits();
+  }, [limits]);
   return (
     <div className="flex flex-col gap-3">
       {BOXES.map((b) => {
@@ -636,7 +692,7 @@ export function AiProvidersPane({
               },
               {
                 ...apiHead,
-                body: <ApiKeyBody p={b.api} keys={view?.apiKeys[b.api.id] ?? []} state={keychain?.[b.api.id]} refresh={refreshCreds} />,
+                body: <ApiKeyBody p={b.api} keys={view?.apiKeys[b.api.id] ?? []} state={keychain?.[b.api.id]} refresh={refreshCreds} limits={limits} />,
               },
             ]}
           />
