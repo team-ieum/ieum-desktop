@@ -7,6 +7,7 @@ import { FinishCard } from "../editor/chat/FinishCard";
 import { HttpConfirm, HttpTestCard } from "../editor/chat/HttpTestCard";
 import { ConfigPanel } from "../editor/ConfigPanel";
 import { Palette } from "../editor/Palette";
+import { RunErrorCard } from "../editor/RunErrorCard";
 import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
 import { Toolbar } from "../editor/Toolbar";
 import { useClosing } from "../editor/useClosing";
@@ -138,6 +139,7 @@ export function Editor({
   onOpenRuns,
   onDirty,
   onIdChange,
+  onOpenIntegrations,
 }: {
   id: string | null;
   onBack: () => void;
@@ -146,6 +148,8 @@ export function Editor({
   onDirty?: (dirty: boolean) => void;
   /** 지금 보여 주는 워크플로우 id — 새 캔버스는 선저장 뒤에 생긴다. 아직 없거나 편집기를 떠나면 "". */
   onIdChange?: (id: string) => void;
+  /** 오류 카드·띠의 [설정 › 연동 열기] — GitHub 연결 오류일 때만 보인다. */
+  onOpenIntegrations?: () => void;
 }) {
   const entry = useWorkflows((s) => s.list.find((w) => w.id === id));
   const save = useWorkflows((s) => s.save);
@@ -179,6 +183,8 @@ export function Editor({
   const [techInfo, setTechInfo] = useState(false);
   /** Assistant 패널이 가리는 캔버스 오른쪽 폭(px). */
   const [cover, setCover] = useState(0);
+  /** 오류 카드 [노드 보기] — nonce가 바뀔 때마다 캔버스가 그 노드로 보기를 옮긴다. */
+  const [focus, setFocus] = useState<{ id: string; nonce: number; right: number }>();
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [status, setStatus] = useState<{ saving?: boolean; error?: string }>({});
   const live = useRuns((s) => s.live[draft.id]) ?? emptyLive(draft.id);
@@ -316,6 +322,13 @@ export function Editor({
   );
   const unsaved = dirty || !draft.id;
   const nodeStatus = selected && live.nodes[selected.id];
+  // 취소한 실행은 실패로 보이지 않는다.
+  const showRun = live.status !== "cancelled";
+  const showNode = (nodeId: string) => {
+    setSelectedId(nodeId);
+    // 노드 패널(w-96 384 + 여백 16)과 채팅 패널 중 넓은 쪽에 가리지 않게.
+    setFocus((f) => ({ id: nodeId, nonce: (f?.nonce ?? 0) + 1, right: Math.max(cover, 400) }));
+  };
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -355,6 +368,10 @@ export function Editor({
             onNodeClick={setSelectedId}
             techInfo={techInfo}
             rightCover={cover}
+            runErrors={showRun ? live.errors : undefined}
+            runCodes={showRun ? live.codes : undefined}
+            onOpenIntegrations={onOpenIntegrations}
+            focus={focus}
           />
         </div>
         <PaletteButton onAdd={add} />
@@ -366,6 +383,13 @@ export function Editor({
         />
         <FinishCard workflowId={draft.id} version={base.updatedAt} />
         <HttpTestCard key={draft.id} workflowId={draft.id} />
+        <RunErrorCard
+          live={live}
+          nodes={wf.nodes}
+          right={16 + Math.max(cover, selected ? 400 : 0)}
+          onShow={showNode}
+          onOpenIntegrations={onOpenIntegrations}
+        />
         {testRun.ask && <HttpConfirm lines={testRun.ask} skipLabel={t("common.cancel")} onAnswer={testRun.answer} />}
         {selected && (
           <SidePanel

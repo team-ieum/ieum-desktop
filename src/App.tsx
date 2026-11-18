@@ -199,6 +199,12 @@ function AppBody() {
       if (view.page !== "settings") setBack(view);
       setView({ page: "settings", section: "usage" });
     });
+  // 편집기 오류 카드·띠 → 설정 › 연동(GitHub 연결 오류).
+  const openIntegrations = () =>
+    leave(() => {
+      if (view.page !== "settings") setBack(view);
+      setView({ page: "settings", section: "integrations" });
+    });
 
   if (!ready) return null;
 
@@ -318,6 +324,7 @@ function AppBody() {
                   onOpenRuns={(id) => leave(() => openRuns(id))}
                   onDirty={setDirty}
                   onIdChange={onEditorId}
+                  onOpenIntegrations={openIntegrations}
                 />
               ) : "run" in view ? (
                 <RunView workflowId={view.run} onBack={toList} onEdit={openEditor} />

@@ -6,6 +6,7 @@ import { nodeTitle } from "../editor/Canvas";
 import { AUTOSAVE_MS } from "../editor/sync";
 import { setLang } from "../i18n";
 import { PALETTE } from "../nodes/defs";
+import { emptyLive, useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
 import { Editor } from "./Editor";
 
@@ -40,6 +41,7 @@ beforeAll(() => {
 });
 afterEach(() => {
   cleanup();
+  useRuns.setState({ live: {} });
   vi.useRealTimers();
   vi.clearAllMocks();
 });
@@ -145,9 +147,9 @@ const entry = (nodes: WfNode[], updatedAt: string): WorkflowEntry => ({
   watchMessage: null,
   workflow: { nodes, edges: [] },
 });
-const openSaved = async (e: WorkflowEntry) => {
+const openSaved = async (e: WorkflowEntry, onOpenIntegrations?: () => void) => {
   useWorkflows.setState({ list: [e] });
-  return act(async () => render(<Editor id="w1" onBack={() => {}} onOpenRuns={() => {}} />));
+  return act(async () => render(<Editor id="w1" onBack={() => {}} onOpenRuns={() => {}} onOpenIntegrations={onOpenIntegrations} />));
 };
 const openAssistant = () => act(async () => fireEvent.click(screen.getByRole("button", { name: "IEUM Assistant 열기" })));
 const tick = (ms: number) => act(async () => vi.advanceTimersByTime(ms));
@@ -329,4 +331,51 @@ test("enable_switch_hidden_for_manual_trigger", async () => {
     await openSaved(entry([n], "v1"));
     expect(screen.getByRole("switch", { name: "활성" })).toBeTruthy();
   }
+});
+
+const GH_MSG = "GitHub 연결이 필요해요.";
+const failRun = (status: "failed" | "cancelled" = "failed") =>
+  useRuns.setState({
+    live: { w1: { ...emptyLive("w1"), runId: "r1", status, nodes: { m: "failed" }, errors: { m: GH_MSG }, codes: { m: "GITHUB_AUTH" } } },
+  });
+
+test("failed_run_shows_card_and_strip", async () => {
+  failRun();
+  await openSaved(entry([N("m", 0)], "v1"));
+  expect(screen.getByRole("alert")).toBeTruthy();
+  expect(screen.getByText(GH_MSG)).toBeTruthy(); // 노드 위 오류 띠
+});
+
+test("show_node_opens_panel", async () => {
+  failRun();
+  await openSaved(entry([N("m", 0)], "v1"));
+  expect(screen.queryByRole("complementary", { name: "m" })).toBeNull();
+  await act(async () => fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "노드 보기" })));
+  expect(screen.getByRole("complementary", { name: "m" })).toBeTruthy();
+});
+
+test("open_integrations_calls_prop", async () => {
+  failRun();
+  const onOpenIntegrations = vi.fn();
+  await openSaved(entry([N("m", 0)], "v1"), onOpenIntegrations);
+  await act(async () => fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "설정 > 연동 열기" })));
+  expect(onOpenIntegrations).toHaveBeenCalledTimes(1);
+  cleanup();
+  await openSaved(entry([N("m", 0)], "v1"));
+  expect(screen.queryByRole("button", { name: "설정 > 연동 열기" })).toBeNull();
+});
+
+test("cancelled_run_no_strip", async () => {
+  failRun("cancelled");
+  await openSaved(entry([N("m", 0)], "v1"));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByText(GH_MSG)).toBeNull();
+});
+
+test("card_sits_left_of_widest_panel", async () => {
+  failRun();
+  const r = await openSaved(entry([N("m", 0)], "v1"));
+  expect(screen.getByRole("alert").style.right).toBe("16px");
+  await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
+  expect(screen.getByRole("alert").style.right).toBe("416px");
 });
