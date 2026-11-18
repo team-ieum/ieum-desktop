@@ -31,6 +31,11 @@ export function opensIntegrations(code: string | undefined): boolean {
   return head === "GITHUB_NOT_CONNECTED" || head === "GITHUB_AUTH";
 }
 
+/** 코드 첫 토큰이 키 월 한도 초과면 [설정 › AI 열기]를 보인다. */
+export function opensAiSettings(code: string | undefined): boolean {
+  return code?.split(" ")[0] === "AI_KEY_LIMIT";
+}
+
 const TERMINAL: NodeRunStatus[] = ["succeeded", "failed", "skipped"];
 
 /**

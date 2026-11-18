@@ -277,6 +277,7 @@ test("follow_calls_fitView_with_panel_padding_and_waits_for_any_user_move_to_end
 function runError(code: string, extra: Record<string, unknown> = {}) {
   const onSelect = vi.fn();
   const onOpenIntegrations = vi.fn();
+  const onOpenAiSettings = vi.fn();
   const r = render(
     <div style={{ width: 800, height: 600 }}>
       <Canvas
@@ -286,11 +287,12 @@ function runError(code: string, extra: Record<string, unknown> = {}) {
         runCodes={{ m: code }}
         onSelect={onSelect}
         onOpenIntegrations={onOpenIntegrations}
+        onOpenAiSettings={onOpenAiSettings}
         {...extra}
       />
     </div>,
   );
-  return { ...r, onSelect, onOpenIntegrations };
+  return { ...r, onSelect, onOpenIntegrations, onOpenAiSettings };
 }
 
 test("failed_node_shows_run_error_strip", async () => {
@@ -308,6 +310,14 @@ test("strip_without_link_for_other_codes", () => {
   runError("GITHUB_INPUT");
   expect(screen.getByText("실행 실패")).toBeTruthy();
   expect(screen.queryByText("설정 > 연동 열기")).toBeNull();
+});
+
+test("ai_limit_strip_button", async () => {
+  const { onSelect, onOpenIntegrations, onOpenAiSettings } = runError("AI_KEY_LIMIT");
+  await act(async () => fireEvent.click(screen.getByText("설정 > AI 열기")));
+  expect(onOpenAiSettings).toHaveBeenCalledTimes(1);
+  expect(onOpenIntegrations).not.toHaveBeenCalled();
+  expect(onSelect).not.toHaveBeenCalled();
 });
 
 test("no_strip_without_run_errors", () => {

@@ -154,6 +154,7 @@ export function Editor({
   onDirty,
   onIdChange,
   onOpenIntegrations,
+  onOpenAiSettings,
 }: {
   id: string | null;
   onBack: () => void;
@@ -164,6 +165,8 @@ export function Editor({
   onIdChange?: (id: string) => void;
   /** 오류 카드·띠의 [설정 › 연동 열기] — GitHub 연결 오류일 때만 보인다. */
   onOpenIntegrations?: () => void;
+  /** 오류 카드·띠의 [설정 › AI 열기] — 키 월 한도 초과일 때만 보인다. */
+  onOpenAiSettings?: () => void;
 }) {
   const entry = useWorkflows((s) => s.list.find((w) => w.id === id));
   const save = useWorkflows((s) => s.save);
@@ -387,6 +390,7 @@ export function Editor({
             runErrors={showRun ? live.errors : undefined}
             runCodes={showRun ? live.codes : undefined}
             onOpenIntegrations={onOpenIntegrations}
+            onOpenAiSettings={onOpenAiSettings}
             focus={focus}
           />
         </div>
@@ -406,6 +410,7 @@ export function Editor({
           right={occupied > 0 ? occupied + 16 : 16}
           onShow={showNode}
           onOpenIntegrations={onOpenIntegrations}
+          onOpenAiSettings={onOpenAiSettings}
         />
         {testRun.ask && <HttpConfirm lines={testRun.ask} skipLabel={t("common.cancel")} onAnswer={testRun.answer} />}
         {selected && (

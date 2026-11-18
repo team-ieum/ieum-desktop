@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { api, type ExecEvent } from "../api";
-import { applyExecEvent, emptyLive, opensIntegrations, subscribeExecEvents, type Live } from "./runs";
+import { applyExecEvent, emptyLive, opensAiSettings, opensIntegrations, subscribeExecEvents, type Live } from "./runs";
 
 test("exec_events_subscribed_once", () => {
   const on = vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
@@ -55,4 +55,9 @@ test("node_failed_keeps_code", () => {
 test("opens_integrations_by_first_token", () => {
   for (const c of ["GITHUB_AUTH", "GITHUB_NOT_CONNECTED", "GITHUB_AUTH owner"]) expect(opensIntegrations(c)).toBe(true);
   for (const c of ["GITHUB_INPUT", "GITHUB_RATE_LIMIT", undefined, ""]) expect(opensIntegrations(c)).toBe(false);
+});
+
+test("opens_ai_settings_by_first_token", () => {
+  for (const c of ["AI_KEY_LIMIT", "AI_KEY_LIMIT x"]) expect(opensAiSettings(c)).toBe(true);
+  for (const c of ["AI_FAILED", undefined]) expect(opensAiSettings(c)).toBe(false);
 });

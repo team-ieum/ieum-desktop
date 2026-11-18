@@ -2,7 +2,7 @@ import { TriangleAlert, X } from "lucide-react";
 import { useState } from "react";
 import type { WfNode } from "../api";
 import { t } from "../i18n";
-import { type Live, opensIntegrations } from "../stores/runs";
+import { type Live, opensAiSettings, opensIntegrations } from "../stores/runs";
 import { nodeTitle } from "./Canvas";
 import { useClosing } from "./useClosing";
 
@@ -13,12 +13,14 @@ export function RunErrorCard({
   right,
   onShow,
   onOpenIntegrations,
+  onOpenAiSettings,
 }: {
   live: Live;
   nodes: WfNode[];
   right: number;
   onShow: (nodeId: string) => void;
   onOpenIntegrations?: () => void;
+  onOpenAiSettings?: () => void;
 }) {
   const [dismissed, setDismissed] = useState(false);
   const { closing, close } = useClosing(() => setDismissed(true));
@@ -46,6 +48,11 @@ export function RunErrorCard({
         {opensIntegrations(live.codes[node.id]) && onOpenIntegrations && (
           <button type="button" onClick={onOpenIntegrations} className="rounded-brand-sm bg-black px-2.5 py-1 text-[0.72rem] font-bold text-white">
             {t("editor.runError.openIntegrations")}
+          </button>
+        )}
+        {opensAiSettings(live.codes[node.id]) && onOpenAiSettings && (
+          <button type="button" onClick={onOpenAiSettings} className="rounded-brand-sm bg-black px-2.5 py-1 text-[0.72rem] font-bold text-white">
+            {t("editor.runError.openAiSettings")}
           </button>
         )}
         <button type="button" onClick={() => onShow(node.id)} className="rounded-brand-sm border border-neutral-300 px-2.5 py-1 text-[0.72rem] font-bold text-[#27273b]">

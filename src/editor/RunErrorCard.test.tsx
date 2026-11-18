@@ -42,6 +42,14 @@ test("buttons_call_back", () => {
   expect(screen.queryByText("설정 > 연동 열기")).toBeNull();
 });
 
+test("ai_limit_opens_ai_settings", () => {
+  const onOpenAiSettings = vi.fn();
+  render(<RunErrorCard live={failed("r1", { m: "AI_KEY_LIMIT" })} nodes={nodes} right={0} onShow={() => {}} onOpenIntegrations={() => {}} onOpenAiSettings={onOpenAiSettings} />);
+  fireEvent.click(screen.getByText("설정 > AI 열기"));
+  expect(onOpenAiSettings).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("설정 > 연동 열기")).toBeNull();
+});
+
 // Editor처럼 실행마다 key를 준다.
 const card = (live: Live) => <RunErrorCard key={live.runId ?? ""} live={live} nodes={nodes} right={0} onShow={() => {}} />;
 

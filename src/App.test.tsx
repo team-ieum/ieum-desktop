@@ -390,6 +390,15 @@ test("finish_pending_asks_rust_to_notify_and_notification_opens_editor", async (
   vi.mocked(api.listWorkflows).mockResolvedValue([]);
 });
 
+test("open_target_ai_settings", async () => {
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => openTarget({ kind: "aiSettings" })); // 한도 알림 클릭
+  expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("AI 제공자 계정");
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("AI 제공자 계정");
+});
+
 test("workflow_first_saved_from_new_canvas_counts_as_on_screen", async () => {
   const notice = vi.spyOn(api, "finishNotice").mockResolvedValue();
   vi.spyOn(api, "saveWorkflow").mockImplementation(async (wf) => ({ ...wf, id: "w9", updatedAt: "v1" }));
