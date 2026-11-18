@@ -1,4 +1,4 @@
-//! GitHub 저장소·조직·사용자 조회와 조직 멤버 확인 노드. 127.0.0.1 임의 포트의 가짜 서버에만 보낸다.
+//! GitHub 저장소·조직·사용자·브랜치·파일 조회와 조직 멤버 확인, 6개 노드. 127.0.0.1 임의 포트의 가짜 서버에만 보낸다.
 
 mod github_support;
 
@@ -232,6 +232,28 @@ async fn membership_redirect_once() {
 }
 
 #[tokio::test]
+async fn membership_redirect_then_403() {
+    let (l, base) = bind().await;
+    let log = serve(l, |r| {
+        if r.path.contains("/public_members/") {
+            resp(403, "", b"{}")
+        } else {
+            resp(302, "location: https://example.invalid/x\r\n", b"")
+        }
+    });
+    let e = run(
+        &base,
+        "github.check_org_membership",
+        json!({"org": "o", "username": "u"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(e.code.as_deref(), Some("GITHUB_FORBIDDEN"));
+    assert_eq!(e.message, "이 저장소·조직을 읽을 권한이 없어요.");
+    assert_eq!(log.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
 async fn lookup_bad_input_reads_no_token() {
     let long = "a".repeat(40);
     let cases = [
@@ -333,6 +355,22 @@ async fn find_branch_encodes_slash() {
     .await
     .unwrap();
     assert_eq!(req_paths(&log), ["/repos/a/b/branches/feat%2Fx"]);
+}
+
+#[tokio::test]
+async fn find_branch_404_is_empty() {
+    let (base, _) = server(404, json!({"message": "Not Found"})).await;
+    let out = run(
+        &base,
+        "github.find_branch",
+        json!({"owner": "a", "repo": "b", "branch": "main"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        Value::Object(out),
+        json!({"found": false, "total": 0, "items": [], "message": "결과가 없습니다"})
+    );
 }
 
 #[tokio::test]
@@ -476,9 +514,13 @@ async fn get_file_rejects() {
 #[tokio::test]
 async fn get_file_encodes_segments() {
     let (base, log) = server(404, json!({})).await;
-    run(&base, "github.get_file", file_cfg("docs/a b.md"))
+    let out = run(&base, "github.get_file", file_cfg("docs/a b.md"))
         .await
         .unwrap();
+    assert_eq!(
+        Value::Object(out),
+        json!({"found": false, "total": 0, "items": [], "message": "결과가 없습니다"})
+    );
     assert_eq!(req_paths(&log), ["/repos/a/b/contents/docs/a%20b.md"]);
 }
 

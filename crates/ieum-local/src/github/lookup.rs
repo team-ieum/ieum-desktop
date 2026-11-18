@@ -1,5 +1,6 @@
-//! 저장소·조직·사용자 조회와 조직 멤버 확인 노드 — agent `github_find_repo`·`github_find_org`·
-//! `github_find_user`·`github_check_org_membership`를 옮겼다. 입력 검사를 끝낸 뒤 토큰을 읽는다.
+//! 저장소·조직·사용자·브랜치·파일 조회와 조직 멤버 확인 노드(6개) — agent `github_find_repo`·
+//! `github_find_org`·`github_find_user`·`github_find_branch`·`github_get_file`·
+//! `github_check_org_membership`를 옮겼다. 입력 검사를 끝낸 뒤 토큰을 읽는다.
 
 use ieum_engine::NodeError;
 use reqwest::Method;
@@ -166,10 +167,8 @@ pub(crate) async fn check_org_membership(
     let (items, message, member) = match r.status {
         204 => (vec![json!({"org": org, "username": user})], None, true),
         404 => (vec![], Some("멤버가 아닙니다"), false),
-        _ => {
-            r.expect(204)?;
-            unreachable!()
-        }
+        // 204가 아니므로 항상 오류 — 상태별 오류 문구를 그대로 돌려준다.
+        _ => return r.expect(204).map(|_| Map::new()),
     };
     let mut out = found(items, message);
     out.insert("member".into(), member.into());

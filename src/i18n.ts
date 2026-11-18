@@ -1000,7 +1000,7 @@ const ko = {
   "field.github.get_file.ref": "브랜치·태그·커밋",
   "fieldDesc.github.get_file.ref": "브랜치·태그·커밋 SHA, 비우면 기본 브랜치",
   "field.github.check_org_membership.org": "조직",
-  "fieldDesc.github.check_org_membership.org": "조직을 고르세요 — 맨 앞 항목은 내 계정이에요",
+  "fieldDesc.github.check_org_membership.org": "확인할 조직의 GitHub 아이디",
   "field.github.check_org_membership.username": "사용자",
   "fieldDesc.github.check_org_membership.username": "확인할 GitHub 아이디",
 
@@ -2185,7 +2185,7 @@ const en: Record<Key, string> = {
   "field.github.get_file.ref": "Branch, tag or commit",
   "fieldDesc.github.get_file.ref": "Branch, tag or commit SHA; if empty, the default branch",
   "field.github.check_org_membership.org": "Organization",
-  "fieldDesc.github.check_org_membership.org": "Pick an organization — the first item is your account",
+  "fieldDesc.github.check_org_membership.org": "GitHub ID of the organization",
   "field.github.check_org_membership.username": "User",
   "fieldDesc.github.check_org_membership.username": "GitHub ID to check",
 

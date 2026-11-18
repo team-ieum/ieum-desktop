@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-/// 데스크톱이 러너를 가진 GitHub 이슈 노드. 카탈로그엔 이 밖에도 있지만 싣지 않는다.
+/// 데스크톱이 러너를 가진 GitHub 이슈·조회 노드. 카탈로그엔 이 밖에도 있지만 싣지 않는다.
 pub const GITHUB_EVENTS: [&str; 13] = [
     "github.create_issue",
     "github.update_issue",

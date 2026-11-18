@@ -1,4 +1,4 @@
-//! GitHub 이슈 노드 — REST 호출 기반.
+//! GitHub 이슈·조회 노드 — REST 호출 기반.
 
 mod api;
 mod input;
