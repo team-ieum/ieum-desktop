@@ -7,6 +7,7 @@ pub mod commands;
 pub mod credentials;
 pub mod github;
 pub mod http_confirm;
+pub mod key_limits;
 pub mod limit_watch;
 pub mod models;
 pub mod notify;
