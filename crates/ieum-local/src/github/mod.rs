@@ -16,12 +16,17 @@ use serde_json::{Map, Value};
 pub use api::{GithubApi, Resp};
 
 /// 저장소에 쓰는 노드 — 빌더 테스트 전에 사람이 확인한다.
-pub const GITHUB_WRITE_EVENTS: [&str; 5] = [
+pub const GITHUB_WRITE_EVENTS: [&str; 10] = [
     "github.create_issue",
     "github.update_issue",
     "github.find_or_create_issue",
     "github.add_labels",
     "github.create_comment",
+    "github.create_pull_request",
+    "github.update_pull_request",
+    "github.request_reviewers",
+    "github.find_or_create_pull_request",
+    "github.submit_pr_review",
 ];
 
 /// 노드 하나를 실행할 때마다 토큰을 준다. 캐시하지 않는다.

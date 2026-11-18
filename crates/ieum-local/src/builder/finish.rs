@@ -70,7 +70,13 @@ fn is_github_write(n: &Node) -> bool {
 /// GitHub 쓰기 노드의 확인 줄. 값은 싣지 않고 config 전체의 참조식만 `sends`로 보인다.
 fn github_line(wf: &Workflow, n: &Node) -> HttpLine {
     let summary = match n.event.as_str() {
-        "github.create_issue" | "github.find_or_create_issue" => raw(n, "title"),
+        "github.create_issue"
+        | "github.find_or_create_issue"
+        | "github.create_pull_request"
+        | "github.find_or_create_pull_request" => raw(n, "title"),
+        "github.update_pull_request" | "github.request_reviewers" | "github.submit_pr_review" => {
+            format!("#{}", raw(n, "pull_number"))
+        }
         _ => format!("#{}", raw(n, "issue_number")),
     };
     let mut line = http_line_with(wf, n, n.config.values());
@@ -351,13 +357,19 @@ mod tests {
                 {"id": "c", "event": "github.create_issue", "config": {"owner": "a", "repo": "b", "title": "{{nodes.t.output.name}}", "body": "x"}},
                 {"id": "r", "event": "github.find_issue", "config": {"owner": "a", "repo": "b", "title": "x"}},
                 {"id": "m", "event": "github.add_labels", "config": {"owner": "a", "repo": "b", "issue_number": "{{nodes.t.output.no}}", "labels": "bug"}},
-                {"id": "u", "event": "github.update_issue", "config": {"owner": "a", "repo": "b", "issue_number": 12, "state": "closed"}}
+                {"id": "u", "event": "github.update_issue", "config": {"owner": "a", "repo": "b", "issue_number": 12, "state": "closed"}},
+                {"id": "p", "event": "github.create_pull_request", "config": {"owner": "a", "repo": "b", "title": "T", "head": "h", "base": "main"}},
+                {"id": "s", "event": "github.submit_pr_review", "config": {"owner": "a", "repo": "b", "pull_number": 7}},
+                {"id": "f", "event": "github.find_pull_request", "config": {"owner": "a", "repo": "b"}},
+                {"id": "g", "event": "github.get_pr_files", "config": {"owner": "a", "repo": "b", "pull_number": 7}}
             ],
             "edges": []
         }))
         .unwrap();
         let lines = http_lines(&wf);
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines[3].github.as_ref().unwrap().summary, "T");
+        assert_eq!(lines[4].github.as_ref().unwrap().summary, "#7");
         let c = &lines[0];
         assert_eq!(
             c.github,
@@ -386,7 +398,7 @@ mod tests {
             ("github.update_issue", "#12")
         );
         let acts = actions(&wf);
-        assert_eq!(acts.len(), 3);
+        assert_eq!(acts.len(), 5);
         assert_eq!(acts[0].target.as_deref(), Some("a/b"));
         assert!(acts[0].http.is_some());
     }

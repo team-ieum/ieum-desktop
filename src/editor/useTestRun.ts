@@ -37,7 +37,18 @@ function httpLine(n: WfNode, nodes: WfNode[]): HttpLine {
   };
 }
 
-const GITHUB_WRITE = ["create_issue", "update_issue", "find_or_create_issue", "add_labels", "create_comment"].map((k) => `github.${k}`);
+const GITHUB_WRITE = [
+  "create_issue",
+  "update_issue",
+  "find_or_create_issue",
+  "add_labels",
+  "create_comment",
+  "create_pull_request",
+  "update_pull_request",
+  "request_reviewers",
+  "find_or_create_pull_request",
+  "submit_pr_review",
+].map((k) => `github.${k}`);
 const isGithubWrite = (n: WfNode) => GITHUB_WRITE.includes(n.event);
 /** 칸 원문 — 참조식·AI가 JSON 숫자로 넣은 번호도 글로(빌더 `finish::raw`와 같게). */
 const raw = (n: WfNode, k: string) => {
@@ -47,7 +58,8 @@ const raw = (n: WfNode, k: string) => {
 
 /** 빌더 `finish::github_line`과 같은 줄 — config 전체의 참조식을 `sends`로. */
 function githubLine(n: WfNode, nodes: WfNode[]): HttpLine {
-  const create = n.event === "github.create_issue" || n.event === "github.find_or_create_issue";
+  const create = ["create_issue", "find_or_create_issue", "create_pull_request", "find_or_create_pull_request"].some((k) => n.event === `github.${k}`);
+  const byPull = ["update_pull_request", "request_reviewers", "submit_pr_review"].some((k) => n.event === `github.${k}`);
   return {
     nodeId: n.id,
     label: n.label ?? "",
@@ -56,7 +68,7 @@ function githubLine(n: WfNode, nodes: WfNode[]): HttpLine {
     headerKeys: [],
     sends: sendsOf(Object.values(n.config), nodes),
     hasBody: raw(n, "body").trim() !== "",
-    github: { event: n.event, repo: `${raw(n, "owner")}/${raw(n, "repo")}`, summary: create ? raw(n, "title") : `#${raw(n, "issue_number")}` },
+    github: { event: n.event, repo: `${raw(n, "owner")}/${raw(n, "repo")}`, summary: create ? raw(n, "title") : `#${raw(n, byPull ? "pull_number" : "issue_number")}` },
   };
 }
 

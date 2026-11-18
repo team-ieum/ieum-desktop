@@ -309,3 +309,24 @@ test("test_run_github_line_shows_numeric_issue_number", async () => {
   await act(async () => fireEvent.click(screen.getByText("run")));
   expect(requests(screen.getByRole("dialog"))).toEqual(["GitHub 이슈 수정 · a/b · #12"]);
 });
+
+test("test_run_github_pr_lines_use_title_or_pull_number", async () => {
+  vi.spyOn(api, "pickPath").mockResolvedValue("/tmp/a.txt");
+  const runNow = vi.spyOn(api, "runNow").mockResolvedValue("r1");
+  const base = { owner: "a", repo: "b" };
+  const nodes: WfNode[] = [
+    { id: "p", event: "github.create_pull_request", config: { ...base, title: "T" } },
+    { id: "s", event: "github.submit_pr_review", config: { ...base, pull_number: 7 } },
+  ];
+  const r = render(<Harness nodes={nodes} />);
+  await act(async () => fireEvent.click(screen.getByText("run")));
+  const lines = requests(screen.getByRole("dialog"));
+  expect(lines).toHaveLength(2);
+  expect(lines[0]).toMatch(/ · a\/b · T$/);
+  expect(lines[1]).toMatch(/ · a\/b · #7$/);
+  expect(runNow).not.toHaveBeenCalled();
+
+  r.rerender(<Harness nodes={[{ id: "f", event: "github.find_pull_request", config: base }]} />);
+  await act(async () => fireEvent.click(screen.getByText("run")));
+  expect(runNow).toHaveBeenCalledTimes(1);
+});

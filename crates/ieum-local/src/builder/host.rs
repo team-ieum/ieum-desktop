@@ -80,7 +80,7 @@ pub struct GithubTarget {
     pub event: String,
     /// `owner/repo`
     pub repo: String,
-    /// 이슈 만들기는 제목, 나머지는 `#번호`.
+    /// 이슈·PR 만들기는 제목, 나머지는 `#번호`(PR 노드는 `pull_number`).
     pub summary: String,
 }
 
