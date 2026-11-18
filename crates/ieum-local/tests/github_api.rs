@@ -47,11 +47,11 @@ async fn sends_fixed_headers() {
     );
 }
 
-async fn expect_err(response: Vec<u8>) -> (String, String) {
+async fn expect_err(method: Method, response: Vec<u8>) -> (String, String) {
     let (l, base) = bind().await;
     serve(l, move |_| response.clone());
     let r = GithubApi::with_base(&base)
-        .call("t0k", Method::GET, "/x", &[], None)
+        .call("t0k", method, "/x", &[], None)
         .await
         .unwrap();
     let e = r.expect(200).unwrap_err();
@@ -67,7 +67,7 @@ async fn status_table() {
         (
             resp(403, "", b""),
             "GITHUB_FORBIDDEN",
-            "이 저장소에 쓸 권한이 없어요.".into(),
+            "이 저장소·조직을 읽을 권한이 없어요.".into(),
         ),
         (
             resp(403, "x-ratelimit-remaining: 0\r\n", b""),
@@ -111,9 +111,14 @@ async fn status_table() {
         ),
     ];
     for (response, code, message) in cases {
-        let (c, m) = expect_err(response).await;
+        let (c, m) = expect_err(Method::GET, response).await;
         assert_eq!((c.as_str(), m), (code, message));
     }
+    let (c, m) = expect_err(Method::POST, resp(403, "", b"")).await;
+    assert_eq!(
+        (c.as_str(), m.as_str()),
+        ("GITHUB_FORBIDDEN", "이 저장소에 쓸 권한이 없어요.")
+    );
 }
 
 #[tokio::test]
@@ -131,7 +136,7 @@ async fn redirect_not_followed() {
 #[tokio::test]
 async fn error_message_never_contains_body() {
     for status in [401, 422] {
-        let (c, m) = expect_err(resp(status, "", SECRET.as_bytes())).await;
+        let (c, m) = expect_err(Method::GET, resp(status, "", SECRET.as_bytes())).await;
         for s in [&c, &m] {
             assert!(!s.contains("SECRET") && !s.contains("t0k"), "{s}");
         }

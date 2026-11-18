@@ -1,8 +1,9 @@
-//! GitHub 이슈 노드 — REST 호출 기반.
+//! GitHub 이슈·조회 노드 — REST 호출 기반.
 
 mod api;
 mod input;
 mod issues;
+mod lookup;
 
 use std::sync::Arc;
 
@@ -52,6 +53,12 @@ impl NodeRunner for GithubRunner {
                 "github.list_issues" => issues::list_issues(api, token, c).await,
                 "github.add_labels" => issues::add_labels(api, token, c).await,
                 "github.create_comment" => issues::create_comment(api, token, c).await,
+                "github.find_repo" => lookup::find_repo(api, token, c).await,
+                "github.find_org" => lookup::find_org(api, token, c).await,
+                "github.find_user" => lookup::find_user(api, token, c).await,
+                "github.check_org_membership" => lookup::check_org_membership(api, token, c).await,
+                "github.find_branch" => lookup::find_branch(api, token, c).await,
+                "github.get_file" => lookup::get_file(api, token, c).await,
                 other => Err(NodeError {
                     message: format!("{other} 노드는 아직 실행할 수 없어요."),
                     code: None,

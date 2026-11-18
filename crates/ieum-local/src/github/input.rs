@@ -140,3 +140,51 @@ pub(crate) fn dropped(sent: &Map<String, Value>, issue: &Value) -> Vec<String> {
     }
     warnings
 }
+
+/// 경로 조각 하나를 퍼센트 인코딩 — 비예약 문자(`A-Za-z0-9-._~`)만 그대로 둔다.
+pub(crate) fn encode_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// 브랜치·파일 경로 → URL 경로 조각. `/`는 두고 조각마다 인코딩해 다른 API 경로로 새지 않게 한다.
+pub(crate) fn ref_path(v: &Value) -> Option<String> {
+    let s = v.as_str()?;
+    // 제어 문자는 트림 전에 본다 — 앞뒤 `\n`도 거부.
+    if s.chars()
+        .any(|c| c.is_control() && c.is_ascii() || c == '\\')
+    {
+        return None;
+    }
+    let s = s.trim();
+    if s.is_empty() || s.chars().count() > 1024 {
+        return None;
+    }
+    let segs: Vec<&str> = s.split('/').collect();
+    if segs.iter().any(|p| matches!(*p, "" | "." | "..")) {
+        return None;
+    }
+    Some(
+        segs.into_iter()
+            .map(encode_segment)
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// 파일 ref(브랜치·태그·SHA). 쿼리로 보내므로 인코딩 전 트림한 원문을 돌려준다. `user:branch`는 받지 않는다.
+pub(crate) fn base_ref(v: &Value) -> Option<String> {
+    let s = v.as_str()?.trim();
+    if s.contains(':') {
+        return None;
+    }
+    ref_path(v)?;
+    Some(s.to_string())
+}

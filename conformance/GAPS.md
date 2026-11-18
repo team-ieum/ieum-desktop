@@ -82,3 +82,4 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `schedule.every` | `cron` | 둘 다 거절해 같은 것: 요일 목록에 `#`·`L`이 섞인 `,`(`2#1,6#3`·`6L,2`), 일·요일이 둘 다 지정되거나 둘 다 `?`인 Quartz 식, 일·요일을 둘 다 지정한 Unix 5필드, 두 자리 Unix 요일(`07`·`00`), 이름 요일에 간격(Unix `MON/2`) | `schedule.rs` `unsupported_quartz_rejected`·`unix_weekday_single_digit_only`·`quartz_features`·`to_quartz_matches_be` |
 | `github.*` | — | 오류 문구: `GitHub API 오류 (코드): <응답 본문>` → 상태 코드별 정해 둔 문구(본문 안 실음) | `crates/ieum-local/tests/github_api.rs` `status_table` |
 | `github.*` | — | 응답 크기: 상한 없음 → 응답 하나당 32MB 넘으면 실패 | `github_api.rs` `too_large_fails` |
+| `github.*` | — | 조회 노드: 403 문구가 읽기·쓰기로 나뉨(agent는 응답 본문을 실음), 드롭다운(`github.owners`·`repos`·`branches`) 없음 → 직접 입력 | `crates/ieum-local/tests/github_api.rs` `status_table` |

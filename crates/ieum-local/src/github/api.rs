@@ -42,6 +42,8 @@ pub struct Resp {
     pub body: Value,
     /// `x-ratelimit-remaining: 0` 또는 `retry-after`가 있었다.
     pub rate_limited: bool,
+    /// 요청이 GET(조회)이었다 — 403 문구가 읽기·쓰기로 갈린다.
+    pub read: bool,
 }
 
 impl Default for GithubApi {
@@ -78,6 +80,7 @@ impl GithubApi {
         query: &[(&str, String)],
         body: Option<&Value>,
     ) -> Result<Resp, NodeError> {
+        let read = method == Method::GET;
         let mut url = Url::parse(&format!("{}{path}", self.base)).map_err(|_| unreachable())?;
         if !query.is_empty() {
             url.query_pairs_mut()
@@ -115,6 +118,7 @@ impl GithubApi {
             status,
             body,
             rate_limited,
+            read,
         })
     }
 }
@@ -135,6 +139,7 @@ impl Resp {
                 "GITHUB_RATE_LIMIT",
                 "GitHub 요청 한도에 닿았어요. 잠시 뒤 다시 실행해 주세요.",
             ),
+            403 if self.read => fail("GITHUB_FORBIDDEN", "이 저장소·조직을 읽을 권한이 없어요."),
             403 => fail("GITHUB_FORBIDDEN", "이 저장소에 쓸 권한이 없어요."),
             404 => fail(
                 "GITHUB_NOT_FOUND",

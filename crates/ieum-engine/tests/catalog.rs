@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 fn stage1_catalog_has_thirty_events() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = Catalog::stage1(&root).unwrap();
-    assert_eq!(catalog.events().len(), 43);
+    assert_eq!(catalog.events().len(), 49);
     for event in [
         "branch.if",
         "local.folder_new_file",
@@ -50,8 +50,8 @@ fn embedded_catalog_matches_disk() {
         }
     }
     events.extend(GITHUB_EVENTS.map(String::from));
-    assert_eq!(events.len(), 43);
-    assert_eq!(disk.events().len(), 43);
+    assert_eq!(events.len(), 49);
+    assert_eq!(disk.events().len(), 49);
     for event in &events {
         let (d, e) = (disk.get(event).unwrap(), embedded.get(event));
         let e = e.unwrap_or_else(|| panic!("{event} 내장 안 됨"));
@@ -62,7 +62,7 @@ fn embedded_catalog_matches_disk() {
 #[test]
 fn embedded_has_builtin_24() {
     let c = Catalog::embedded().unwrap();
-    assert_eq!(c.events().len(), 43);
+    assert_eq!(c.events().len(), 49);
     assert_eq!(
         c.get("transform.map").unwrap().node_type,
         NodeType::Transform
@@ -195,7 +195,7 @@ fn workflow_roundtrip_keeps_unknown_keys() {
 fn events_listed_trigger_first_with_titles() {
     let c = Catalog::embedded().unwrap();
     let ids: Vec<&str> = c.events().iter().map(|e| e.event.as_str()).collect();
-    assert_eq!(ids.len(), 43);
+    assert_eq!(ids.len(), 49);
     assert_eq!(
         ids[..7],
         [
@@ -222,7 +222,7 @@ fn events_listed_trigger_first_with_titles() {
         ]
     );
     assert_eq!(
-        ids[36..],
+        ids[42..],
         [
             "github.update_issue",
             "http.request",
@@ -291,6 +291,8 @@ fn github_issue_events_merge_fields_with_desktop_table() {
         Some(json!(20))
     );
     assert_eq!(f("github.find_issue", "search_by").choices.len(), 6);
+    assert!(f("github.get_file", "path").required);
+    assert_eq!(f("github.find_user", "username").default, Some(json!("")));
     for e in GITHUB_EVENTS {
         assert_eq!(c.get(e).unwrap().node_type, NodeType::Action);
     }
@@ -304,7 +306,7 @@ fn github_table_keys_match_catalog_fields() {
         &std::fs::read_to_string(root.join("crates/ieum-local/github_inputs.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(table.keys().collect::<Vec<_>>().len(), 7);
+    assert_eq!(table.keys().collect::<Vec<_>>().len(), 13);
     for (event, rows) in &table {
         let file = root.join(format!(
             "catalog/events/github/{}.json",

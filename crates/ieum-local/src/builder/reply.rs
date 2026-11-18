@@ -118,7 +118,9 @@ impl Code {
                 "GitHub에 닿지 못함(연결·시간 초과·서버 오류). 잠시 뒤 다시 시도할 것"
             }
             GithubRateLimit => "GitHub 요청 한도에 걸림. 잠시 뒤 다시 시도할 것",
-            GithubForbidden => "이 저장소에 쓸 권한이 없음. owner/repo와 사용자의 권한을 확인할 것",
+            GithubForbidden => {
+                "이 저장소·조직을 읽거나 쓸 권한이 없음. owner/repo·org와 사용자의 권한을 확인할 것"
+            }
             GithubNotFound => {
                 "저장소나 이슈가 없음(또는 볼 권한이 없음). owner/repo·이슈 번호를 확인할 것"
             }
