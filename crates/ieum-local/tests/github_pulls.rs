@@ -260,6 +260,21 @@ async fn update_pr_rules() {
 }
 
 #[tokio::test]
+async fn update_pr_base_like_create() {
+    let (base, log) = server(200, pr_json()).await;
+    let u = |b: &str| json!({"owner": "a", "repo": "b", "pull_number": "7", "base": b});
+    assert_eq!(
+        message(run(&base, "github.update_pull_request", u("u:main")).await),
+        "base 브랜치 형식이 올바르지 않습니다."
+    );
+    assert_eq!(log.lock().unwrap().len(), 0);
+    run(&base, "github.update_pull_request", u("\tmain "))
+        .await
+        .unwrap();
+    assert_eq!(log.lock().unwrap()[0].json(), json!({"base": "main"}));
+}
+
+#[tokio::test]
 async fn request_reviewers_output() {
     let (base, log) = server(
         201,

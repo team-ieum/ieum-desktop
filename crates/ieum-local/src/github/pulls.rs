@@ -7,9 +7,7 @@ use serde_json::{Map, Value, json};
 
 use super::GithubToken;
 use super::api::{GithubApi, input_error};
-use super::input::{
-    base_ref, csv, head_query, head_ref, is_login, issue_no, pr_refs, text, to_int,
-};
+use super::input::{csv, head_query, head_ref, is_login, issue_no, pr_refs, text, to_int};
 use super::issues::{MAX_SEARCH_VALUE, get, object, repo_path};
 use super::lookup::found;
 
@@ -124,7 +122,9 @@ pub(crate) async fn update_pull_request(
         payload.insert("state".into(), state.into());
     }
     if !text(get(c, "base")).is_empty() {
-        let b = base_ref(get(c, "base"))
+        // 만들기(pr_refs)와 같은 규칙 — 앞뒤 공백을 걷은 뒤 ':'가 있으면 거절한다.
+        let b = head_ref(get(c, "base"))
+            .filter(|b| !b.contains(':'))
             .ok_or_else(|| input_error("base 브랜치 형식이 올바르지 않습니다."))?;
         payload.insert("base".into(), b.into());
     }
