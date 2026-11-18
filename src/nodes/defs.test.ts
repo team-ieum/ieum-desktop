@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import type { WfNode } from "../api";
 import { DEFS, newBranchKey, newNode, nextPosition, outputKeys } from "./defs";
 
-test("defs_has_43_and_transform_map_outputs_follow_mappings", () => {
-  expect(Object.keys(DEFS).length).toBe(43);
+test("defs_has_49_and_transform_map_outputs_follow_mappings", () => {
+  expect(Object.keys(DEFS).length).toBe(49);
   const map = (config: Record<string, unknown>): WfNode => ({ id: "t", event: "transform.map", type: "TRANSFORM", config });
   expect(outputKeys(map({ mappings: { a: "1", b: "2" } }))).toEqual(["a", "b"]);
   expect(outputKeys(map({}))).toEqual([]);
@@ -35,4 +35,8 @@ test("github_defs_merge_table_and_catalog", () => {
   expect(max.default).toBe(20);
   expect(f.find((x) => x.key === "owner")!.required).toBe(true);
   expect(DEFS["github.create_issue"].inputFields.find((x) => x.key === "body")!.type).toBe("text");
+});
+
+test("github_get_file_fields", () => {
+  expect(DEFS["github.get_file"].inputFields.map((x) => x.key)).toEqual(["owner", "repo", "path", "ref"]);
 });

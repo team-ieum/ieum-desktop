@@ -29,6 +29,12 @@ import githubFindOrCreateIssue from "../../catalog/events/github/find_or_create_
 import githubListIssues from "../../catalog/events/github/list_issues.json";
 import githubAddLabels from "../../catalog/events/github/add_labels.json";
 import githubCreateComment from "../../catalog/events/github/create_comment.json";
+import githubFindBranch from "../../catalog/events/github/find_branch.json";
+import githubFindOrg from "../../catalog/events/github/find_org.json";
+import githubFindRepo from "../../catalog/events/github/find_repo.json";
+import githubFindUser from "../../catalog/events/github/find_user.json";
+import githubGetFile from "../../catalog/events/github/get_file.json";
+import githubCheckOrgMembership from "../../catalog/events/github/check_org_membership.json";
 import httpRequest from "../../catalog/events/http/request.json";
 import manualRun from "../../catalog/events/manual/run.json";
 import scheduleDaily from "../../catalog/events/schedule/daily.json";
@@ -117,6 +123,12 @@ const raw: [string, unknown][] = [
   ["github.list_issues", githubDef("github.list_issues", githubListIssues)],
   ["github.add_labels", githubDef("github.add_labels", githubAddLabels)],
   ["github.create_comment", githubDef("github.create_comment", githubCreateComment)],
+  ["github.find_branch", githubDef("github.find_branch", githubFindBranch)],
+  ["github.find_org", githubDef("github.find_org", githubFindOrg)],
+  ["github.find_repo", githubDef("github.find_repo", githubFindRepo)],
+  ["github.find_user", githubDef("github.find_user", githubFindUser)],
+  ["github.get_file", githubDef("github.get_file", githubGetFile)],
+  ["github.check_org_membership", githubDef("github.check_org_membership", githubCheckOrgMembership)],
 ];
 
 /** 팔레트 순서 그대로. 입력 칸 없는 정의(`manual.run`)는 빈 목록. */

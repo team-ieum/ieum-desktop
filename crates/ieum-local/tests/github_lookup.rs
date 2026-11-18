@@ -481,3 +481,15 @@ async fn get_file_encodes_segments() {
         .unwrap();
     assert_eq!(req_paths(&log), ["/repos/a/b/contents/docs/a%20b.md"]);
 }
+
+#[tokio::test]
+async fn every_event_has_runner() {
+    let (base, _log) = server(200, json!({})).await;
+    for e in ieum_engine::GITHUB_EVENTS {
+        let r = run(&base, e, json!({})).await;
+        if let Err(err) = r {
+            assert!(!err.message.contains("아직 실행할 수 없어요"), "{e}");
+        }
+    }
+    assert_eq!(ieum_engine::GITHUB_EVENTS.len(), 13);
+}

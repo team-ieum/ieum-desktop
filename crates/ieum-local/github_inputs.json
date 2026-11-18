@@ -5,5 +5,11 @@
   "github.find_or_create_issue": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "search_by", "required": true}, {"key": "value", "required": true}, {"key": "title", "required": true}, {"key": "body", "default": ""}, {"key": "labels", "default": ""}, {"key": "assignees", "default": ""}, {"key": "milestone", "default": ""}, {"key": "state", "default": "open"}],
   "github.list_issues": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "state", "default": "open"}],
   "github.add_labels": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "issue_number", "required": true}, {"key": "labels", "required": true}],
-  "github.create_comment": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "issue_number", "required": true}, {"key": "body", "required": true}]
+  "github.create_comment": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "issue_number", "required": true}, {"key": "body", "required": true}],
+  "github.find_branch": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "branch", "default": ""}],
+  "github.find_org": [{"key": "org", "required": true}],
+  "github.find_repo": [{"key": "owner", "required": true}, {"key": "repo", "required": true}],
+  "github.find_user": [{"key": "username", "default": ""}],
+  "github.get_file": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "path", "required": true}, {"key": "ref", "default": ""}],
+  "github.check_org_membership": [{"key": "org", "required": true}, {"key": "username", "required": true}]
 }

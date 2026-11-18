@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 /// 데스크톱이 러너를 가진 GitHub 이슈 노드. 카탈로그엔 이 밖에도 있지만 싣지 않는다.
-pub const GITHUB_EVENTS: [&str; 7] = [
+pub const GITHUB_EVENTS: [&str; 13] = [
     "github.create_issue",
     "github.update_issue",
     "github.find_issue",
@@ -13,6 +13,12 @@ pub const GITHUB_EVENTS: [&str; 7] = [
     "github.list_issues",
     "github.add_labels",
     "github.create_comment",
+    "github.find_branch",
+    "github.find_org",
+    "github.find_repo",
+    "github.find_user",
+    "github.get_file",
+    "github.check_org_membership",
 ];
 
 const GITHUB_INPUTS: &str = include_str!("../../ieum-local/github_inputs.json");
@@ -286,7 +292,13 @@ impl Catalog {
             "find_or_create_issue",
             "list_issues",
             "add_labels",
-            "create_comment"
+            "create_comment",
+            "find_branch",
+            "find_org",
+            "find_repo",
+            "find_user",
+            "get_file",
+            "check_org_membership"
         );
         Self::parse(sources, &github_table(GITHUB_INPUTS)?)
     }
