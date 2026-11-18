@@ -93,6 +93,7 @@ body {
 }
 .ieum-slide-out {
 	animation: ieum-slide-out 0.16s ease-in forwards;
+	pointer-events: none; /* 빠지는 동안 투명해지는 패널이 클릭을 받지 않게 */
 }
 @keyframes ieum-unfold {
 	from {
