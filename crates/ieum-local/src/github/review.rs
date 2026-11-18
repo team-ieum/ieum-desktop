@@ -6,7 +6,7 @@ use serde_json::{Map, Value, json};
 
 use super::GithubToken;
 use super::api::{GithubApi, input_error};
-use super::input::to_int;
+use super::input::{issue_no, text, to_int};
 use super::issues::{get, object, repo_path};
 
 pub(crate) const DEFAULT_EXCLUDE_PATHS: &str =
@@ -236,6 +236,164 @@ pub(crate) async fn get_pr_files(
         "diff": diff,
         "head_sha": pr["head"]["sha"],
         "skipped": skipped,
+        "truncated": truncated,
+    })))
+}
+
+const REVIEW_STATES: [&str; 4] = ["APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"];
+const MAX_REVIEWS_OUT: usize = 50;
+const MAX_COMMENTS_OUT: usize = 100;
+const MAX_REVIEW_TEXT: usize = 2000;
+const MAX_COMMENT_TEXT: usize = 1000;
+const MAX_TEXT_TOTAL: usize = 150_000;
+
+fn author_type(user: &Value) -> &'static str {
+    if user["type"] == "Bot" {
+        "bot"
+    } else {
+        "human"
+    }
+}
+
+/// 체크박스 값. 참조식이 준 글 `"false"`는 거짓, 비었거나 없으면 참.
+fn want_comments(v: &Value) -> bool {
+    match v {
+        Value::Bool(b) => *b,
+        Value::String(s) => !s.trim().eq_ignore_ascii_case("false"),
+        _ => true,
+    }
+}
+
+pub(crate) async fn get_pr_reviews(
+    api: &GithubApi,
+    token: &dyn GithubToken,
+    c: &Map<String, Value>,
+) -> Result<Map<String, Value>, NodeError> {
+    let repo = repo_path(c)?;
+    let n = issue_no(get(c, "pull_number"))
+        .ok_or_else(|| input_error("pull_number는 양의 정수여야 합니다."))?;
+    let wanted: Vec<String> = super::input::csv(get(c, "states"))
+        .iter()
+        .map(|s| s.to_uppercase())
+        .collect();
+    if wanted.iter().any(|s| !REVIEW_STATES.contains(&s.as_str())) {
+        return Err(input_error(&format!(
+            "states는 {} 중에서 골라야 합니다.",
+            REVIEW_STATES.join(", ")
+        )));
+    }
+    let kind = match text(get(c, "author_type")).as_str() {
+        "" => "all".to_string(),
+        k @ ("human" | "bot" | "all") => k.to_string(),
+        _ => {
+            return Err(input_error(
+                "author_type은 human, bot, all 중 하나여야 합니다.",
+            ));
+        }
+    };
+    let kept = |user: &Value| kind == "all" || author_type(user) == kind;
+    let include = want_comments(get(c, "include_comments"));
+
+    let t = token.token().await?;
+    let pr_path = format!("{repo}/pulls/{n}");
+    let (reviews, mut truncated) =
+        fetch_pages(api, &t, &format!("{pr_path}/reviews"), &[], |_| true, None).await?;
+    let mut comments = Vec::new();
+    if include {
+        let extra = [
+            ("sort", "created".to_string()),
+            ("direction", "desc".to_string()),
+        ];
+        let (mut found, more) = fetch_pages(
+            api,
+            &t,
+            &format!("{pr_path}/comments"),
+            &extra,
+            |c| kept(&c["user"]),
+            Some(MAX_COMMENTS_OUT),
+        )
+        .await?;
+        truncated |= more || found.len() > MAX_COMMENTS_OUT;
+        found.truncate(MAX_COMMENTS_OUT);
+        comments = found;
+    }
+
+    // PENDING은 제출 전이라 뺀다. GitHub 응답은 오래된 것부터.
+    let submitted: Vec<&Value> = reviews
+        .iter()
+        .filter(|r| r["state"] != "PENDING" && kept(&r["user"]))
+        .collect();
+    // 리뷰어마다 마지막 결정 하나(COMMENTED는 덮어쓰지 않음). login 없는 리뷰는 한 리뷰어로 묶는다.
+    let mut decisions: Vec<(&Value, &str)> = Vec::new();
+    for r in &submitted {
+        let state = r["state"].as_str().unwrap_or("");
+        if !matches!(state, "APPROVED" | "CHANGES_REQUESTED" | "DISMISSED") {
+            continue;
+        }
+        let login = &r["user"]["login"];
+        match decisions.iter_mut().find(|(l, _)| *l == login) {
+            Some(d) => d.1 = state,
+            None => decisions.push((login, state)),
+        }
+    }
+    let count = |s: &str| decisions.iter().filter(|d| d.1 == s).count();
+    let picked: Vec<&&Value> = submitted
+        .iter()
+        .rev()
+        .filter(|r| wanted.is_empty() || wanted.iter().any(|w| r["state"] == w.as_str()))
+        .collect();
+    truncated |= picked.len() > MAX_REVIEWS_OUT;
+
+    // 글자 수로 자르고 남은 예산에서 뺀다.
+    let mut budget = MAX_TEXT_TOTAL;
+    let mut cut = |v: &Value, limit: usize| -> String {
+        let t = v.as_str().unwrap_or("");
+        let out: String = t.chars().take(limit.min(budget)).collect();
+        let len = out.chars().count();
+        budget -= len;
+        truncated |= len < t.chars().count();
+        out
+    };
+    let items: Vec<Value> = picked
+        .iter()
+        .take(MAX_REVIEWS_OUT)
+        .map(|r| {
+            json!({
+                "id": r["id"],
+                "author": r["user"]["login"],
+                "author_type": author_type(&r["user"]),
+                "state": r["state"],
+                "body": cut(&r["body"], MAX_REVIEW_TEXT),
+                "submitted_at": r["submitted_at"],
+                "commit_id": r["commit_id"],
+            })
+        })
+        .collect();
+    let out_comments: Vec<Value> = comments
+        .iter()
+        .map(|m| {
+            let line = if m["line"].is_null() {
+                &m["original_line"]
+            } else {
+                &m["line"]
+            };
+            json!({
+                "path": m["path"],
+                "line": line,
+                "body": cut(&m["body"], MAX_COMMENT_TEXT),
+                "author": m["user"]["login"],
+                "created_at": m["created_at"],
+            })
+        })
+        .collect();
+    Ok(object(json!({
+        "found": !items.is_empty(),
+        "total": items.len(),
+        "items": items,
+        "message": if items.is_empty() { "결과가 없습니다" } else { "" },
+        "comments": out_comments,
+        "approved_count": count("APPROVED"),
+        "changes_requested_count": count("CHANGES_REQUESTED"),
         "truncated": truncated,
     })))
 }
