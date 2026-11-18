@@ -14,7 +14,7 @@ use super::input::{
 const MAX_COMMENT_BODY: usize = 65536;
 const SEARCH_BY: [&str; 6] = ["number", "label", "assignee", "author", "title", "body"];
 const MAX_PAGES: usize = 10;
-const MAX_SEARCH_VALUE: usize = 200;
+pub(super) const MAX_SEARCH_VALUE: usize = 200;
 const STATE_REASONS: [&str; 4] = ["completed", "not_planned", "duplicate", "reopened"];
 
 pub(super) fn get<'a>(c: &'a Map<String, Value>, key: &str) -> &'a Value {

@@ -331,3 +331,148 @@ async fn pulls_422_is_invalid() {
     assert_eq!(e.code.as_deref(), Some("GITHUB_INVALID"));
     assert!(!e.message.contains("secret"));
 }
+
+fn find_cfg(by: &str, value: Value) -> Value {
+    json!({"owner": "a", "repo": "b", "search_by": by, "value": value})
+}
+
+fn query(r: &github_support::Req) -> Vec<(String, String)> {
+    let (_, qs) = r.path.split_once('?').unwrap();
+    reqwest::Url::parse(&format!("http://x/?{qs}"))
+        .unwrap()
+        .query_pairs()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+}
+
+#[tokio::test]
+async fn find_pr_by_number() {
+    let (base, log) = server(
+        200,
+        json!({"number": 3, "title": "t", "state": "open", "html_url": "u", "draft": true,
+               "user": {"login": "au"}, "created_at": "2026-01-01T00:00:00Z"}),
+    )
+    .await;
+    let out = run(
+        &base,
+        "github.find_pull_request",
+        find_cfg("number", json!("#3")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(log.lock().unwrap()[0].path, "/repos/a/b/pulls/3");
+    assert_eq!(out["found"], true);
+    let keys: Vec<&String> = out["items"][0].as_object().unwrap().keys().collect();
+    let mut want = vec![
+        "number",
+        "title",
+        "state",
+        "url",
+        "draft",
+        "author",
+        "created_at",
+    ];
+    want.sort();
+    let mut got: Vec<&str> = keys.iter().map(|s| s.as_str()).collect();
+    got.sort();
+    assert_eq!(got, want);
+    let (base, _) = server(404, json!({})).await;
+    let out = run(
+        &base,
+        "github.find_pull_request",
+        find_cfg("number", json!(3)),
+    )
+    .await
+    .unwrap();
+    assert_eq!(out["found"], false);
+    assert_eq!(out["message"], "결과가 없습니다");
+}
+
+#[tokio::test]
+async fn find_pr_by_branch_query() {
+    let (base, log) = server(200, json!([])).await;
+    run(
+        &base,
+        "github.find_pull_request",
+        find_cfg("branch", json!("feat")),
+    )
+    .await
+    .unwrap();
+    let l = log.lock().unwrap();
+    assert!(l[0].path.starts_with("/repos/a/b/pulls?"));
+    assert_eq!(
+        query(&l[0]),
+        vec![
+            ("head".to_string(), "a:feat".to_string()),
+            ("state".to_string(), "open".to_string()),
+            ("per_page".to_string(), "20".to_string())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn find_pr_search_filters() {
+    let hit = |url: &str, pr: bool| {
+        let mut v = json!({"number": 1, "title": "t", "state": "open", "html_url": "u",
+            "user": {"login": "au"}, "created_at": "c", "repository_url": url});
+        if pr {
+            v["pull_request"] = json!({});
+        }
+        v
+    };
+    let (base, log) = server(
+        200,
+        json!({"items": [
+            hit("https://api.github.com/repos/A/B", true),
+            hit("https://api.github.com/repos/a/c", true),
+            hit("https://api.github.com/repos/a/b", false),
+        ]}),
+    )
+    .await;
+    let mut c = find_cfg("title", json!("fix"));
+    c["state"] = json!("all");
+    let out = run(&base, "github.find_pull_request", c).await.unwrap();
+    assert_eq!(out["total"], 1);
+    let mut c = find_cfg("author", json!("me"));
+    c["state"] = json!("closed");
+    run(&base, "github.find_pull_request", c).await.unwrap();
+    let l = log.lock().unwrap();
+    assert!(l[0].path.starts_with("/search/issues?"));
+    assert_eq!(query(&l[0])[0].1, "fix in:title repo:a/b is:pr");
+    assert_eq!(query(&l[1])[0].1, "author:me is:pr repo:a/b state:closed");
+}
+
+#[tokio::test]
+async fn find_pr_rejects() {
+    let (base, log) = server(200, json!([])).await;
+    let long = "가".repeat(201);
+    let mut bad_state = find_cfg("title", json!("x"));
+    bad_state["state"] = json!("x");
+    let cases = [
+        (
+            find_cfg("label", json!("x")),
+            "search_by는 number, branch, title, body, author 중 하나여야 합니다.",
+        ),
+        (bad_state, "state는 open, closed, all 중 하나여야 합니다."),
+        (find_cfg("title", json!("")), "value를 입력해 주세요."),
+        (
+            find_cfg("number", json!("abc")),
+            "PR 번호는 양의 정수여야 합니다.",
+        ),
+        (
+            find_cfg("author", json!("a b")),
+            "GitHub 사용자 이름 형식이 올바르지 않습니다.",
+        ),
+        (
+            find_cfg("title", json!(long)),
+            "검색어는 200자 이하여야 합니다.",
+        ),
+    ];
+    for (c, want) in cases {
+        assert_eq!(
+            message(run(&base, "github.find_pull_request", c).await),
+            want
+        );
+    }
+    assert_eq!(log.lock().unwrap().len(), 0);
+}

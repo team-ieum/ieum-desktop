@@ -63,6 +63,7 @@ impl NodeRunner for GithubRunner {
                 "github.create_pull_request" => pulls::create_pull_request(api, token, c).await,
                 "github.update_pull_request" => pulls::update_pull_request(api, token, c).await,
                 "github.request_reviewers" => pulls::request_reviewers(api, token, c).await,
+                "github.find_pull_request" => pulls::find_pull_request(api, token, c).await,
                 "github.find_or_create_pull_request" => {
                     pulls::find_or_create_pull_request(api, token, c).await
                 }

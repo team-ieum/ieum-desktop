@@ -7,8 +7,13 @@ use serde_json::{Map, Value, json};
 
 use super::GithubToken;
 use super::api::{GithubApi, input_error};
-use super::input::{base_ref, csv, head_query, is_login, issue_no, pr_refs, text};
-use super::issues::{get, object, repo_path};
+use super::input::{
+    base_ref, csv, head_query, head_ref, is_login, issue_no, pr_refs, text, to_int,
+};
+use super::issues::{MAX_SEARCH_VALUE, get, object, repo_path};
+use super::lookup::found;
+
+const PR_SEARCH_BY: [&str; 5] = ["number", "branch", "title", "body", "author"];
 
 fn pull_number(c: &Map<String, Value>) -> Result<u64, NodeError> {
     issue_no(get(c, "pull_number"))
@@ -39,7 +44,6 @@ pub(crate) fn pr_out(pr: &Value) -> Map<String, Value> {
 }
 
 /// 조회 결과 한 건 — 검색 응답에도 있는 키만.
-#[allow(dead_code)] // 다음 작업(PR 찾기·목록)에서 쓴다.
 pub(crate) fn pr_item(pr: &Value) -> Value {
     json!({
         "number": pr["number"],
@@ -213,4 +217,108 @@ pub(crate) async fn find_or_create_pull_request(
     out.insert("created".into(), created.into());
     out.extend(pr_out(&pr));
     Ok(out)
+}
+
+pub(crate) async fn find_pull_request(
+    api: &GithubApi,
+    token: &dyn GithubToken,
+    c: &Map<String, Value>,
+) -> Result<Map<String, Value>, NodeError> {
+    let repo = repo_path(c)?;
+    let by = get(c, "search_by").as_str().unwrap_or("");
+    if !PR_SEARCH_BY.contains(&by) {
+        return Err(input_error(&format!(
+            "search_by는 {} 중 하나여야 합니다.",
+            PR_SEARCH_BY.join(", ")
+        )));
+    }
+    let state = Some(text(get(c, "state")))
+        .filter(|s| !s.is_empty())
+        .unwrap_or("open".into());
+    if !["open", "closed", "all"].contains(&state.as_str()) {
+        return Err(input_error("state는 open, closed, all 중 하나여야 합니다."));
+    }
+    // 번호는 참조식 결과로 정수가 올 수 있다.
+    let value = match get(c, "value") {
+        Value::Number(n) if n.is_i64() || n.is_u64() => n.to_string(),
+        v => text(v),
+    };
+    if value.is_empty() {
+        return Err(input_error("value를 입력해 주세요."));
+    }
+    let limit = to_int(get(c, "max_results")).unwrap_or(20).clamp(1, 100) as usize;
+    let v = Value::String(value.clone());
+    let (number, head) = (issue_no(&v), head_ref(&v));
+    match by {
+        "number" if number.is_none() => {
+            return Err(input_error("PR 번호는 양의 정수여야 합니다."));
+        }
+        "branch" if head.is_none() => {
+            return Err(input_error("브랜치 형식이 올바르지 않습니다."));
+        }
+        "author" if !is_login(&v) => {
+            return Err(input_error("GitHub 사용자 이름 형식이 올바르지 않습니다."));
+        }
+        "title" | "body" if value.chars().count() > MAX_SEARCH_VALUE => {
+            return Err(input_error(&format!(
+                "검색어는 {MAX_SEARCH_VALUE}자 이하여야 합니다."
+            )));
+        }
+        _ => {}
+    }
+    let t = token.token().await?;
+    let owner = get(c, "owner").as_str().unwrap_or("");
+    let (path, query) = match (by, number, head) {
+        ("number", Some(n), _) => (format!("{repo}/pulls/{n}"), vec![]),
+        ("branch", _, Some(h)) => (
+            format!("{repo}/pulls"),
+            vec![
+                ("head", head_query(owner, &h)),
+                ("state", state),
+                ("per_page", limit.to_string()),
+            ],
+        ),
+        _ => {
+            let r = repo.trim_start_matches("/repos/");
+            let state_q = if state == "all" {
+                String::new()
+            } else {
+                format!(" state:{state}")
+            };
+            let q = if by == "author" {
+                format!("author:{value} is:pr repo:{r}{state_q}")
+            } else {
+                format!("{value} in:{by} repo:{r} is:pr{state_q}")
+            };
+            (
+                "/search/issues".to_string(),
+                vec![("q", q), ("per_page", limit.to_string())],
+            )
+        }
+    };
+    let r = api.call(&t, Method::GET, &path, &query, None).await?;
+    if r.status == 404 {
+        return Ok(found(vec![], None));
+    }
+    let body = r.expect(200)?;
+    let hits: Vec<&Value> = if path == "/search/issues" {
+        let want = format!("https://api.github.com{repo}").to_lowercase();
+        body["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|i| {
+                i["repository_url"].as_str().unwrap_or("").to_lowercase() == want
+                    && i.get("pull_request").is_some()
+            })
+            .collect()
+    } else if let Some(a) = body.as_array() {
+        a.iter().collect()
+    } else {
+        vec![&body]
+    };
+    Ok(found(
+        hits.into_iter().take(limit).map(pr_item).collect(),
+        None,
+    ))
 }
