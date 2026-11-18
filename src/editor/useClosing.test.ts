@@ -33,6 +33,17 @@ describe("useClosing", () => {
 		expect(result.current.closing).toBe(false); // 닫힘이 끝나면 다음 열기를 위해 되돌린다
 	});
 
+	it("custom_delay", () => {
+		w.matchMedia = () => ({ matches: true });
+		const onClose = vi.fn();
+		const { result } = renderHook(() => useClosing(onClose, 240));
+		act(() => result.current.close());
+		act(() => void vi.advanceTimersByTime(239));
+		expect(onClose).toHaveBeenCalledTimes(0);
+		act(() => void vi.advanceTimersByTime(1));
+		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+
 	it("reopen_cancels_pending_close", () => {
 		w.matchMedia = () => ({ matches: true });
 		const onClose = vi.fn();

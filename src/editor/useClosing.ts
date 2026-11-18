@@ -7,7 +7,7 @@ export const CLOSE_MS = 160;
  * 닫기 전에 퇴장 움직임을 보여 주는 훅. 움직임 허용일 때만 `closing`을 켜고 CLOSE_MS 뒤 끄면서 onClose,
  * 동작 줄이기·jsdom(matchMedia 없음)이면 바로 onClose.
  */
-export function useClosing(onClose: () => void) {
+export function useClosing(onClose: () => void, ms: number = CLOSE_MS) {
 	const [closing, setClosing] = useState(false);
 	const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
 	const latest = useRef(onClose);
@@ -25,8 +25,8 @@ export function useClosing(onClose: () => void) {
 		timer.current = setTimeout(() => {
 			setClosing(false);
 			latest.current();
-		}, CLOSE_MS);
-	}, []);
+		}, ms);
+	}, [ms]);
 	useEffect(() => () => clearTimeout(timer.current), []);
 
 	return { closing, close, cancel };

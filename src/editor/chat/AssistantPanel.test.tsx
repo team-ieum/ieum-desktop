@@ -120,13 +120,13 @@ test("assistant_animates_open_and_close", async () => {
     const cover = vi.fn();
     render(<AssistantPanel workflowId="w1" onCoverChange={cover} />);
     await open();
-    expect(panel()!.className).toContain("ieum-grow-tr");
+    expect(panel()!.className).toContain("ieum-circle-in");
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "IEUM Assistant 닫기" })));
     expect(cover).toHaveBeenLastCalledWith(0); // 가리는 폭은 바로 0
     expect(panel()!.hidden).toBe(false); // 빠지는 움직임 동안은 보인다
-    expect(panel()!.className).toContain("ieum-slide-out");
+    expect(panel()!.className).toContain("ieum-circle-out");
     expect(panel()!.querySelector("[data-slot]:not([hidden])")).not.toBeNull(); // 본문도 함께 빠진다
-    act(() => void vi.advanceTimersByTime(160));
+    act(() => void vi.advanceTimersByTime(240));
     expect(panel()!.hidden).toBe(true);
   } finally {
     vi.useRealTimers();
@@ -140,11 +140,11 @@ test("assistant_reopen_during_close_stays_open", async () => {
     render(<AssistantPanel workflowId="w1" />);
     await open();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "IEUM Assistant 닫기" })));
-    act(() => void vi.advanceTimersByTime(100));
+    act(() => void vi.advanceTimersByTime(150));
     await open();
-    act(() => void vi.advanceTimersByTime(300));
+    act(() => void vi.advanceTimersByTime(400));
     expect(panel()!.hidden).toBe(false);
-    expect(panel()!.className).toContain("ieum-grow-tr");
+    expect(panel()!.className).toContain("ieum-circle-in");
   } finally {
     vi.useRealTimers();
   }
