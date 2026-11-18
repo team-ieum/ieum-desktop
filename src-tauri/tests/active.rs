@@ -613,3 +613,52 @@ async fn broken_legacy_marker_does_not_block_login() {
     assert!(env.active.sup().await.is_ok());
     assert!(old.exists());
 }
+
+/// 운영 조립(`activate`)이 AI 러너에 한도 게이트를 붙였는가 — 한도를 넘은 키는 공급원까지 가지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn activate_gates_api_key_over_limit() {
+    let env = env_with(
+        Arc::new(FakeKeys::default()),
+        Arc::new(|_keys| {
+            let ai = FakeAi { gate: None };
+            Arc::new(AiRunner::empty().with_provider("api:anthropic", Arc::new(ai)))
+        }),
+    );
+    let a = acc("a@x.com");
+    env.active.activate(a.clone()).await.unwrap();
+    let store = env.account_store(&a);
+    store
+        .set_key_limit("anthropic:default", Some(0.000001))
+        .unwrap();
+    let at = chrono::Local::now().to_rfc3339();
+    let usage = json!({"source": "anthropic", "model": "claude-opus-5-5", "inputTokens": 1000,
+        "outputTokens": 1000, "credential": "default"});
+    store
+        .save_run(
+            &serde_json::from_value(json!({
+                "run": {"runId": uuid::Uuid::new_v4().to_string(), "status": "succeeded",
+                    "validationErrors": [], "rejectReason": null,
+                    "nodes": {"a": {"status": "succeeded", "output": {"output": "x"}, "error": null, "usage": usage}}},
+                "workflowId": "w1", "startedAt": at, "finishedAt": at,
+                "fileOps": [], "allowedRoots": [], "undo": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let req = AiRequest {
+        prompt: "분류".into(),
+        model: None,
+        effort: None,
+        schema: None,
+        key_name: None,
+        config_dir: None,
+        system: None,
+    };
+    let sup = env.active.sup().await.unwrap();
+    let e = sup
+        .ai()
+        .ask("api:anthropic", None, req, &|_| {})
+        .await
+        .unwrap_err();
+    assert!(e.0.contains("이번 달 한도"), "{}", e.0);
+}
