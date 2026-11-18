@@ -23,7 +23,7 @@ const failed = (runId = "r1", codes: Record<string, string> = {}): Live => ({
 });
 
 test("shows_first_failed_node", () => {
-  render(<RunErrorCard live={failed()} nodes={nodes} right={0} onShow={() => {}} />);
+  render(<RunErrorCard live={failed()} nodes={nodes} onShow={() => {}} />);
   expect(screen.getByText("2")).toBeTruthy();
   expect(screen.getByText("m 제목에서 멈췄어요")).toBeTruthy();
   expect(screen.getByRole("alert").className).toContain("ieum-rise-in");
@@ -33,33 +33,25 @@ test("buttons_call_back", () => {
   const onShow = vi.fn();
   const onOpenIntegrations = vi.fn();
   const live = failed("r1", { m: "GITHUB_AUTH" });
-  const { rerender } = render(<RunErrorCard live={live} nodes={nodes} right={0} onShow={onShow} onOpenIntegrations={onOpenIntegrations} />);
+  const { rerender } = render(<RunErrorCard live={live} nodes={nodes} onShow={onShow} onOpenIntegrations={onOpenIntegrations} />);
   fireEvent.click(screen.getByText("설정 > 연동 열기"));
   fireEvent.click(screen.getByText("노드 보기"));
   expect(onOpenIntegrations).toHaveBeenCalledTimes(1);
   expect(onShow).toHaveBeenCalledWith("m");
-  rerender(<RunErrorCard live={live} nodes={nodes} right={0} onShow={onShow} />);
+  rerender(<RunErrorCard live={live} nodes={nodes} onShow={onShow} />);
   expect(screen.queryByText("설정 > 연동 열기")).toBeNull();
 });
 
 test("ai_limit_opens_ai_settings", () => {
   const onOpenAiSettings = vi.fn();
-  render(<RunErrorCard live={failed("r1", { m: "AI_KEY_LIMIT" })} nodes={nodes} right={0} onShow={() => {}} onOpenIntegrations={() => {}} onOpenAiSettings={onOpenAiSettings} />);
+  render(<RunErrorCard live={failed("r1", { m: "AI_KEY_LIMIT" })} nodes={nodes} onShow={() => {}} onOpenIntegrations={() => {}} onOpenAiSettings={onOpenAiSettings} />);
   fireEvent.click(screen.getByText("설정 > AI 열기"));
   expect(onOpenAiSettings).toHaveBeenCalledTimes(1);
   expect(screen.queryByText("설정 > 연동 열기")).toBeNull();
 });
 
-test("narrow_canvas_shrinks_card", () => {
-  render(<RunErrorCard live={failed("r1", { m: "AI_KEY_LIMIT" })} nodes={nodes} right={980} onShow={() => {}} onOpenAiSettings={() => {}} />);
-  const card = screen.getByRole("alert");
-  // 채팅창·노드 패널이 넓게 덮어도 남은 폭 안에 들어가 왼쪽이 잘리지 않는다.
-  expect(card.style.maxWidth).toBe("calc(100% - 996px)");
-  expect(screen.getByText("설정 > AI 열기").parentElement?.className).toContain("flex-wrap");
-});
-
 // Editor처럼 실행마다 key를 준다.
-const card = (live: Live) => <RunErrorCard key={live.runId ?? ""} live={live} nodes={nodes} right={0} onShow={() => {}} />;
+const card = (live: Live) => <RunErrorCard key={live.runId ?? ""} live={live} nodes={nodes} onShow={() => {}} />;
 
 test("dismiss_is_per_run", () => {
   const live = failed();
@@ -106,11 +98,14 @@ test("new_run_during_close_is_not_dismissed", () => {
 });
 
 test("cancelled_run_shows_nothing", () => {
-  render(<RunErrorCard live={{ ...failed(), status: "cancelled" }} nodes={nodes} right={0} onShow={() => {}} />);
+  render(<RunErrorCard live={{ ...failed(), status: "cancelled" }} nodes={nodes} onShow={() => {}} />);
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
-test("right_offset_applied", () => {
-  render(<RunErrorCard live={failed()} nodes={nodes} right={592} onShow={() => {}} />);
-  expect(screen.getByRole("alert").style.right).toBe("592px");
+test("card_is_bottom_right_on_top", () => {
+  render(<RunErrorCard live={failed()} nodes={nodes} onShow={() => {}} />);
+  const card = screen.getByRole("alert");
+  expect(card.className).toContain("right-4");
+  expect(card.className).toContain("z-40");
+  expect(card.style.right).toBe("");
 });

@@ -342,7 +342,6 @@ export function Editor({
   // 취소한 실행은 실패로 보이지 않는다.
   const showRun = live.status !== "cancelled";
   const nodeRight = cover > 0 ? cover + 12 + 384 : 400;
-  const occupied = selected ? nodeRight : cover;
   const showNode = (nodeId: string) => {
     setSelectedId(nodeId);
     // 노드 패널(w-96 384)은 채팅창 왼쪽(cover + 12)에 놓인다. 채팅창이 없으면 오른쪽 여백 16.
@@ -407,7 +406,6 @@ export function Editor({
           key={live.runId ?? ""}
           live={live}
           nodes={wf.nodes}
-          right={occupied > 0 ? occupied + 16 : 16}
           onShow={showNode}
           onOpenIntegrations={onOpenIntegrations}
           onOpenAiSettings={onOpenAiSettings}

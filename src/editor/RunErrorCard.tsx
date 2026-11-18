@@ -6,18 +6,16 @@ import { type Live, opensAiSettings, opensIntegrations } from "../stores/runs";
 import { nodeTitle } from "./Canvas";
 import { useClosing } from "./useClosing";
 
-/** 실행이 실패하면 우측 하단에 뜨는 카드 — 화면 밖 노드의 실패도 놓치지 않게. 부르는 쪽이 key={runId}로 실행마다 새로 그려 닫음을 실행 단위로 둔다. */
+/** 실행이 실패하면 우측 하단에 뜨는 카드 — 화면 밖 노드의 실패도 놓치지 않게. 채팅창(z-30)·노드 패널이 열려 있어도 그 위에 뜬다. 부르는 쪽이 key={runId}로 실행마다 새로 그려 닫음을 실행 단위로 둔다. */
 export function RunErrorCard({
   live,
   nodes,
-  right,
   onShow,
   onOpenIntegrations,
   onOpenAiSettings,
 }: {
   live: Live;
   nodes: WfNode[];
-  right: number;
   onShow: (nodeId: string) => void;
   onOpenIntegrations?: () => void;
   onOpenAiSettings?: () => void;
@@ -31,9 +29,7 @@ export function RunErrorCard({
   return (
     <div
       role="alert"
-      // 채팅창·노드 패널이 넓게 덮으면 남은 폭(왼쪽 여백 16)에 맞춰 줄인다 — 고정 폭이면 왼쪽이 잘린다.
-      style={{ right, maxWidth: `calc(100% - ${right + 16}px)` }}
-      className={`absolute bottom-4 z-20 flex w-72 flex-col gap-2 rounded-[1rem] border-2 border-[#c2412d] bg-white p-3 shadow-[0.4rem_0.5rem_0_#f6d3cb,0_0_0_4px_rgba(194,65,45,.12)] ${
+      className={`absolute bottom-4 right-4 z-40 flex w-72 flex-col gap-2 rounded-[1rem] border-2 border-[#c2412d] bg-white p-3 shadow-[0.4rem_0.5rem_0_#f6d3cb,0_0_0_4px_rgba(194,65,45,.12)] ${
         closing ? "ieum-slide-out" : "ieum-rise-in"
       }`}
     >
@@ -45,7 +41,7 @@ export function RunErrorCard({
           <X size={14} aria-hidden="true" />
         </button>
       </div>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex gap-2">
         {opensIntegrations(live.codes[node.id]) && onOpenIntegrations && (
           <button type="button" onClick={onOpenIntegrations} className="rounded-brand-sm bg-black px-2.5 py-1 text-[0.72rem] font-bold text-white">
             {t("editor.runError.openIntegrations")}
