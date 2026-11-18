@@ -9,6 +9,7 @@ import { ConfigPanel } from "../editor/ConfigPanel";
 import { Palette } from "../editor/Palette";
 import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
 import { Toolbar } from "../editor/Toolbar";
+import { useClosing } from "../editor/useClosing";
 import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
 import { isLocal, newNode, nextPosition } from "../nodes/defs";
@@ -42,19 +43,13 @@ export function useEscape(onEscape: () => void, active = true) {
  * 부모는 `relative`, 캔버스는 그 안에서 `absolute inset-0`(패널 뒤로 전체 폭).
  */
 export function SidePanel({ label, header, onClose, children }: { label: string; header: ReactNode; onClose: () => void; children: ReactNode }) {
-  const [closing, setClosing] = useState(false);
-  // 열 때는 CSS(@starting-style)로 밀려 들어오고, 닫을 때는 밀려 나간 뒤 없앤다. 움직임 줄이기면 바로.
-  const close = () => {
-    if (!window.matchMedia?.("(prefers-reduced-motion: no-preference)").matches) return onClose();
-    setClosing(true);
-    setTimeout(onClose, 150);
-  };
+  const { closing, close } = useClosing(onClose);
   useEscape(close);
   return (
     <aside
       aria-label={label}
-      className={`absolute top-4 right-4 bottom-4 z-20 flex w-96 flex-col overflow-y-auto rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] transition-[translate,opacity] duration-150 ease-out starting:translate-x-6 starting:opacity-0 motion-reduce:transition-none ${
-        closing ? "translate-x-6 opacity-0" : ""
+      className={`absolute top-4 right-4 bottom-4 z-20 flex w-96 flex-col overflow-y-auto rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] ${
+        closing ? "ieum-slide-out" : "ieum-slide-in"
       }`}
     >
       <div className="flex items-center gap-2.5 border-b border-neutral-200 px-5 py-4">

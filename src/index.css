@@ -58,3 +58,61 @@ body {
 		animation: none;
 	}
 }
+
+/* 열기·닫기 움직임. @starting-style은 구형 WKWebView가 몰라서 @keyframes로 한다. */
+@keyframes ieum-grow {
+	from {
+		opacity: 0;
+		transform: scale(0.92);
+	}
+}
+.ieum-grow-tr,
+.ieum-grow-br {
+	animation: ieum-grow 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ieum-grow-tr {
+	transform-origin: top right;
+}
+.ieum-grow-br {
+	transform-origin: bottom right;
+}
+@keyframes ieum-slide-in {
+	from {
+		opacity: 0;
+		transform: translateX(40px);
+	}
+}
+.ieum-slide-in {
+	animation: ieum-slide-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes ieum-slide-out {
+	to {
+		opacity: 0;
+		transform: translateX(40px);
+	}
+}
+.ieum-slide-out {
+	animation: ieum-slide-out 0.16s ease-in forwards;
+}
+@keyframes ieum-unfold {
+	from {
+		max-height: 0;
+		opacity: 0;
+	}
+	to {
+		max-height: 12rem;
+	}
+}
+.ieum-unfold {
+	overflow: hidden;
+	animation: ieum-unfold 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+	.ieum-grow-tr,
+	.ieum-grow-br,
+	.ieum-slide-in,
+	.ieum-slide-out,
+	.ieum-unfold {
+		animation: none;
+	}
+}
