@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::credentials::api_label_in;
 use crate::pricing;
-use crate::store::{ChatUsage, Notified, Store, StoredRun};
+use crate::store::{ChatUsage, Store, StoredRun};
 use crate::usage::{range_start, summarize};
 
 const UNREADABLE: &str = "이번 달 사용량을 읽지 못해 한도를 확인할 수 없어요.";
@@ -118,21 +118,17 @@ pub fn after_use(
     for (source, id, key, limit) in limited {
         let spend = spends.get(&key).copied().unwrap_or(0.0);
         let lv = level(spend, limit);
-        let sent = file
-            .notified
-            .get(&key)
-            .filter(|n| n.month == month)
-            .map_or(0, |n| n.level);
-        if lv <= sent {
+        if lv == 0 {
             continue;
         }
-        let n = Notified {
-            month: month.clone(),
-            level: lv,
-        };
-        if let Err(e) = store.set_notified(&key, n) {
-            eprintln!("[ieum] 키 한도 알림 기록을 쓰지 못했어요: {e}");
-            return Vec::new();
+        // 그 키만 건너뛴다 — 이미 기록한 다른 키의 알림은 돌려줘야 영영 빠지지 않는다.
+        match store.raise_notified(&key, &month, lv, limit) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                eprintln!("[ieum] 키 한도 알림 기록을 쓰지 못했어요: {e}");
+                continue;
+            }
         }
         out.push(KeyLimitNotice {
             source: source.clone(),

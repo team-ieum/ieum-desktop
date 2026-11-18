@@ -526,6 +526,35 @@ impl Store {
         write_atomic(&self.root.join("key-limits.json"), &f)
     }
 
+    /// 알림 단계를 올린다 — 비교와 기록을 같은 잠금 안에서 해 알림이 두 번 가지 않게.
+    /// 한도가 `limit` 그대로이고 그 달 기록 단계가 `level`보다 낮을 때만 쓰고 `true`.
+    /// 그새 한도가 바뀌었으면(옛 한도로 계산한 단계) 쓰지 않는다.
+    pub fn raise_notified(
+        &self,
+        key: &str,
+        month: &str,
+        level: u8,
+        limit: f64,
+    ) -> Result<bool, String> {
+        let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut f = self.key_limits();
+        let sent = f
+            .notified
+            .get(key)
+            .filter(|n| n.month == month)
+            .map_or(0, |n| n.level);
+        if f.limits.get(key) != Some(&limit) || level <= sent {
+            return Ok(false);
+        }
+        let n = Notified {
+            month: month.to_string(),
+            level,
+        };
+        f.notified.insert(key.to_string(), n);
+        write_atomic(&self.root.join("key-limits.json"), &f)?;
+        Ok(true)
+    }
+
     /// 지운 키의 한도·알림 기록을 뺀다. 지울 게 없으면 쓰지 않는다.
     pub fn remove_key_limit(&self, key: &str) -> Result<(), String> {
         let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());

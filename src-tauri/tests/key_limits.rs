@@ -285,6 +285,37 @@ fn new_month_notifies_again() {
 }
 
 #[test]
+fn raise_notified_compares_under_lock() {
+    let (_t, s) = setup();
+    s.set_key_limit(K, Some(1.0)).unwrap();
+    // 거의 동시에 끝난 두 실행: 같은 단계는 한 번만.
+    assert!(s.raise_notified(K, "2026-11", 80, 1.0).unwrap());
+    assert!(!s.raise_notified(K, "2026-11", 80, 1.0).unwrap());
+    // 기록을 읽는 사이 한도를 올렸으면 옛 한도로 계산한 단계는 쓰지 않는다.
+    s.set_key_limit(K, Some(5.0)).unwrap();
+    assert!(!s.raise_notified(K, "2026-11", 100, 1.0).unwrap());
+    assert!(!s.key_limits().notified.contains_key(K));
+    // 한도가 없는 키도 쓰지 않는다.
+    assert!(!s.raise_notified("openai:k9", "2026-11", 80, 1.0).unwrap());
+}
+
+#[test]
+fn each_limited_key_notifies() {
+    let (_t, s) = setup();
+    s.set_key_limit("anthropic:k1", Some(1.0)).unwrap();
+    s.set_key_limit("anthropic:k2", Some(1.0)).unwrap();
+    spend(&s, Some("k1"), 425_000); // $0.85
+    spend(&s, Some("k2"), 600_000); // $1.20
+    let used = vec![
+        ("anthropic".to_string(), "k1".to_string()),
+        ("anthropic".to_string(), "k2".to_string()),
+    ];
+    let n = after_use(&s, &used, now());
+    let got: Vec<_> = n.iter().map(|n| (n.label.as_str(), n.level)).collect();
+    assert_eq!(got, [("k1", 80), ("k2", 100)]);
+}
+
+#[test]
 fn remembers_after_restart() {
     let (t, s) = setup();
     s.set_key_limit("anthropic:k1", Some(1.0)).unwrap();
