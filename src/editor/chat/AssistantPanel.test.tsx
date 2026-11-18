@@ -125,6 +125,7 @@ test("assistant_animates_open_and_close", async () => {
     expect(cover).toHaveBeenLastCalledWith(0); // 가리는 폭은 바로 0
     expect(panel()!.hidden).toBe(false); // 빠지는 움직임 동안은 보인다
     expect(panel()!.className).toContain("ieum-slide-out");
+    expect(panel()!.querySelector("[data-slot]:not([hidden])")).not.toBeNull(); // 본문도 함께 빠진다
     act(() => void vi.advanceTimersByTime(160));
     expect(panel()!.hidden).toBe(true);
   } finally {

@@ -145,8 +145,8 @@ export function AssistantPanel({
           </div>
           {workflowId && (
             <>
-              <TerminalSlot workflowId={workflowId} visible={open && mode === "terminal"} />
-              <ChatSlot workflowId={workflowId} visible={open && mode === "chat"} nodeNames={nodeNames} />
+              <TerminalSlot workflowId={workflowId} visible={shown && mode === "terminal"} />
+              <ChatSlot workflowId={workflowId} visible={shown && mode === "chat"} nodeNames={nodeNames} />
             </>
           )}
         </aside>
