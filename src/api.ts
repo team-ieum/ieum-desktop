@@ -80,7 +80,7 @@ export type ExecEvent =
   | { kind: "nodeStarted"; nodeId: string }
   | { kind: "nodeChunk"; nodeId: string; text: string }
   | { kind: "nodeSucceeded"; nodeId: string; output: Obj }
-  | { kind: "nodeFailed"; nodeId: string; message: string }
+  | { kind: "nodeFailed"; nodeId: string; message: string; code?: string }
   | { kind: "nodeSkipped"; nodeId: string }
   | { kind: "runFinished"; runId: string; status: RunStatus };
 /** lib.rs가 내보내는 `exec-event` 모양 */
