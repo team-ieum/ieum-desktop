@@ -178,7 +178,7 @@ pub async fn set_key_limit(
     if !API_PROVIDERS.contains(&source.as_str()) {
         return Err("지원하지 않는 공급원이에요.".into());
     }
-    if id.is_empty() || id.contains(':') {
+    if !key_limits::valid_key_id(&id) {
         return Err("키 id가 올바르지 않아요.".into());
     }
     active

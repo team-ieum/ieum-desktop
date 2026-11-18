@@ -4,7 +4,7 @@ use std::fs;
 
 use chrono::{DateTime, Local, TimeZone};
 use ieum_desktop_lib::key_limits::{
-    LimitGate, after_use, level, money, month_spend, used_keys, view,
+    LimitGate, after_use, level, money, month_spend, used_keys, valid_key_id, view,
 };
 use ieum_desktop_lib::pricing;
 use ieum_desktop_lib::store::{ChatUsage, KeyLimitsFile, Notified, Store, StoredRun};
@@ -414,4 +414,23 @@ fn view_has_unused_limited_key() {
     let v = view(&s, now()).unwrap();
     assert!(v.limits.contains_key("anthropic:k1"));
     assert!(!v.spend.contains_key("anthropic:k1"));
+}
+
+#[test]
+fn valid_key_id_accepts_default_and_8_hex_only() {
+    for (id, ok) in [
+        ("default", true),
+        ("3fa9c1d2", true),
+        ("ABCDEF01", true),
+        ("", false),
+        ("system", false),
+        ("3fa9c1d", false),
+        ("3fa9c1d2a", false),
+        ("3fa9c1g2", false),
+        ("../../x", false),
+        ("a:b", false),
+        ("３fa9c1d2", false),
+    ] {
+        assert_eq!(valid_key_id(id), ok, "{id:?}");
+    }
 }

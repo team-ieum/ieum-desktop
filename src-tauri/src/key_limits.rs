@@ -15,6 +15,11 @@ use crate::usage::{range_start, summarize};
 
 const UNREADABLE: &str = "이번 달 사용량을 읽지 못해 한도를 확인할 수 없어요.";
 
+/// 한도를 걸 수 있는 키 id — 기본 키(`default`) 또는 저장된 키의 8자 16진 id.
+pub fn valid_key_id(id: &str) -> bool {
+    id == "default" || (id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// 공급원 표시 이름.
 pub fn provider_name(source: &str) -> &'static str {
     match source {
