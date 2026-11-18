@@ -1050,13 +1050,6 @@ impl Supervisor {
             clip_http_bodies(&mut stored.run, &wf.workflow);
         }
         let saved = self.store().save_run(&stored);
-        // 한도 알림은 기록을 쓴 뒤에 본다 — 이번 실행 지출이 이번 달 합계에 들어가야 한다.
-        if saved.is_ok() {
-            let used = used_keys(crate::usage::run_usages(&stored));
-            for n in after_use(self.store(), &used, Local::now()) {
-                emit(AppEvent::KeyLimit(n));
-            }
-        }
         // 못 되돌린 경로는 화면이 기록에서 읽는다 — 기록을 쓴 뒤에 알린다.
         if stored.undo.as_ref().is_some_and(|u| !u.skipped.is_empty()) {
             emit(AppEvent::TestUndoFailed {
@@ -1089,6 +1082,14 @@ impl Supervisor {
                     failed_node,
                 },
             );
+        }
+        // 한도 알림은 기록을 쓴 뒤에 본다 — 이번 실행 지출이 이번 달 합계에 들어가야 한다.
+        // 이번 달 기록을 다 읽으므로 실행 끝 이벤트 뒤에 둔다 — 화면의 끝 표시가 늦어지지 않게.
+        if saved.is_ok() {
+            let used = used_keys(crate::usage::run_usages(&stored));
+            for n in after_use(self.store(), &used, Local::now()) {
+                emit(AppEvent::KeyLimit(n));
+            }
         }
         saved?;
         Ok(stored.run.run_id)

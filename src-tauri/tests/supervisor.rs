@@ -1524,4 +1524,18 @@ async fn run_over_limit_emits_key_limit_once() {
         .collect();
     assert_eq!(got.len(), 1, "{got:?}");
     assert_eq!((got[0].source.as_str(), got[0].level), ("anthropic", 100));
+    // 한도 알림은 실행 끝 이벤트 뒤 — 화면의 끝 표시가 한도 확인을 기다리지 않는다.
+    let events = env.events.lock().unwrap();
+    let at = |f: &dyn Fn(&AppEvent) -> bool| events.iter().position(f).unwrap();
+    let finished = at(&|e| {
+        matches!(
+            e,
+            AppEvent::Exec {
+                event: ExecEvent::RunFinished { .. },
+                ..
+            }
+        )
+    });
+    let limit = at(&|e| matches!(e, AppEvent::KeyLimit(_)));
+    assert!(finished < limit, "끝 {finished}, 한도 {limit}");
 }
