@@ -273,3 +273,60 @@ test("follow_calls_fitView_with_panel_padding_and_waits_for_any_user_move_to_end
   expect(probe.fitView).toHaveBeenCalledTimes(3);
   clock.mockRestore();
 });
+
+function runError(code: string, extra: Record<string, unknown> = {}) {
+  const onSelect = vi.fn();
+  const onOpenIntegrations = vi.fn();
+  const r = render(
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas
+        workflow={wf}
+        statuses={{ m: "failed" }}
+        runErrors={{ m: "GitHub 연결이 필요해요." }}
+        runCodes={{ m: code }}
+        onSelect={onSelect}
+        onOpenIntegrations={onOpenIntegrations}
+        {...extra}
+      />
+    </div>,
+  );
+  return { ...r, onSelect, onOpenIntegrations };
+}
+
+test("failed_node_shows_run_error_strip", async () => {
+  const { container, onSelect, onOpenIntegrations } = runError("GITHUB_AUTH");
+  expect(screen.getByText("실행 실패")).toBeTruthy();
+  expect(screen.getByText("GitHub 연결이 필요해요.")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByText("설정 > 연동 열기")));
+  expect(onOpenIntegrations).toHaveBeenCalledTimes(1);
+  expect(onSelect).not.toHaveBeenCalled();
+  const article = container.querySelector('.react-flow__node[data-id="m"] article')!;
+  expect(article.className).toContain("#c2412d");
+});
+
+test("strip_without_link_for_other_codes", () => {
+  runError("GITHUB_INPUT");
+  expect(screen.getByText("실행 실패")).toBeTruthy();
+  expect(screen.queryByText("설정 > 연동 열기")).toBeNull();
+});
+
+test("no_strip_without_run_errors", () => {
+  render(
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas workflow={wf} statuses={{ m: "failed" }} />
+    </div>,
+  );
+  expect(screen.queryByText("실행 실패")).toBeNull();
+});
+
+test("focus_moves_view_to_node", async () => {
+  probe.fitView.mockClear();
+  const view = (focus?: { id: string; nonce: number; right: number }) => (
+    <div style={{ width: 800, height: 600 }}>
+      <Canvas workflow={wf} focus={focus} />
+    </div>
+  );
+  const r = render(view());
+  await act(async () => r.rerender(view({ id: "m", nonce: 1, right: 400 })));
+  expect(probe.fitView).toHaveBeenCalledWith(expect.objectContaining({ nodes: [{ id: "m" }] }));
+});

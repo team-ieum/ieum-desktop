@@ -58,3 +58,88 @@ body {
 		animation: none;
 	}
 }
+
+/* 열기·닫기 움직임. @starting-style은 구형 WKWebView가 몰라서 @keyframes로 한다. */
+@keyframes ieum-grow {
+	from {
+		opacity: 0;
+		transform: scale(0.92);
+	}
+}
+.ieum-grow-br {
+	animation: ieum-grow 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ieum-grow-br {
+	transform-origin: bottom right;
+}
+/* 채팅창: 오른쪽 위 둥근 버튼에서 펼치고 다시 그 안으로 접는다 */
+@keyframes ieum-circle-in {
+	from {
+		-webkit-clip-path: circle(24px at calc(100% - 24px) 24px);
+		clip-path: circle(24px at calc(100% - 24px) 24px);
+	}
+	to {
+		-webkit-clip-path: circle(150% at calc(100% - 24px) 24px);
+		clip-path: circle(150% at calc(100% - 24px) 24px);
+	}
+}
+@keyframes ieum-circle-out {
+	from {
+		-webkit-clip-path: circle(150% at calc(100% - 24px) 24px);
+		clip-path: circle(150% at calc(100% - 24px) 24px);
+	}
+	to {
+		-webkit-clip-path: circle(24px at calc(100% - 24px) 24px);
+		clip-path: circle(24px at calc(100% - 24px) 24px);
+		opacity: 0.6;
+	}
+}
+.ieum-circle-in {
+	animation: ieum-circle-in 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.ieum-circle-out {
+	animation: ieum-circle-out 0.24s cubic-bezier(0.4, 0, 0.6, 1) forwards;
+	pointer-events: none;
+}
+@keyframes ieum-slide-in {
+	from {
+		opacity: 0;
+		transform: translateX(40px);
+	}
+}
+.ieum-slide-in {
+	animation: ieum-slide-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes ieum-slide-out {
+	to {
+		opacity: 0;
+		transform: translateX(40px);
+	}
+}
+.ieum-slide-out {
+	animation: ieum-slide-out 0.16s ease-in forwards;
+	pointer-events: none; /* 빠지는 동안 투명해지는 패널이 클릭을 받지 않게 */
+}
+@keyframes ieum-unfold {
+	from {
+		max-height: 0;
+		opacity: 0;
+	}
+	to {
+		max-height: 12rem;
+	}
+}
+.ieum-unfold {
+	overflow: hidden;
+	animation: ieum-unfold 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+	.ieum-grow-br,
+	.ieum-circle-in,
+	.ieum-circle-out,
+	.ieum-slide-in,
+	.ieum-slide-out,
+	.ieum-unfold {
+		animation: none;
+	}
+}

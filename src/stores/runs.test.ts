@@ -1,6 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { api, type ExecEvent } from "../api";
-import { applyExecEvent, emptyLive, subscribeExecEvents, type Live } from "./runs";
+import { applyExecEvent, emptyLive, opensIntegrations, subscribeExecEvents, type Live } from "./runs";
 
 test("exec_events_subscribed_once", () => {
   const on = vi.spyOn(api, "onExecEvent").mockResolvedValue(() => {});
@@ -39,4 +39,20 @@ test("run_view_events_idempotent", () => {
 
   const next = applyExecEvent(live, { workflowId: W, event: { kind: "runStarted", runId: "r2" } });
   expect(next).toMatchObject({ runId: "r2", status: "running", nodes: {}, chunks: {} });
+});
+
+test("node_failed_keeps_code", () => {
+  const W = "wf-1";
+  const started = play(emptyLive(W), [[W, { kind: "runStarted", runId: "r1" }]]);
+  const coded = play(started, [[W, { kind: "nodeFailed", nodeId: "b", message: "m", code: "GITHUB_AUTH" }]]);
+  expect(coded.codes).toEqual({ b: "GITHUB_AUTH" });
+  const plain = play(coded, [[W, { kind: "nodeFailed", nodeId: "c", message: "m" }]]);
+  expect(plain.codes).toEqual({ b: "GITHUB_AUTH" });
+  expect(plain.errors.c).toBe("m");
+  expect(play(plain, [[W, { kind: "runStarted", runId: "r2" }]]).codes).toEqual({});
+});
+
+test("opens_integrations_by_first_token", () => {
+  for (const c of ["GITHUB_AUTH", "GITHUB_NOT_CONNECTED", "GITHUB_AUTH owner"]) expect(opensIntegrations(c)).toBe(true);
+  for (const c of ["GITHUB_INPUT", "GITHUB_RATE_LIMIT", undefined, ""]) expect(opensIntegrations(c)).toBe(false);
 });

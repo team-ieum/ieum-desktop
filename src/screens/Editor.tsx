@@ -7,8 +7,10 @@ import { FinishCard } from "../editor/chat/FinishCard";
 import { HttpConfirm, HttpTestCard } from "../editor/chat/HttpTestCard";
 import { ConfigPanel } from "../editor/ConfigPanel";
 import { Palette } from "../editor/Palette";
+import { RunErrorCard } from "../editor/RunErrorCard";
 import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
 import { Toolbar } from "../editor/Toolbar";
+import { useClosing } from "../editor/useClosing";
 import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
 import { isLocal, newNode, nextPosition } from "../nodes/defs";
@@ -41,20 +43,28 @@ export function useEscape(onEscape: () => void, active = true) {
  * 캔버스 위 오른쪽에 떠 있는 카드 — 머리 + [X]. Esc로도 닫힌다.
  * 부모는 `relative`, 캔버스는 그 안에서 `absolute inset-0`(패널 뒤로 전체 폭).
  */
-export function SidePanel({ label, header, onClose, children }: { label: string; header: ReactNode; onClose: () => void; children: ReactNode }) {
-  const [closing, setClosing] = useState(false);
-  // 열 때는 CSS(@starting-style)로 밀려 들어오고, 닫을 때는 밀려 나간 뒤 없앤다. 움직임 줄이기면 바로.
-  const close = () => {
-    if (!window.matchMedia?.("(prefers-reduced-motion: no-preference)").matches) return onClose();
-    setClosing(true);
-    setTimeout(onClose, 150);
-  };
+export function SidePanel({
+  label,
+  header,
+  onClose,
+  right,
+  children,
+}: {
+  label: string;
+  header: ReactNode;
+  onClose: () => void;
+  /** 오른쪽 여백(px). 없으면 right-4 — 채팅창이 열려 있으면 그 왼쪽으로 비킨다. */
+  right?: number;
+  children: ReactNode;
+}) {
+  const { closing, close } = useClosing(onClose);
   useEscape(close);
   return (
     <aside
       aria-label={label}
-      className={`absolute top-4 right-4 bottom-4 z-20 flex w-96 flex-col overflow-y-auto rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] transition-[translate,opacity] duration-150 ease-out starting:translate-x-6 starting:opacity-0 motion-reduce:transition-none ${
-        closing ? "translate-x-6 opacity-0" : ""
+      style={right === undefined ? undefined : { right }}
+      className={`absolute top-4 ${right === undefined ? "right-4" : ""} bottom-4 z-20 flex w-96 flex-col overflow-y-auto rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] ${
+        closing ? "ieum-slide-out" : "ieum-slide-in"
       }`}
     >
       <div className="flex items-center gap-2.5 border-b border-neutral-200 px-5 py-4">
@@ -143,6 +153,7 @@ export function Editor({
   onOpenRuns,
   onDirty,
   onIdChange,
+  onOpenIntegrations,
 }: {
   id: string | null;
   onBack: () => void;
@@ -151,6 +162,8 @@ export function Editor({
   onDirty?: (dirty: boolean) => void;
   /** 지금 보여 주는 워크플로우 id — 새 캔버스는 선저장 뒤에 생긴다. 아직 없거나 편집기를 떠나면 "". */
   onIdChange?: (id: string) => void;
+  /** 오류 카드·띠의 [설정 › 연동 열기] — GitHub 연결 오류일 때만 보인다. */
+  onOpenIntegrations?: () => void;
 }) {
   const entry = useWorkflows((s) => s.list.find((w) => w.id === id));
   const save = useWorkflows((s) => s.save);
@@ -184,6 +197,8 @@ export function Editor({
   const [techInfo, setTechInfo] = useState(false);
   /** Assistant 패널이 가리는 캔버스 오른쪽 폭(px). */
   const [cover, setCover] = useState(0);
+  /** 오류 카드 [노드 보기] — nonce가 바뀔 때마다 캔버스가 그 노드로 보기를 옮긴다. */
+  const [focus, setFocus] = useState<{ id: string; nonce: number; right: number }>();
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [status, setStatus] = useState<{ saving?: boolean; error?: string }>({});
   const live = useRuns((s) => s.live[draft.id]) ?? emptyLive(draft.id);
@@ -321,6 +336,15 @@ export function Editor({
   );
   const unsaved = dirty || !draft.id;
   const nodeStatus = selected && live.nodes[selected.id];
+  // 취소한 실행은 실패로 보이지 않는다.
+  const showRun = live.status !== "cancelled";
+  const nodeRight = cover > 0 ? cover + 12 + 384 : 400;
+  const occupied = selected ? nodeRight : cover;
+  const showNode = (nodeId: string) => {
+    setSelectedId(nodeId);
+    // 노드 패널(w-96 384)은 채팅창 왼쪽(cover + 12)에 놓인다. 채팅창이 없으면 오른쪽 여백 16.
+    setFocus((f) => ({ id: nodeId, nonce: (f?.nonce ?? 0) + 1, right: nodeRight }));
+  };
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -360,6 +384,10 @@ export function Editor({
             onNodeClick={setSelectedId}
             techInfo={techInfo}
             rightCover={cover}
+            runErrors={showRun ? live.errors : undefined}
+            runCodes={showRun ? live.codes : undefined}
+            onOpenIntegrations={onOpenIntegrations}
+            focus={focus}
           />
         </div>
         <PaletteButton onAdd={add} />
@@ -371,9 +399,18 @@ export function Editor({
         />
         <FinishCard workflowId={draft.id} version={base.updatedAt} />
         <HttpTestCard key={draft.id} workflowId={draft.id} />
+        <RunErrorCard
+          key={live.runId ?? ""}
+          live={live}
+          nodes={wf.nodes}
+          right={occupied > 0 ? occupied + 16 : 16}
+          onShow={showNode}
+          onOpenIntegrations={onOpenIntegrations}
+        />
         {testRun.ask && <HttpConfirm lines={testRun.ask} skipLabel={t("common.cancel")} onAnswer={testRun.answer} />}
         {selected && (
           <SidePanel
+            right={cover > 0 ? cover + 12 : undefined}
             label={selected.label || nodeTitle(selected.event)}
             onClose={() => setSelectedId(null)}
             header={

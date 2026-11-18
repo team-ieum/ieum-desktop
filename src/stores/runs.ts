@@ -10,6 +10,8 @@ export interface Live {
   status: RunStatus | "running" | null;
   nodes: Record<string, NodeRunStatus>;
   errors: Record<string, string>;
+  /** 실패 노드의 오류 코드(코드가 있는 실패만) */
+  codes: Record<string, string>;
   chunks: Record<string, string>;
 }
 
@@ -19,8 +21,15 @@ export const emptyLive = (workflowId: string): Live => ({
   status: null,
   nodes: {},
   errors: {},
+  codes: {},
   chunks: {},
 });
+
+/** 코드 첫 토큰이 GitHub 연결 오류면 [설정 › 연동 열기]를 보인다. */
+export function opensIntegrations(code: string | undefined): boolean {
+  const head = code?.split(" ")[0];
+  return head === "GITHUB_NOT_CONNECTED" || head === "GITHUB_AUTH";
+}
 
 const TERMINAL: NodeRunStatus[] = ["succeeded", "failed", "skipped"];
 
@@ -53,6 +62,7 @@ export function applyExecEvent(live: Live, { workflowId, event: e }: ExecPayload
         ...live,
         nodes: { ...live.nodes, [e.nodeId]: "failed" },
         errors: { ...live.errors, [e.nodeId]: e.message },
+        codes: e.code ? { ...live.codes, [e.nodeId]: e.code } : live.codes,
       };
   }
 }

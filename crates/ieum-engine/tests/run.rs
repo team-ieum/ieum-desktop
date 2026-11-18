@@ -224,7 +224,7 @@ async fn failure_marks_rest_not_run() {
     assert_eq!(r.nodes["a"].error.as_deref(), Some("일부러 실패"));
     assert_eq!(status(&r, "b"), NodeStatus::NotRun);
     assert!(events.iter().any(|e| matches!(e,
-        ExecEvent::NodeFailed { node_id, message } if node_id == "a" && message == "일부러 실패")));
+        ExecEvent::NodeFailed { node_id, message, .. } if node_id == "a" && message == "일부러 실패")));
     assert!(matches!(
         events.last(),
         Some(ExecEvent::RunFinished {
@@ -507,4 +507,20 @@ async fn node_error_code_lands_in_record() {
             .get("errorCode")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn node_failed_event_carries_code() {
+    let failed_json = |cfg: Value| async move {
+        let (_, events) = run(json!([trigger(), ai("a", cfg)]), json!([edge("t", "a")])).await;
+        let ev = events
+            .iter()
+            .find(|e| matches!(e, ExecEvent::NodeFailed { .. }))
+            .expect("NodeFailed 이벤트");
+        serde_json::to_value(ev).unwrap()
+    };
+    let with = failed_json(json!({"fail": true, "code": "GITHUB_AUTH"})).await;
+    assert_eq!(with["code"], "GITHUB_AUTH");
+    let without = failed_json(json!({"fail": true})).await;
+    assert!(!without.as_object().unwrap().contains_key("code"));
 }
