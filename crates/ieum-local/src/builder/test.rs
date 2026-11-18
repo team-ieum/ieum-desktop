@@ -176,7 +176,11 @@ impl Builder {
                 // `rec.error` 원문에는 경로가 섞인다 — 코드와 고정 문구만.
                 let (code, field) = failure(rec.error_code.as_deref());
                 line["code"] = json!(code);
-                line["message"] = code.message().into();
+                line["message"] = match code {
+                    // 입력 검사 문구는 agent 고정 문구라 사용자 값이 없다 — 어느 칸인지 AI가 알게 그대로.
+                    Code::GithubInput => rec.error.clone().unwrap_or_default().into(),
+                    _ => code.message().into(),
+                };
                 if let Some(field) = field {
                     line["field"] = field.into();
                 }
@@ -275,6 +279,26 @@ mod tests {
         assert_eq!(
             failure(Some("FIELD_INVALID webhookCredentialId")),
             (Code::FieldInvalid, Some("webhookCredentialId"))
+        );
+        // GitHub 노드 — AI가 칸·연결·저장소 중 무엇이 틀렸는지 가릴 수 있게.
+        for (raw, want) in [
+            ("GITHUB_INPUT", Code::GithubInput),
+            ("GITHUB_NOT_CONNECTED", Code::GithubNotConnected),
+            ("GITHUB_AUTH", Code::GithubAuth),
+            ("GITHUB_UNREACHABLE", Code::GithubUnreachable),
+            ("GITHUB_RATE_LIMIT", Code::GithubRateLimit),
+            ("GITHUB_FORBIDDEN", Code::GithubForbidden),
+            ("GITHUB_NOT_FOUND", Code::GithubNotFound),
+            ("GITHUB_MOVED", Code::GithubMoved),
+            ("GITHUB_GONE", Code::GithubGone),
+            ("GITHUB_INVALID", Code::GithubInvalid),
+            ("GITHUB_TOO_LARGE", Code::GithubTooLarge),
+        ] {
+            assert_eq!(failure(Some(raw)), (want, None), "{raw}");
+        }
+        assert_eq!(
+            failure(Some("GITHUB_STATUS 429")),
+            (Code::GithubStatus, Some("429"))
         );
     }
 }

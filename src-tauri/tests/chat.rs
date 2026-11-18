@@ -1,5 +1,7 @@
 //! 채팅 패널의 앱 쪽 한 턴(`chat::send`). 모든 파일은 임시 폴더 안, AI는 답을 미리 적어 둔 가짜.
 
+mod github_support;
+
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use github_support::no_github;
 use ieum_desktop_lib::builder_host::{AppHost, no_pick};
 use ieum_desktop_lib::chat::{CHAT_BUSY, CHAT_EMPTY, CHAT_MODEL_REQUIRED, send};
 use ieum_desktop_lib::credentials::AccountCredentials;
@@ -128,6 +131,7 @@ fn env(script: Arc<Script>) -> Env {
         home: root.clone(),
         trash_dir: root.join("trash"),
         ai: Arc::new(ai.with_resolver(Arc::new(creds.clone()))),
+        github: no_github(),
         emit: Arc::new(|_| {}),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),

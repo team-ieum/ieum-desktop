@@ -11,7 +11,8 @@ const fmt = (...prefixes: string[]) => (e: string) => prefixes.some((p) => e.sta
 
 const GROUPS = [
   { id: "trigger", title: () => t("editor.kind.TRIGGER"), has: kind("TRIGGER") },
-  { id: "local", title: () => t("editor.local"), has: kind("ACTION") },
+  { id: "local", title: () => t("editor.local"), has: (e: string) => kind("ACTION")(e) && isLocal(e) },
+  { id: "github", title: () => t("palette.group.github"), has: (e: string) => e.startsWith("github.") },
   { id: "ai", title: () => t("editor.group.ai"), has: kind("AI") },
   { id: "flow", title: () => t("editor.group.flow"), has: kind("CONDITION") },
   { id: "transform", title: () => t("palette.group.transform"), has: (e: string) => e === "transform.map" },

@@ -15,7 +15,7 @@ const nodeButtons = () => screen.queryAllByRole("button").filter((b) => !b.hasAt
 test("palette_starts_collapsed_with_counts", () => {
   render(<Palette onAdd={() => {}} />);
   expect(nodeButtons()).toHaveLength(0);
-  expect(toggles()).toHaveLength(10);
+  expect(toggles()).toHaveLength(11);
   expect(toggles().every((b) => b.getAttribute("aria-expanded") === "false")).toBe(true);
   expect(toggle("글").textContent).toBe("글12");
   expect(toggle("숫자").textContent).toBe("숫자4");

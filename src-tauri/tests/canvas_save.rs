@@ -1,11 +1,14 @@
 //! 캔버스 저장 — 화면이 읽은 `updatedAt`이 저장본과 다르면 덮지 않는다.
 
+mod github_support;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use github_support::no_github;
 use ieum_desktop_lib::commands::save_from_canvas;
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{AppEvent, Deps, STALE, Supervisor};
@@ -57,6 +60,7 @@ fn env() -> Env {
         home: root.clone(),
         trash_dir: root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", Arc::new(FakeAi))),
+        github: no_github(),
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),

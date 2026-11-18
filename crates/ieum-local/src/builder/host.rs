@@ -67,6 +67,21 @@ pub struct HttpLine {
     pub sends: Vec<HttpSend>,
     /// 본문이 있는가(null 아님).
     pub has_body: bool,
+    /// GitHub 쓰기 노드면 어느 저장소에 무엇을 하는지 — `method`·`url`은 빈 글.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<GithubTarget>,
+}
+
+/// GitHub 쓰기 노드 확인 줄의 대상 — 둘 다 참조식 원문 그대로.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GithubTarget {
+    /// 노드 종류 — 카드가 줄 머리를 노드 제목으로 보인다(만들기·수정·라벨·댓글을 가리게).
+    pub event: String,
+    /// `owner/repo`
+    pub repo: String,
+    /// 이슈 만들기는 제목, 나머지는 `#번호`.
+    pub summary: String,
 }
 
 /// 요청에 실려 나가는 앞 노드 값 하나 — 이름만, 값은 아니다.

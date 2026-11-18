@@ -13,11 +13,12 @@ use ieum_engine::schedule::{
     Decision, GRACE, Schedule, decide, schedule_cron, schedule_output, to_quartz, triggered_at,
 };
 use ieum_engine::{
-    BuiltinRunners, Catalog, ExecEvent, NodeRunner, NodeStatus, RunResult, RunStatus, Runners,
-    ValidationError, Workflow, run_workflow, validate,
+    BuiltinRunners, Catalog, ExecEvent, GITHUB_EVENTS, NodeRunner, NodeStatus, RunResult,
+    RunStatus, Runners, ValidationError, Workflow, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
 use ieum_local::builder::{HttpLine, TestRun, TestTrigger};
+use ieum_local::github::GithubRunner;
 use ieum_local::{
     AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, HttpRunner,
     Journal, NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo,
@@ -111,6 +112,8 @@ pub struct Deps {
     pub trash_dir: PathBuf,
     /// `local.ai` 러너(운영 = 키체인을 쓰는 `AiRunner::new()`). 실행마다 그 실행의 허용 폴더를 붙인다.
     pub ai: Arc<AiRunner>,
+    /// GitHub 이슈 노드 7개가 함께 쓰는 러너(운영 = gh에서 토큰을 읽는 `GhToken`).
+    pub github: Arc<GithubRunner>,
     pub emit: Emit,
     pub timing: WatchTiming,
     /// 감시 폴더 재확인·스케줄 확인 간격(운영 30초).
@@ -959,6 +962,8 @@ impl Supervisor {
             ("http.request", Arc::new(HttpRunner::new())),
         ];
         runners.extend(local.into_iter().map(|(k, v)| (k.to_string(), v)));
+        let github: Arc<dyn NodeRunner> = self.0.deps.github.clone();
+        runners.extend(GITHUB_EVENTS.map(|e| (e.to_string(), github.clone())));
 
         let started_at = now();
         let stored = |run: RunResult, finished_at: String| StoredRun {

@@ -2,6 +2,7 @@ pub mod ai;
 pub mod builder;
 pub mod chat;
 mod files;
+pub mod github;
 mod http;
 mod journal;
 mod paths;

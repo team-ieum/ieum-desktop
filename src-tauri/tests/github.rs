@@ -12,7 +12,7 @@ use ieum_desktop_lib::github::{
     InstallRoute, JobGuard, JobKind, LOGIN_CMD_ARGS, MIN_GH, checksum_for, choose_route,
     clear_record, derive_status, disconnect, fetch, gh_auth, install_from_zip, parse_auth_status,
     parse_device_code, parse_gh_version, pick_gh, read_record, ready_login, release_assets,
-    run_login, write_record,
+    run_login, token_cmd, token_login, write_record,
 };
 
 fn no_cancel() -> AtomicBool {
@@ -695,5 +695,122 @@ fn status_serializes_camel() {
     assert_eq!(
         serde_json::to_string(&s).unwrap(),
         r#"{"kind":"connected","login":"hodoon","envToken":false}"#
+    );
+}
+
+fn gh_found() -> Result<GhFound, GithubStatus> {
+    Ok(GhFound {
+        path: PathBuf::from("/x/gh"),
+        version: (2, 103, 3),
+    })
+}
+
+/// 실패면 (code, message).
+fn login_err(
+    found: Result<GhFound, GithubStatus>,
+    recorded: Option<&str>,
+    auth: Result<GhAuth, String>,
+) -> (Option<String>, String) {
+    let e = token_login(found, recorded, auth).unwrap_err();
+    (e.code, e.message)
+}
+
+const NOT_CONNECTED: Option<&str> = Some("GITHUB_NOT_CONNECTED");
+const UNREACHABLE: Option<&str> = Some("GITHUB_UNREACHABLE");
+
+#[test]
+fn token_login_states() {
+    let ok = |a: Vec<GhAccount>| Ok(GhAuth::Accounts(a));
+    let need_gh = "GitHub를 쓰려면 gh CLI가 필요해요. 설정 > 연동을 확인해 주세요.";
+    for f in [
+        GithubStatus::NotInstalled,
+        GithubStatus::Outdated {
+            version: "2.40.0".into(),
+        },
+    ] {
+        let (code, msg) = login_err(Err(f), Some("hodoon"), ok(vec![]));
+        assert_eq!((code.as_deref(), msg.as_str()), (NOT_CONNECTED, need_gh));
+    }
+    let unreachable = "GitHub에 닿지 못했어요. 잠시 뒤 다시 실행해 주세요.";
+    let (code, msg) = login_err(gh_found(), Some("hodoon"), Err("gh 꺼짐".into()));
+    assert_eq!((code.as_deref(), msg.as_str()), (UNREACHABLE, unreachable));
+
+    let (code, msg) = login_err(
+        gh_found(),
+        None,
+        ok(vec![acct("hodoon", true, "success", "keyring")]),
+    );
+    assert_eq!(
+        (code.as_deref(), msg.as_str()),
+        (
+            NOT_CONNECTED,
+            "GitHub 연결이 필요해요. 설정 > 연동에서 연결해 주세요."
+        )
+    );
+
+    let (code, msg) = login_err(gh_found(), Some("hodoon"), Ok(GhAuth::LoggedOut));
+    assert_eq!(
+        (code.as_deref(), msg.as_str()),
+        (
+            Some("GITHUB_AUTH"),
+            "GitHub 로그인이 만료됐어요. 설정 > 연동에서 다시 연결해 주세요."
+        )
+    );
+
+    // gh 오류 문구(사용자 이름·주소가 들어 있을 수 있음)는 싣지 않는다.
+    let mut down = acct("hodoon", true, "error", "keyring");
+    down.error = Some("dial tcp: lookup api.github.com secret-proxy".into());
+    let (code, msg) = login_err(gh_found(), Some("hodoon"), ok(vec![down]));
+    assert_eq!((code.as_deref(), msg.as_str()), (UNREACHABLE, unreachable));
+    assert!(!msg.contains("secret-proxy"));
+
+    assert_eq!(
+        token_login(
+            gh_found(),
+            Some("hodoon"),
+            ok(vec![acct("hodoon", true, "success", "keyring")])
+        )
+        .unwrap(),
+        (PathBuf::from("/x/gh"), "hodoon".to_string(), false)
+    );
+    assert_eq!(
+        token_login(
+            gh_found(),
+            Some("hodoon"),
+            ok(vec![acct("hodoon", true, "success", "GH_TOKEN")])
+        )
+        .unwrap(),
+        (PathBuf::from("/x/gh"), "hodoon".to_string(), true)
+    );
+}
+
+/// 연결 뒤 터미널에서 `gh auth switch`로 계정을 바꾸면 다른 계정으로 쓰지 않는다.
+#[test]
+fn account_changed_refuses() {
+    let auth = GhAuth::Accounts(vec![
+        acct("hodoon", false, "success", "keyring"),
+        acct("other", true, "success", "keyring"),
+    ]);
+    let (code, msg) = login_err(gh_found(), Some("hodoon"), Ok(auth));
+    assert_eq!(
+        (code.as_deref(), msg.as_str()),
+        (
+            NOT_CONNECTED,
+            "gh 계정이 연결한 계정과 달라요. 설정 > 연동을 확인해 주세요."
+        )
+    );
+}
+
+/// 환경변수 토큰은 gh가 `--user`로 고를 수 없어 활성 토큰을 그대로 읽는다.
+#[test]
+fn token_cmd_user_only_without_env_token() {
+    let gh = Path::new("/x/gh");
+    assert_eq!(
+        token_cmd(gh, "hodoon", false),
+        "'/x/gh' auth token --hostname github.com --user 'hodoon'"
+    );
+    assert_eq!(
+        token_cmd(gh, "hodoon", true),
+        "'/x/gh' auth token --hostname github.com"
     );
 }

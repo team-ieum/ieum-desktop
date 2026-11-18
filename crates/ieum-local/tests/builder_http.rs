@@ -90,6 +90,7 @@ async fn test_with_http_asks_first_even_for_get() {
                 output: "name".into(),
             }],
             has_body: false,
+            github: None,
         }]]
     );
     assert_eq!(
@@ -270,4 +271,30 @@ async fn finish_lists_http_action() {
     .unwrap();
     assert_eq!(old.http, None);
     assert!(h.http_asked().is_empty());
+}
+
+/// GitHub 쓰기 노드도 테스트 전에 사람이 본다 — [넘어가기]면 요청 없이 건너뜀.
+#[tokio::test]
+async fn github_write_asks_and_skip_marks_it() {
+    let t = tempfile::tempdir().unwrap();
+    let watch = t.path().canonicalize().unwrap();
+    std::fs::write(watch.join("a.txt"), "a").unwrap();
+    let h = MemHost::with(
+        W,
+        json!({
+            "nodes": [
+                {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": watch}},
+                {"id": "g", "type": "ACTION", "event": "github.create_issue", "config": {"owner": "a", "repo": "b", "title": "{{nodes.t.output.name}}"}}
+            ],
+            "edges": [{"source": "t", "target": "g"}]
+        }),
+    );
+    h.set_http_answer(HttpConfirm::Skip);
+    let b = Builder::new(h.clone()).unwrap();
+    let r = run(&b, test_op("g")).await;
+    assert!(r.ok, "{r:?}");
+    assert_eq!(r.data, json!({"status": "skipped_by_user", "nodes": ["g"]}));
+    let asked = h.http_asked();
+    assert_eq!(asked[0][0].github.as_ref().unwrap().repo, "a/b");
+    assert!(h.tested().is_empty());
 }

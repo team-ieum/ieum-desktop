@@ -2,8 +2,8 @@ import { expect, test } from "vitest";
 import type { WfNode } from "../api";
 import { DEFS, newBranchKey, newNode, nextPosition, outputKeys } from "./defs";
 
-test("defs_has_36_and_transform_map_outputs_follow_mappings", () => {
-  expect(Object.keys(DEFS).length).toBe(36);
+test("defs_has_43_and_transform_map_outputs_follow_mappings", () => {
+  expect(Object.keys(DEFS).length).toBe(43);
   const map = (config: Record<string, unknown>): WfNode => ({ id: "t", event: "transform.map", type: "TRANSFORM", config });
   expect(outputKeys(map({ mappings: { a: "1", b: "2" } }))).toEqual(["a", "b"]);
   expect(outputKeys(map({}))).toEqual([]);
@@ -25,4 +25,14 @@ test("add_places_new_node_right_of_rightmost", () => {
   expect(nextPosition([n("a", { x: 900, y: 200 }), n("b", { x: 320, y: 0 })])).toEqual({ x: 1220, y: 200 });
   // 위치 없는 노드는 Canvas 기본값(i*320, 0)으로 본다.
   expect(nextPosition([n("a"), n("b")])).toEqual({ x: 640, y: 0 });
+});
+
+test("github_defs_merge_table_and_catalog", () => {
+  const f = DEFS["github.find_issue"].inputFields;
+  expect(f.map((x) => x.key)).toEqual(["owner", "repo", "search_by", "value", "state", "max_results"]);
+  const max = f.find((x) => x.key === "max_results")!;
+  expect(max.type).toBe("integer");
+  expect(max.default).toBe(20);
+  expect(f.find((x) => x.key === "owner")!.required).toBe(true);
+  expect(DEFS["github.create_issue"].inputFields.find((x) => x.key === "body")!.type).toBe("text");
 });
