@@ -33,6 +33,7 @@ pub enum Code {
     AiNotConnected,
     AiFailed,
     AiModelListFailed,
+    AiKeyLimit,
     NodeFailed,
     UndoFailed,
     TooLarge,
@@ -95,6 +96,9 @@ impl Code {
             AiModelListFailed => {
                 "Antigravity 모델 목록을 읽지 못함. 사용자가 agy 로그인·설치 상태를 확인해야 함"
             }
+            AiKeyLimit => {
+                "API 키가 이번 달 한도를 넘어 호출하지 않음. 사용자가 설정 › AI에서 한도를 올리거나 다른 키를 골라야 함"
+            }
             NodeFailed => "노드 실행이 실패함. 자세한 내용은 사용자 화면에만 보임",
             UndoFailed => "테스트가 옮긴 파일 일부를 되돌리지 못함. 경로는 사용자 화면에 표시됨",
             TooLarge => "입력이나 결과가 허용 크기를 넘음",
@@ -135,10 +139,10 @@ impl Code {
             BadRequest | Unauthorized => 3,
             Internal | NoSampleFile | FolderMissing | FileMissing | DestOccupied | FieldEmpty
             | FieldInvalid | MoveFailed | AiNotConnected | AiFailed | AiModelListFailed
-            | NodeFailed | UndoFailed | TooLarge | HttpStatus | HttpUnreachable | GithubInput
-            | GithubNotConnected | GithubAuth | GithubUnreachable | GithubRateLimit
-            | GithubForbidden | GithubNotFound | GithubMoved | GithubGone | GithubInvalid
-            | GithubStatus | GithubTooLarge => 1,
+            | AiKeyLimit | NodeFailed | UndoFailed | TooLarge | HttpStatus | HttpUnreachable
+            | GithubInput | GithubNotConnected | GithubAuth | GithubUnreachable
+            | GithubRateLimit | GithubForbidden | GithubNotFound | GithubMoved | GithubGone
+            | GithubInvalid | GithubStatus | GithubTooLarge => 1,
             Stale | UserEditing | NodeNotFound | EventUnknown | TriggerRule | FieldUnknown
             | FieldLocked | NotFolderField | PickCancelled | FolderNotAllowed | EdgeInvalid
             | SaveRejected | Invalid | SampleNotAllowed | NotReady | TestDeclined => 2,
