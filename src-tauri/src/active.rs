@@ -14,6 +14,7 @@ use ieum_local::github::{GithubApi, GithubRunner};
 use crate::account::{AccountId, account_key, account_root, claim_legacy};
 use crate::credentials::AccountCredentials;
 use crate::github::GhToken;
+use crate::key_limits::LimitGate;
 use crate::store::Store;
 use crate::supervisor::{Deps, Emit, Supervisor};
 use crate::web::validate_server_url;
@@ -128,15 +129,20 @@ impl Active {
             Err(e) => eprintln!("[ieum] 옛 데이터를 옮기지 못했어요(그대로 둠): {e}"),
         }
         let first_open = !slot.opened.contains(&key);
+        let store = Store::new(account_root(&b.app_data, &key));
         let started = Supervisor::start_with(
             Deps {
-                store: Store::new(account_root(&b.app_data, &key)),
+                store: store.clone(),
                 app_data: b.app_data.clone(),
                 home: b.home.clone(),
                 trash_dir: b.trash_dir.clone(),
                 ai: Arc::new(
                     (b.ai_factory)(Arc::new(ScopedKeys::new(b.keys.clone(), &key)))
-                        .with_resolver(Arc::new(self.credentials_of(&key))),
+                        .with_resolver(Arc::new(self.credentials_of(&key)))
+                        .with_gate(Arc::new(LimitGate {
+                            store,
+                            now: chrono::Local::now,
+                        })),
                 ),
                 github: Arc::new(GithubRunner::new(
                     GithubApi::new(),

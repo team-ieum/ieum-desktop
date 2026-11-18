@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "vitest";
 import { setLang } from "../i18n";
-import { formatCount, formatReset, formatTokens, formatUsd } from "./format";
+import { formatCount, formatLimit, formatReset, formatTokens, formatUsd } from "./format";
 
 afterEach(() => setLang("ko"));
 
@@ -14,6 +14,10 @@ test("format_usd_edges", () => {
   expect(formatUsd(0.004)).toBe("<$0.01");
   expect(formatUsd(0.42)).toBe("$0.42");
   expect(formatUsd(1.849)).toBe("$1.85");
+});
+
+test("format_limit_drops_zero_cents", () => {
+  expect([10, 2.5, 2.1, 0.25].map(formatLimit)).toEqual(["$10", "$2.50", "$2.10", "$0.25"]);
 });
 
 test("format_tokens_ko_en", () => {

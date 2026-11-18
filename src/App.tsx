@@ -19,6 +19,7 @@ import { NAV, type Page, type View } from "./shell/nav";
 import { recentItems, Sidebar, useSidebarCollapsed } from "./shell/Sidebar";
 import { accountsOf } from "./screens/settings/AiPane";
 import { useCredentials } from "./stores/credentials";
+import { useKeyLimits } from "./stores/keyLimits";
 import { usePendingFinish } from "./stores/pendingFinish";
 import { subscribeExecEvents } from "./stores/runs";
 import { useSettings } from "./stores/settings";
@@ -151,14 +152,26 @@ function AppBody() {
     };
   }, []);
 
-  // 시스템 알림 클릭 → 그 실행 상세(대시보드와 같은 기록 화면)·실행 기록·그 워크플로우의 편집 화면·계정 권하기 띠.
+  // 시스템 알림 클릭 → 그 실행 상세(대시보드와 같은 기록 화면)·실행 기록·그 워크플로우의 편집 화면·계정 권하기 띠·설정 AI(키 한도).
   useEffect(() => {
     const un = api.onOpenTarget((t) => {
       if (t.kind === "suggest") return takeSuggest();
       // 이미 그 편집 화면이면 그대로 둔다 — 다시 마운트하면 터미널 세션 자리가 사라진다.
       if (t.kind === "workflow" && editorId.current === t.id) return;
-      const go = () =>
-        setView(t.kind === "workflow" ? { page: "local", editor: t.id } : t.kind === "run" ? { page: "history", run: t.runId } : { page: "history" });
+      // aiSettings는 view를 직접 쓴다 — 의존성에 view가 없어 openAiSettings가 낡은 view를 볼 수 있다.
+      const go = () => {
+        // 이미 설정 › AI면 화면이 다시 마운트되지 않는다 — 한도 막대가 넘기 전 값에 머물지 않게 다시 읽는다.
+        if (t.kind === "aiSettings") useKeyLimits.getState().load().catch(() => {});
+        setView(
+          t.kind === "workflow"
+            ? { page: "local", editor: t.id }
+            : t.kind === "run"
+              ? { page: "history", run: t.runId }
+              : t.kind === "aiSettings"
+                ? { page: "settings", section: "ai" }
+                : { page: "history" },
+        );
+      };
       if (dirty && askDiscard) setPending(() => go);
       else go();
     });
@@ -325,6 +338,7 @@ function AppBody() {
                   onDirty={setDirty}
                   onIdChange={onEditorId}
                   onOpenIntegrations={openIntegrations}
+                  onOpenAiSettings={openAiSettings}
                 />
               ) : "run" in view ? (
                 <RunView workflowId={view.run} onBack={toList} onEdit={openEditor} />

@@ -74,6 +74,13 @@ pub trait CredentialResolver: Send + Sync {
     }
 }
 
+/// API 키 호출 직전 검사(월 한도). 구현은 앱이 한다. `source` = `anthropic`·`openai`·`gemini`,
+/// `credential` = 키 id(`default` 포함). `Err` 문구가 그대로 노드·채팅 오류가 된다.
+#[async_trait]
+pub trait KeyGate: Send + Sync {
+    async fn check(&self, source: &str, credential: &str) -> Result<(), String>;
+}
+
 /// 텍스트 조각 콜백. 별칭으로 둔다 — `async_trait`이 `&str`의 생략 수명을 고정 수명으로 바꿔 버린다.
 pub type ChunkFn<'a> = dyn Fn(&str) + Send + Sync + 'a;
 
@@ -172,6 +179,8 @@ pub struct AiRunner {
     roots: AllowedRoots,
     /// 없으면 `credential` 칸을 보지 않고 공급원 기본 키로(테스트·조립용).
     resolver: Option<Arc<dyn CredentialResolver>>,
+    /// 없으면 키 한도를 보지 않는다.
+    gate: Option<Arc<dyn KeyGate>>,
 }
 
 impl AiRunner {
@@ -181,6 +190,7 @@ impl AiRunner {
             providers: HashMap::new(),
             roots: AllowedRoots::default(),
             resolver: None,
+            gate: None,
         }
     }
 
@@ -190,6 +200,7 @@ impl AiRunner {
             providers: self.providers.clone(),
             roots,
             resolver: self.resolver.clone(),
+            gate: self.gate.clone(),
         }
     }
 
@@ -199,6 +210,25 @@ impl AiRunner {
             providers: self.providers.clone(),
             roots: self.roots.clone(),
             resolver: Some(resolver),
+            gate: self.gate.clone(),
+        }
+    }
+
+    /// 같은 공급원으로, API 키 호출 직전에 이 게이트를 거치는 러너.
+    pub fn with_gate(&self, gate: Arc<dyn KeyGate>) -> Self {
+        AiRunner {
+            providers: self.providers.clone(),
+            roots: self.roots.clone(),
+            resolver: self.resolver.clone(),
+            gate: Some(gate),
+        }
+    }
+
+    /// API 키 공급원이면 게이트에 묻는다. 구독 CLI·게이트 없음은 통과.
+    async fn gate(&self, provider_id: &str, credential: Option<&str>) -> Result<(), String> {
+        match (&self.gate, provider_id.strip_prefix("api:")) {
+            (Some(g), Some(source)) => g.check(source, credential.unwrap_or("default")).await,
+            _ => Ok(()),
         }
     }
 
@@ -265,6 +295,9 @@ impl AiRunner {
         let (key_name, config_dir, used) = self
             .resolve(provider, credential)
             .map_err(|e| AiError(e.message))?;
+        self.gate(provider, used.as_deref())
+            .await
+            .map_err(AiError)?;
         req.key_name = key_name;
         req.config_dir = config_dir;
         let mut answer = p.ask(req, chunk).await?;
@@ -520,6 +553,9 @@ impl AiRunner {
             .transpose()?;
         let (key_name, config_dir, credential) =
             self.resolve(provider_id, opt_str(cfg, "credential"))?;
+        self.gate(provider_id, credential.as_deref())
+            .await
+            .map_err(|m| fail_code("AI_KEY_LIMIT", m))?;
         let node_id = &ctx.node.id;
         let events = ctx.events;
         let chunk = |text: &str| {

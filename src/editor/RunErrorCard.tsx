@@ -2,23 +2,23 @@ import { TriangleAlert, X } from "lucide-react";
 import { useState } from "react";
 import type { WfNode } from "../api";
 import { t } from "../i18n";
-import { type Live, opensIntegrations } from "../stores/runs";
+import { type Live, opensAiSettings, opensIntegrations } from "../stores/runs";
 import { nodeTitle } from "./Canvas";
 import { useClosing } from "./useClosing";
 
-/** 실행이 실패하면 우측 하단에 뜨는 카드 — 화면 밖 노드의 실패도 놓치지 않게. 부르는 쪽이 key={runId}로 실행마다 새로 그려 닫음을 실행 단위로 둔다. */
+/** 실행이 실패하면 우측 하단에 뜨는 카드 — 화면 밖 노드의 실패도 놓치지 않게. 채팅창(z-30)·노드 패널이 열려 있어도 그 위에 뜬다. 부르는 쪽이 key={runId}로 실행마다 새로 그려 닫음을 실행 단위로 둔다. */
 export function RunErrorCard({
   live,
   nodes,
-  right,
   onShow,
   onOpenIntegrations,
+  onOpenAiSettings,
 }: {
   live: Live;
   nodes: WfNode[];
-  right: number;
   onShow: (nodeId: string) => void;
   onOpenIntegrations?: () => void;
+  onOpenAiSettings?: () => void;
 }) {
   const [dismissed, setDismissed] = useState(false);
   const { closing, close } = useClosing(() => setDismissed(true));
@@ -29,9 +29,8 @@ export function RunErrorCard({
   return (
     <div
       role="alert"
-      style={{ right }}
-      className={`absolute bottom-4 z-20 flex w-72 flex-col gap-2 rounded-[1rem] border-2 border-[#c2412d] bg-white p-3 shadow-[0.4rem_0.5rem_0_#f6d3cb,0_0_0_4px_rgba(194,65,45,.12)] ${
-        closing ? "ieum-slide-out" : "ieum-grow-br"
+      className={`absolute bottom-4 right-4 z-40 flex w-72 flex-col gap-2 rounded-[1rem] border-2 border-[#c2412d] bg-white p-3 shadow-[0.4rem_0.5rem_0_#f6d3cb,0_0_0_4px_rgba(194,65,45,.12)] ${
+        closing ? "ieum-slide-out" : "ieum-rise-in"
       }`}
     >
       <div className="flex items-center gap-2">
@@ -46,6 +45,11 @@ export function RunErrorCard({
         {opensIntegrations(live.codes[node.id]) && onOpenIntegrations && (
           <button type="button" onClick={onOpenIntegrations} className="rounded-brand-sm bg-black px-2.5 py-1 text-[0.72rem] font-bold text-white">
             {t("editor.runError.openIntegrations")}
+          </button>
+        )}
+        {opensAiSettings(live.codes[node.id]) && onOpenAiSettings && (
+          <button type="button" onClick={onOpenAiSettings} className="rounded-brand-sm bg-black px-2.5 py-1 text-[0.72rem] font-bold text-white">
+            {t("editor.runError.openAiSettings")}
           </button>
         )}
         <button type="button" onClick={() => onShow(node.id)} className="rounded-brand-sm border border-neutral-300 px-2.5 py-1 text-[0.72rem] font-bold text-[#27273b]">

@@ -60,17 +60,22 @@ body {
 }
 
 /* 열기·닫기 움직임. @starting-style은 구형 WKWebView가 몰라서 @keyframes로 한다. */
-@keyframes ieum-grow {
-	from {
+/* 실행 오류 카드: 노드가 먼저 빨개진 뒤 0.35초 쉬고, 아래에서 올라와 살짝 넘쳤다 자리 잡는다 */
+@keyframes ieum-rise {
+	0% {
 		opacity: 0;
-		transform: scale(0.92);
+		transform: translateY(24px) scale(0.96);
+	}
+	70% {
+		opacity: 1;
+		transform: translateY(-3px) scale(1);
+	}
+	100% {
+		transform: none;
 	}
 }
-.ieum-grow-br {
-	animation: ieum-grow 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.ieum-grow-br {
-	transform-origin: bottom right;
+.ieum-rise-in {
+	animation: ieum-rise 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) 0.35s both;
 }
 /* 채팅창: 오른쪽 위 둥근 버튼에서 펼치고 다시 그 안으로 접는다 */
 @keyframes ieum-circle-in {
@@ -134,7 +139,7 @@ body {
 	animation: ieum-unfold 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 @media (prefers-reduced-motion: reduce) {
-	.ieum-grow-br,
+	.ieum-rise-in,
 	.ieum-circle-in,
 	.ieum-circle-out,
 	.ieum-slide-in,

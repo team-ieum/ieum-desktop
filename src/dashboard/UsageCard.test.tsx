@@ -5,6 +5,7 @@ import { api, type CliAccountMeta, type CredentialsView, type PlanUsage, type Us
 import { setLang } from "../i18n";
 import { StatusBar } from "../shell/StatusBar";
 import { useCredentials } from "../stores/credentials";
+import { useKeyLimits } from "../stores/keyLimits";
 import { usePlanStore } from "../stores/plans";
 import { useWeb } from "../stores/web";
 import { UsageCard } from "./UsageCard";
@@ -26,6 +27,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   useCredentials.setState({ view: null });
+  useKeyLimits.setState({ view: null });
   usePlanStore.setState({ plans: {} });
 });
 // 이 환경의 localStorage는 온전하지 않다 — 테스트마다 빈 메모리 저장소를 꽂는다.
@@ -353,4 +355,38 @@ test("single_key_has_no_toggle", async () => {
   mockKeys({ ...KEYS_SUM, byCredential: KEYS_SUM.byCredential.slice(1) });
   await mountCard();
   expect(screen.queryByRole("button", { name: "키별 보기" })).toBeNull();
+});
+
+test("single_limited_key_expands_with_meter", async () => {
+  mockKeys({ ...KEYS_SUM, byCredential: KEYS_SUM.byCredential.slice(1) });
+  useKeyLimits.setState({ view: { limits: { "anthropic:k1": 10 }, spend: { "anthropic:k1": 3.2 } } });
+  await mountCard();
+  const btn = screen.getByRole("button", { name: "키별 보기" });
+  await act(async () => fireEvent.click(btn));
+  expect(screen.getByText("이번 달 $3.20 / $10")).toBeTruthy();
+});
+
+test("limited_unused_key_shows_row", async () => {
+  mockKeys({ ...KEYS_SUM, byCredential: KEYS_SUM.byCredential.slice(1) });
+  const k3 = { id: "k3", label: "예비", isDefault: false, createdAt: "", last4: "c3c3" };
+  useCredentials.setState({ view: { ...VIEW, apiKeys: { ...VIEW.apiKeys, anthropic: [k3] } } });
+  useKeyLimits.setState({ view: { limits: { "anthropic:k3": 10 }, spend: {} } });
+  await mountCard();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "키별 보기" })));
+  expect(screen.getByText("예비")).toBeTruthy();
+  expect(screen.getByText(/\/ \$10/)).toBeTruthy();
+});
+
+test("api_refresh_reloads_key_limits", async () => {
+  mockKeys({ ...KEYS_SUM, byCredential: KEYS_SUM.byCredential.slice(1) });
+  const limits = vi
+    .spyOn(api, "keyLimits")
+    .mockResolvedValueOnce({ limits: { "anthropic:k1": 10 }, spend: { "anthropic:k1": 3.2 } })
+    .mockResolvedValueOnce({ limits: { "anthropic:k1": 10 }, spend: { "anthropic:k1": 5 } });
+  await mountCard();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "키별 보기" })));
+  expect(screen.getByText("이번 달 $3.20 / $10")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "API 사용량 새로 고침" })));
+  expect(limits).toHaveBeenCalledTimes(2);
+  expect(screen.getByText("이번 달 $5.00 / $10")).toBeTruthy();
 });

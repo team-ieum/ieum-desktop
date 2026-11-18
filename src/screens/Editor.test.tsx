@@ -383,18 +383,22 @@ test("next_failure_shows_card_again_after_dismiss_with_motion", async () => {
     expect(screen.queryByRole("alert")).toBeNull();
     // 다음 실행(r2)도 실패 — 닫는 동안 다음 실행이 끼어도 새 카드가 닫히지 않게 실행마다 새로 그린다.
     act(() => useRuns.setState({ live: { w1: { ...useRuns.getState().live.w1!, runId: "r2" } } }));
-    expect(screen.getByRole("alert").className).toContain("ieum-grow-br");
+    expect(screen.getByRole("alert").className).toContain("ieum-rise-in");
   } finally {
     vi.unstubAllGlobals();
   }
 });
 
-test("card_sits_left_of_widest_panel", async () => {
+test("card_stays_bottom_right_above_panels", async () => {
   failRun();
   const r = await openSaved(entry([N("m", 0)], "v1"));
-  expect(screen.getByRole("alert").style.right).toBe("16px");
+  await openAssistant();
   await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
-  expect(screen.getByRole("alert").style.right).toBe("416px");
+  // 채팅창(z-30)·노드 패널이 열려 있어도 그 왼쪽으로 밀리지 않고 우측 하단 맨 위에 뜬다.
+  const card = screen.getByRole("alert");
+  expect(card.style.right).toBe("");
+  expect(card.className).toContain("right-4");
+  expect(card.className).toContain("z-40");
 });
 
 test("node_panel_sits_left_of_open_chat", async () => {
@@ -403,5 +407,4 @@ test("node_panel_sits_left_of_open_chat", async () => {
   await openAssistant(); // 채팅 탭 폭 380 + 16 = cover 396
   await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
   expect(screen.getByRole("complementary", { name: "m" }).style.right).toBe("408px");
-  expect(screen.getByRole("alert").style.right).toBe("808px");
 });

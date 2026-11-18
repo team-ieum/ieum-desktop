@@ -26,7 +26,7 @@ import { branchHandles, DEFS, isLocal } from "../nodes/defs";
 import { nodeMeta, toneStyle } from "../nodes/meta";
 import { credLabel } from "../screens/settings/AiPane";
 import { choicesFor, useCredentials } from "../stores/credentials";
-import { type NodeRunStatus, opensIntegrations } from "../stores/runs";
+import { type NodeRunStatus, opensAiSettings, opensIntegrations } from "../stores/runs";
 import { AnimatedEdge, type EdgeData } from "./AnimatedEdge";
 import { shownModel } from "./models";
 
@@ -111,6 +111,7 @@ type Data = {
   runError?: string;
   runCode?: string;
   onOpenIntegrations?: () => void;
+  onOpenAiSettings?: () => void;
 };
 type IeumNode = Node<Data, "ieum">;
 
@@ -126,7 +127,7 @@ function handleLabel(h: { id: string; name: string }) {
 
 /** 웹 이음 WorkflowNode와 같은 카드. */
 function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
-  const { wf, step, errors, status, techInfo, runCode, onOpenIntegrations } = data;
+  const { wf, step, errors, status, techInfo, runCode, onOpenIntegrations, onOpenAiSettings } = data;
   const runError = status === "failed" ? data.runError : undefined;
   const kind = DEFS[wf.event]?.node_type ?? wf.type ?? "";
   const meta = nodeMeta(wf.event, wf.type);
@@ -194,6 +195,18 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
                 }}
               >
                 {t("editor.runError.openIntegrations")}
+              </button>
+            )}
+            {opensAiSettings(runCode) && onOpenAiSettings && (
+              <button
+                type="button"
+                className="nodrag self-start font-bold underline"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenAiSettings();
+                }}
+              >
+                {t("editor.runError.openAiSettings")}
               </button>
             )}
           </div>
@@ -269,9 +282,10 @@ export interface CanvasProps {
   rightCover?: number;
   /** 노드별 실행 실패 문구 — 상태가 실패인 노드에 오류 띠로 보인다. */
   runErrors?: Record<string, string>;
-  /** 노드별 오류 코드 — GitHub 연결 오류면 띠에 [설정 › 연동 열기]. */
+  /** 노드별 오류 코드 — GitHub 연결 오류면 띠에 [설정 › 연동 열기], 키 한도 초과면 [설정 › AI 열기]. */
   runCodes?: Record<string, string>;
   onOpenIntegrations?: () => void;
+  onOpenAiSettings?: () => void;
   /** nonce가 바뀌면 이 노드로 보기를 옮긴다. right는 오른쪽 패널이 가리는 폭(px). */
   focus?: { id: string; nonce: number; right: number };
 }
@@ -326,7 +340,7 @@ function Focus({ focus, move }: { focus?: CanvasProps["focus"]; move: RefObject<
 
 const edgeId = (e: Workflow["edges"][number]) => e.id ?? `${e.source}-${e.target}-${e.conditionType ?? ""}`;
 
-export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect, onNodeClick, techInfo = false, rightCover = 0, runErrors, runCodes, onOpenIntegrations, focus }: CanvasProps) {
+export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect, onNodeClick, techInfo = false, rightCover = 0, runErrors, runCodes, onOpenIntegrations, onOpenAiSettings, focus }: CanvasProps) {
   const [nodes, setNodes] = useState<IeumNode[]>([]);
   // 사람의 캔버스 조작 상태. 확대 버튼·미니맵은 이벤트가 null로 오므로, 따라가기 자신의 이동만 빼고 모두 사람 조작으로 본다.
   const move = useRef<MoveState>({ active: false, endedAt: 0, self: false });
@@ -369,10 +383,11 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
           runError: runErrors?.[n.id],
           runCode: runCodes?.[n.id],
           onOpenIntegrations,
+          onOpenAiSettings,
         },
       }));
     });
-  }, [workflow.nodes, errors, statuses, selectedId, readOnly, techInfo, runErrors, runCodes, onOpenIntegrations]);
+  }, [workflow.nodes, errors, statuses, selectedId, readOnly, techInfo, runErrors, runCodes, onOpenIntegrations, onOpenAiSettings]);
 
   useEffect(() => {
     setEdges((prev) => {

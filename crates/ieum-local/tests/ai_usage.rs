@@ -9,7 +9,7 @@ use ieum_engine::{Catalog, Node, NodeCtx, NodeRunner, Runners, run_workflow};
 use ieum_local::ai::keys::KeyError;
 use ieum_local::ai::{
     AiAnswer, AiError, AiProvider, AiRequest, AiRunner, AiUsage, ApiKind, ApiProvider, ChunkFn,
-    KeyStore,
+    KeyGate, KeyStore,
 };
 use serde_json::{Map, Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -415,4 +415,86 @@ async fn usage_not_in_node_output() {
     // 트리거 같은 다른 노드는 usage를 쓰지 않는다(JSON에 키도 없다).
     let t = serde_json::to_value(&run.nodes["t"]).unwrap();
     assert!(t.get("usage").is_none(), "{t}");
+}
+
+/// 받은 `(source, credential)`을 쌓고, credential이 `blocked`면 막는다.
+#[derive(Default)]
+struct Deny(Mutex<Vec<(String, String)>>);
+
+#[async_trait]
+impl KeyGate for Deny {
+    async fn check(&self, source: &str, credential: &str) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((source.into(), credential.into()));
+        if credential == "blocked" {
+            return Err("막힘".into());
+        }
+        Ok(())
+    }
+}
+
+/// `Fake`를 게이트 단 러너로 돌린다.
+async fn run_gated(
+    fake: &Arc<Fake>,
+    deny: &Arc<Deny>,
+    config: Value,
+) -> Result<Map<String, Value>, ieum_engine::NodeError> {
+    let runner = AiRunner::empty()
+        .with_provider("api:anthropic", fake.clone())
+        .with_gate(deny.clone());
+    let node: Node = serde_json::from_value(json!({"id": "n", "event": "local.ai"})).unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    runner
+        .run_metered(NodeCtx {
+            node: &node,
+            config: config.as_object().unwrap().clone(),
+            outputs: &Default::default(),
+            events: &tx,
+            cancel: &CancellationToken::new(),
+        })
+        .await
+        .0
+}
+
+#[tokio::test]
+async fn node_blocked_by_gate_fails_with_code() {
+    let fake = Arc::new(Fake {
+        answers: vec!["파랑"],
+        calls: AtomicUsize::new(0),
+    });
+    let deny = Arc::new(Deny::default());
+    let err = run_gated(
+        &fake,
+        &deny,
+        json!({"provider": "api:anthropic", "prompt": "p", "credential": "blocked"}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.code.as_deref(), Some("AI_KEY_LIMIT"));
+    assert_eq!(err.message, "막힘");
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn gate_checked_once_across_retries() {
+    let fake = Arc::new(Fake {
+        answers: vec!["JSON 아님", r#"{"color":"파랑"}"#],
+        calls: AtomicUsize::new(0),
+    });
+    let deny = Arc::new(Deny::default());
+    run_gated(
+        &fake,
+        &deny,
+        json!({"provider": "api:anthropic", "prompt": "p",
+            "outputFields": [{"key": "color", "type": "text"}]}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        *deny.0.lock().unwrap(),
+        [("anthropic".to_string(), "default".to_string())]
+    );
+    assert_eq!(fake.calls.load(Ordering::SeqCst), 2);
 }

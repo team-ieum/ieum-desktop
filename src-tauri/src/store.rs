@@ -1,7 +1,7 @@
 //! 앱 데이터 폴더 저장: `workflows/<id>.json`, `runs/<run_id>.json`, `settings.json`, `schedule.json`.
 //! id는 UUID(소문자 하이픈 형식)만 — 파일 이름이 되므로 `../` 같은 값으로 폴더 밖에 쓰지 못하게.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -194,6 +194,24 @@ fn check_id(id: &str) -> Result<(), String> {
 static CHAT_LOCK: Mutex<()> = Mutex::new(());
 /// `schedule.json` 읽기-고치기-쓰기를 차례로.
 static SCHEDULE_LOCK: Mutex<()> = Mutex::new(());
+/// `key-limits.json` 읽기-고치기-쓰기를 차례로.
+static KEY_LIMITS_LOCK: Mutex<()> = Mutex::new(());
+
+/// 키별 월 한도(USD)와 이미 보낸 알림 기록(`key-limits.json`). 키는 `"anthropic:3fa9c1d2"` 꼴.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+pub struct KeyLimitsFile {
+    #[serde(default)]
+    pub limits: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub notified: BTreeMap<String, Notified>,
+}
+
+/// 그 달에 마지막으로 알린 단계(%) — 재시작해도 같은 달 알림이 되풀이되지 않게.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Notified {
+    pub month: String,
+    pub level: u8,
+}
 
 /// 임시 파일에 쓰고 rename — 쓰다 죽어도 이전 파일이 남는다.
 pub(crate) fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
@@ -473,6 +491,79 @@ impl Store {
         Ok(read_json(&path)
             .inspect_err(|e| eprintln!("[ieum] 스케줄 기록을 읽지 못해 새로 시작해요: {e}"))
             .unwrap_or_default())
+    }
+
+    /// 키별 월 한도 파일. 없거나 깨졌으면 빈 값(깨졌을 땐 로그만).
+    pub fn key_limits(&self) -> KeyLimitsFile {
+        let path = self.root.join("key-limits.json");
+        if !path.exists() {
+            return KeyLimitsFile::default();
+        }
+        read_json(&path)
+            .inspect_err(|e| eprintln!("[ieum] 키 한도 기록을 읽지 못해 새로 시작해요: {e}"))
+            .unwrap_or_default()
+    }
+
+    /// 한도를 정하거나(`Some`) 없앤다(`None`). 한도가 바뀌면 그 키의 알림 기록은 지운다.
+    pub fn set_key_limit(&self, key: &str, usd: Option<f64>) -> Result<(), String> {
+        if usd.is_some_and(|v| !(v.is_finite() && v > 0.0)) {
+            return Err("한도는 0보다 큰 금액이어야 해요.".into());
+        }
+        let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut f = self.key_limits();
+        match usd {
+            Some(v) => f.limits.insert(key.to_string(), v),
+            None => f.limits.remove(key),
+        };
+        f.notified.remove(key);
+        write_atomic(&self.root.join("key-limits.json"), &f)
+    }
+
+    pub fn set_notified(&self, key: &str, n: Notified) -> Result<(), String> {
+        let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut f = self.key_limits();
+        f.notified.insert(key.to_string(), n);
+        write_atomic(&self.root.join("key-limits.json"), &f)
+    }
+
+    /// 알림 단계를 올린다 — 비교와 기록을 같은 잠금 안에서 해 알림이 두 번 가지 않게.
+    /// 한도가 `limit` 그대로이고 그 달 기록 단계가 `level`보다 낮을 때만 쓰고 `true`.
+    /// 그새 한도가 바뀌었으면(옛 한도로 계산한 단계) 쓰지 않는다.
+    pub fn raise_notified(
+        &self,
+        key: &str,
+        month: &str,
+        level: u8,
+        limit: f64,
+    ) -> Result<bool, String> {
+        let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut f = self.key_limits();
+        let sent = f
+            .notified
+            .get(key)
+            .filter(|n| n.month == month)
+            .map_or(0, |n| n.level);
+        if f.limits.get(key) != Some(&limit) || level <= sent {
+            return Ok(false);
+        }
+        let n = Notified {
+            month: month.to_string(),
+            level,
+        };
+        f.notified.insert(key.to_string(), n);
+        write_atomic(&self.root.join("key-limits.json"), &f)?;
+        Ok(true)
+    }
+
+    /// 지운 키의 한도·알림 기록을 뺀다. 지울 게 없으면 쓰지 않는다.
+    pub fn remove_key_limit(&self, key: &str) -> Result<(), String> {
+        let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut f = self.key_limits();
+        let had = f.limits.remove(key).is_some();
+        if !(f.notified.remove(key).is_some() || had) {
+            return Ok(());
+        }
+        write_atomic(&self.root.join("key-limits.json"), &f)
     }
 
     pub fn get_settings(&self) -> Result<Settings, String> {

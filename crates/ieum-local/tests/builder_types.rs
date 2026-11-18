@@ -237,3 +237,11 @@ fn ai_model_list_failed_code_is_known() {
     assert!(c.message().contains("Antigravity"));
     assert_eq!(c.exit_code(), 1);
 }
+
+#[test]
+fn ai_key_limit_code_is_known() {
+    let c: Code = serde_json::from_value(serde_json::json!("AI_KEY_LIMIT")).unwrap();
+    assert_eq!(c, Code::AiKeyLimit);
+    assert!(!c.message().is_empty());
+    assert_eq!(c.exit_code(), 1);
+}

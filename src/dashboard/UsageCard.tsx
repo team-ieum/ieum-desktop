@@ -7,10 +7,11 @@ import { t } from "../i18n";
 import { apiName, PROVIDERS, type SubId } from "../screens/settings/AiPane";
 import { connectedSubs } from "../shell/UsagePopover";
 import { useCredentials } from "../stores/credentials";
+import { useKeyLimits } from "../stores/keyLimits";
 import { useDefaultPlans } from "../stores/plans";
 import { useWorkflows } from "../stores/workflows";
 import { formatTokens, formatUsd } from "../usage/format";
-import { credName, Dropdown, hot, usedOf, WindowMeter } from "../usage/parts";
+import { credName, Dropdown, hot, LimitMeter, usedOf, WindowMeter } from "../usage/parts";
 
 const RANGES: UsageRange[] = ["today", "week", "month"];
 const tokens = (x: { input: number; output: number }) => x.input + x.output;
@@ -36,11 +37,16 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
   // 기간이 바뀌면 올라가 — 늦게 온 옛 새로고침 결과가 새 기간을 덮지 않게
   const gen = useRef(0);
   const workflows = useWorkflows((s) => s.list);
+  const limitView = useKeyLimits((s) => s.view);
+
+  // 한도 막대는 기간 탭과 무관하게 이번 달 — 사용량을 다시 읽을 때 같이 읽어 금액과 어긋나지 않게. 못 읽으면 막대만 없다.
+  const reloadLimits = () => useKeyLimits.getState().load().catch(() => {});
 
   const refreshApi = () => {
     if (refreshing) return;
     const mine = gen.current;
     setRefreshing(true);
+    reloadLimits();
     api.usageSummary(range).then(
       (s) => {
         if (gen.current === mine) {
@@ -58,6 +64,7 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
     gen.current++;
     setRefreshing(false);
     setSum(undefined);
+    reloadLimits();
     api.usageSummary(range).then(
       (s) => live && setSum(s),
       () => live && setSum(null),
@@ -142,7 +149,13 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
                       const s = sum.bySource.find((x) => x.source === p.id);
                       const n = s ? tokens(s) : 0;
                       const keys = sum.byCredential.filter((c) => c.source === p.id).sort((a, b) => tokens(b) - tokens(a));
-                      const expandable = keys.length >= 2;
+                      // 이 기간에 안 쓴 한도 키도 0 줄로 더한다
+                      for (const lk of Object.keys(limitView?.limits ?? {})) {
+                        const id = lk.startsWith(`${p.id}:`) ? lk.slice(p.id.length + 1) : null;
+                        if (id && !keys.some((c) => c.credential === id)) keys.push({ source: p.id, credential: id, input: 0, output: 0, usd: 0 });
+                      }
+                      const limitOf = (id: string) => limitView?.limits[`${p.id}:${id}`] ?? null;
+                      const expandable = keys.length >= 2 || keys.some((c) => limitOf(c.credential) !== null);
                       const isOpen = expandable && !!open[p.id];
                       const stored = Object.values(view?.apiKeys ?? {}).flat();
                       return (
@@ -189,6 +202,11 @@ export function UsageCard({ hidden, onUsage, onAccounts }: { hidden: boolean; on
                                     <div className="mt-1 h-1 overflow-hidden rounded-full bg-neutral-100">
                                       <div className="h-full rounded-full bg-main-blue/50" style={{ width: `${total ? (cn / total) * 100 : 0}%` }} />
                                     </div>
+                                    {limitOf(c.credential) !== null && (
+                                      <div className="mt-1.5">
+                                        <LimitMeter spend={limitView?.spend[`${p.id}:${c.credential}`] ?? 0} limit={limitOf(c.credential)} />
+                                      </div>
+                                    )}
                                   </li>
                                 );
                               })}

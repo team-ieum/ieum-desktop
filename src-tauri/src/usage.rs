@@ -85,7 +85,7 @@ impl Acc {
     }
 }
 
-fn run_usages(r: &StoredRun) -> Vec<AiUsage> {
+pub fn run_usages(r: &StoredRun) -> Vec<AiUsage> {
     r.run
         .nodes
         .values()

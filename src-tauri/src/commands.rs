@@ -15,7 +15,10 @@ use crate::account::AccountId;
 use crate::active::{Active, NOT_SIGNED_IN};
 use crate::builder_host::{PickFolder, builder_of};
 use crate::channel::Channel;
-use crate::credentials::{AccountCredentials, ApiKeyMeta, CliAccountBegin, CredentialsView};
+use crate::credentials::{
+    API_PROVIDERS, AccountCredentials, ApiKeyMeta, CliAccountBegin, CredentialsView,
+};
+use crate::key_limits::{self, KeyLimitsView};
 use crate::permissions;
 use crate::plan_usage::PlanUsage;
 use crate::pricing;
@@ -158,6 +161,33 @@ pub async fn usage_summary(
     Ok(usage::summarize(&runs, &chats, from, now, pricing::table()))
 }
 
+/// 키별 월 한도와 이번 달 지출(대시보드와 같은 계산).
+#[tauri::command]
+pub async fn key_limits(active: State<'_, Active>) -> Result<KeyLimitsView, String> {
+    key_limits::view(active.sup().await?.store(), chrono::Local::now())
+}
+
+/// 키 한도를 정한다. `usd`가 없으면 한도를 푼다.
+#[tauri::command]
+pub async fn set_key_limit(
+    active: State<'_, Active>,
+    source: String,
+    id: String,
+    usd: Option<f64>,
+) -> Result<(), String> {
+    if !API_PROVIDERS.contains(&source.as_str()) {
+        return Err("지원하지 않는 공급원이에요.".into());
+    }
+    if !key_limits::valid_key_id(&id) {
+        return Err("키 id가 올바르지 않아요.".into());
+    }
+    active
+        .sup()
+        .await?
+        .store()
+        .set_key_limit(&format!("{source}:{id}"), usd)
+}
+
 /// 활성 계정의 통계 및 사용량 화면 — 합계·최근 30일 개요·공급자별 분석(로컬 시각대).
 #[tauri::command]
 pub async fn usage_report(active: State<'_, Active>) -> Result<UsageReport, String> {
@@ -270,7 +300,16 @@ pub async fn delete_credential(
     kind: String,
     id: String,
 ) -> Result<(), String> {
-    with_credentials(&active, move |c| c.delete(&kind, &id)).await
+    let (k, i) = (kind.clone(), id.clone());
+    with_credentials(&active, move |c| c.delete(&kind, &id)).await?;
+    if API_PROVIDERS.contains(&k.as_str()) {
+        active
+            .sup()
+            .await?
+            .store()
+            .remove_key_limit(&format!("{k}:{i}"))?;
+    }
+    Ok(())
 }
 
 /// 구독 계정 추가 시작: 설정 폴더를 만들고 터미널에서 돌릴 로그인 명령을 준다. `kind` = `claude|codex`.

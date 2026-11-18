@@ -109,3 +109,68 @@ async fn ask_fails_without_calling_provider() {
     );
     assert!(echo.0.lock().unwrap().is_empty());
 }
+
+/// 받은 `(source, credential)`을 쌓고, credential이 `blocked`면 막는다.
+#[derive(Default)]
+struct Deny(Mutex<Vec<(String, String)>>);
+
+#[async_trait]
+impl KeyGate for Deny {
+    async fn check(&self, source: &str, credential: &str) -> Result<(), String> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((source.into(), credential.into()));
+        if credential == "blocked" {
+            return Err("막힘".into());
+        }
+        Ok(())
+    }
+}
+
+fn seen(d: &Deny) -> Vec<(String, String)> {
+    d.0.lock().unwrap().clone()
+}
+
+#[tokio::test]
+async fn ask_blocked_by_gate_skips_provider() {
+    let echo = Arc::new(Echo(Default::default()));
+    let deny = Arc::new(Deny::default());
+    let r = AiRunner::empty()
+        .with_provider("api:anthropic", echo.clone())
+        .with_resolver(Arc::new(Creds))
+        .with_gate(deny.clone());
+    let e = r
+        .ask("api:anthropic", Some("blocked"), req(), &|_: &str| {})
+        .await
+        .unwrap_err();
+    assert_eq!(e.0, "막힘");
+    assert!(echo.0.lock().unwrap().is_empty());
+    assert_eq!(seen(&deny), [("anthropic".into(), "blocked".into())]);
+}
+
+#[tokio::test]
+async fn gate_sees_resolved_default_id() {
+    let deny = Arc::new(Deny::default());
+    let r = AiRunner::empty()
+        .with_provider("api:anthropic", Arc::new(Echo(Default::default())))
+        .with_resolver(Arc::new(Creds))
+        .with_gate(deny.clone());
+    r.ask("api:anthropic", None, req(), &|_: &str| {})
+        .await
+        .unwrap();
+    assert_eq!(seen(&deny), [("anthropic".into(), "default".into())]);
+}
+
+#[tokio::test]
+async fn gate_survives_with_roots() {
+    let r = AiRunner::empty()
+        .with_provider("api:anthropic", Arc::new(Echo(Default::default())))
+        .with_gate(Arc::new(Deny::default()))
+        .with_roots(ieum_local::AllowedRoots::default());
+    assert!(
+        r.ask("api:anthropic", Some("blocked"), req(), &|_: &str| {})
+            .await
+            .is_err()
+    );
+}
