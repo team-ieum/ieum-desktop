@@ -3,7 +3,9 @@
 use std::fs;
 
 use chrono::{DateTime, Local, TimeZone};
-use ieum_desktop_lib::key_limits::{LimitGate, after_use, level, money, month_spend, used_keys};
+use ieum_desktop_lib::key_limits::{
+    LimitGate, after_use, level, money, month_spend, used_keys, view,
+};
 use ieum_desktop_lib::pricing;
 use ieum_desktop_lib::store::{ChatUsage, KeyLimitsFile, Notified, Store, StoredRun};
 use ieum_desktop_lib::usage::{range_start, summarize};
@@ -390,4 +392,26 @@ fn used_keys_filters_cli_and_dedups() {
             pair("anthropic", "default"),
         ]
     );
+}
+
+#[test]
+fn view_lists_limits_and_spend() {
+    let (_t, s) = setup();
+    spend(&s, Some("k1"), 1_000_000);
+    spend(&s, Some("k2"), 1_000_000);
+    s.set_key_limit("anthropic:k1", Some(5.0)).unwrap();
+    let v = view(&s, now()).unwrap();
+    assert_eq!(v.limits.len(), 1);
+    assert_eq!(v.limits["anthropic:k1"], 5.0);
+    assert!(close(v.spend["anthropic:k1"], 2.0), "{:?}", v.spend);
+    assert!(close(v.spend["anthropic:k2"], 2.0), "{:?}", v.spend);
+}
+
+#[test]
+fn view_has_unused_limited_key() {
+    let (_t, s) = setup();
+    s.set_key_limit("anthropic:k1", Some(5.0)).unwrap();
+    let v = view(&s, now()).unwrap();
+    assert!(v.limits.contains_key("anthropic:k1"));
+    assert!(!v.spend.contains_key("anthropic:k1"));
 }

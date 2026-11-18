@@ -333,6 +333,8 @@ pub fn run() {
             commands::get_run,
             commands::usage_summary,
             commands::usage_report,
+            commands::key_limits,
+            commands::set_key_limit,
             commands::undo_run,
             commands::detect_providers,
             commands::list_credentials,

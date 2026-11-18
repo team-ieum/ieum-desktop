@@ -9,6 +9,8 @@ const COMMANDS: &[&str] = &[
     "get_run",
     "usage_summary",
     "usage_report",
+    "key_limits",
+    "set_key_limit",
     "undo_run",
     "detect_providers",
     "list_credentials",

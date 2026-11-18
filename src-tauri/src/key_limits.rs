@@ -1,7 +1,7 @@
 //! API 키별 월 한도: 이번 달 지출(대시보드와 같은 `summarize`), AI 호출 전 게이트, 80%·100% 알림 단계.
 //! 한도 키는 `<source>:<credential id>`(source는 `api:` 뗀 값). 구독 CLI(`cli:*`)는 다루지 않는다.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
@@ -50,6 +50,22 @@ pub fn month_spend(
             )
         })
         .collect()
+}
+
+/// 화면이 읽는 한도 목록과 이번 달 지출. 한도만 있고 쓴 적 없는 키는 `spend`에 없다(화면이 0으로 본다).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyLimitsView {
+    pub limits: BTreeMap<String, f64>,
+    pub spend: HashMap<String, f64>,
+}
+
+pub fn view(store: &Store, now: DateTime<Local>) -> Result<KeyLimitsView, String> {
+    let spend = month_spend(&store.all_runs()?, &store.all_chat_usage()?, now);
+    Ok(KeyLimitsView {
+        limits: store.key_limits().limits,
+        spend,
+    })
 }
 
 /// 알림 단계: 0, 80, 100.

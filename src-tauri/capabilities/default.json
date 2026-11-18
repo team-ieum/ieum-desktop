@@ -18,6 +18,8 @@
     "allow-get-run",
     "allow-usage-summary",
     "allow-usage-report",
+    "allow-key-limits",
+    "allow-set-key-limit",
     "allow-undo-run",
     "allow-detect-providers",
     "allow-list-credentials",
