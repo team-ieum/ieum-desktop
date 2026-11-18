@@ -219,6 +219,11 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 "test-undo-failed",
                 json!({"id": workflow_id, "runId": run_id}),
             ),
+            AppEvent::KeyLimit(n) => {
+                let lang = notify::settings(&handle).language.into();
+                notify::deliver(&handle, &notify::key_limit_notice(&n, lang));
+                Ok(())
+            }
         };
         if let Err(e) = sent {
             eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");

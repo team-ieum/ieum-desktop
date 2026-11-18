@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use ieum_engine::schedule::{
     Decision, GRACE, Schedule, decide, schedule_cron, schedule_output, to_quartz, triggered_at,
 };
@@ -31,6 +31,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::http_confirm::HttpConfirmGate;
+use crate::key_limits::{KeyLimitNotice, after_use, used_keys};
 use crate::store::{RunTrigger, Store, StoredRun, StoredWorkflow, clip_http_bodies, now};
 
 /// 워크플로우 하나의 대기 실행 상한. 넘으면 가장 오래된 것부터 버린다.
@@ -76,6 +77,8 @@ pub enum AppEvent {
         run_id: String,
         at_start: Option<String>,
     },
+    /// 시스템 알림 재료(화면 이벤트 아님) — API 키가 이번 달 한도의 80%·100%에 닿았다. 실행 알림 토글과 무관.
+    KeyLimit(KeyLimitNotice),
 }
 
 /// `save_workflow_expecting`이 기대한 `updated_at`과 저장본이 다를 때의 오류 문자열.
@@ -1047,6 +1050,13 @@ impl Supervisor {
             clip_http_bodies(&mut stored.run, &wf.workflow);
         }
         let saved = self.store().save_run(&stored);
+        // 한도 알림은 기록을 쓴 뒤에 본다 — 이번 실행 지출이 이번 달 합계에 들어가야 한다.
+        if saved.is_ok() {
+            let used = used_keys(crate::usage::run_usages(&stored));
+            for n in after_use(self.store(), &used, Local::now()) {
+                emit(AppEvent::KeyLimit(n));
+            }
+        }
         // 못 되돌린 경로는 화면이 기록에서 읽는다 — 기록을 쓴 뒤에 알린다.
         if stored.undo.as_ref().is_some_and(|u| !u.skipped.is_empty()) {
             emit(AppEvent::TestUndoFailed {

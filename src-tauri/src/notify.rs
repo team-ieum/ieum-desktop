@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::active::Active;
+use crate::key_limits::{KeyLimitNotice, money, provider_name};
 use crate::limit_watch::Suggestion;
 use crate::store::{Language, RunTrigger, Settings};
 use crate::supervisor::{NoticeKind, RunNotice};
@@ -93,6 +94,8 @@ pub enum Target {
     Suggest,
     /// 그 워크플로우의 편집 화면.
     Workflow(String),
+    /// 설정 › AI 제공자.
+    AiSettings,
 }
 
 impl Target {
@@ -103,6 +106,7 @@ impl Target {
             Target::History => json!({"kind": "history"}),
             Target::Suggest => json!({"kind": "suggest"}),
             Target::Workflow(id) => json!({"kind": "workflow", "id": id}),
+            Target::AiSettings => json!({"kind": "aiSettings"}),
         }
     }
 }
@@ -129,6 +133,40 @@ pub fn suggest_notice(s: &Suggestion, lang: Lang) -> Notice {
         title,
         body,
         target: Target::Suggest,
+    }
+}
+
+/// API 키 월 한도 80%·100% 알림. 이름표·금액만 싣는다(키 값 없음).
+pub fn key_limit_notice(n: &KeyLimitNotice, lang: Lang) -> Notice {
+    let (p, label) = (provider_name(&n.source), &n.label);
+    let (spend, limit) = (money(n.spend), money(n.limit));
+    let over = n.level >= 100;
+    let (title, body) = match (lang, over) {
+        (Lang::Ko, false) => (
+            format!("{p} {label} 키 — 이번 달 한도의 80%"),
+            format!("{spend} / {limit} 썼어요(예상). 넘으면 이 키로는 실행을 멈춰요."),
+        ),
+        (Lang::Ko, true) => (
+            format!("{p} {label} 키 — 이번 달 한도를 넘었어요"),
+            format!("{spend} / {limit}(예상). 이 키를 쓰는 AI 노드는 다음 달까지 멈춰요."),
+        ),
+        (Lang::En, false) => (
+            format!("{p} {label} key — 80% of this month's limit"),
+            format!(
+                "{spend} / {limit} used (estimated). Runs with this key stop once it's exceeded."
+            ),
+        ),
+        (Lang::En, true) => (
+            format!("{p} {label} key — over this month's limit"),
+            format!(
+                "{spend} / {limit} (estimated). AI nodes using this key stop until next month."
+            ),
+        ),
+    };
+    Notice {
+        title,
+        body,
+        target: Target::AiSettings,
     }
 }
 

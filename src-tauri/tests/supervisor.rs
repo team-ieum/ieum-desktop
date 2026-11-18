@@ -17,13 +17,13 @@ use ieum_desktop_lib::supervisor::{
 };
 use ieum_engine::{ExecEvent, NodeStatus, RunStatus, Workflow};
 use ieum_local::WatchTiming;
-use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
+use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, AiUsage, ChunkFn};
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
 /// 가짜 AI 공급원(`fake`): `{"folder": "sorted"}`. 동시 실행 수를 재고, `gate`가 있으면 허가를 하나씩 받는다.
-/// 받은 프롬프트를 남긴다(파일 내용이 갔는지 확인).
+/// 받은 프롬프트를 남긴다(파일 내용이 갔는지 확인). `usage`가 있으면 답마다 그 사용량을 낸다.
 #[derive(Default)]
 struct FakeAi {
     calls: AtomicUsize,
@@ -31,6 +31,7 @@ struct FakeAi {
     max_active: AtomicUsize,
     gate: Option<Semaphore>,
     prompts: Mutex<Vec<String>>,
+    usage: Option<AiUsage>,
 }
 
 #[async_trait]
@@ -48,7 +49,7 @@ impl AiProvider for FakeAi {
         self.active.fetch_sub(1, Ordering::SeqCst);
         Ok(AiAnswer {
             text: r#"{"folder": "sorted"}"#.into(),
-            usage: None,
+            usage: self.usage.clone(),
         })
     }
 }
@@ -1477,4 +1478,50 @@ async fn github_node_reaches_token() {
         run.run.nodes["g"].error.as_deref(),
         Some("GitHub 연결이 필요해요. 설정 > 연동에서 연결해 주세요.")
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_over_limit_emits_key_limit_once() {
+    let env = env_with(
+        FakeAi {
+            usage: Some(AiUsage {
+                source: "anthropic".into(),
+                model: Some("claude-opus-5-5".into()),
+                input_tokens: 1000,
+                output_tokens: 1000,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                credential: Some("k1".into()),
+            }),
+            ..Default::default()
+        },
+        Duration::from_secs(30),
+    );
+    env.store
+        .set_key_limit("anthropic:k1", Some(0.000001))
+        .unwrap();
+    let inbox = env.dir("in");
+    // 기록되는 키 id는 노드의 `credential` 칸에서 온다(러너가 덮어쓴다).
+    let mut wf = ai_only_wf(&inbox);
+    wf.nodes[1].config.insert("credential".into(), json!("k1"));
+    let id = save(&env, wf, false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    for _ in 0..2 {
+        env.sup
+            .run_now(&id, Some(&inbox.join("a.pdf")))
+            .await
+            .unwrap();
+    }
+    let got: Vec<_> = env
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            AppEvent::KeyLimit(n) => Some(n.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!((got[0].source.as_str(), got[0].level), ("anthropic", 100));
 }

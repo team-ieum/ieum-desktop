@@ -2,10 +2,12 @@
 
 use std::time::Duration;
 
+use ieum_desktop_lib::key_limits::KeyLimitNotice;
 use ieum_desktop_lib::limit_watch::Suggestion;
 use ieum_desktop_lib::notify::{
     BATCH_WINDOW, Batch, Batcher, Lang, Notice, Prefs, Route, Target, finish_notice,
-    lang_from_apple_languages, route, suggest_notice, summarize, undo_failed_notice,
+    key_limit_notice, lang_from_apple_languages, route, suggest_notice, summarize,
+    undo_failed_notice,
 };
 use ieum_desktop_lib::store::RunTrigger;
 use ieum_desktop_lib::supervisor::{NoticeKind, RunNotice};
@@ -312,4 +314,37 @@ fn notify_schedule_like_watch() {
     assert_eq!(route(&n, &off, false, Lang::Ko), Route::Drop);
     let started = notice(RunTrigger::Schedule, NoticeKind::Started);
     assert_eq!(route(&started, &ALL, false, Lang::Ko), Route::Drop);
+}
+
+#[test]
+fn key_limit_notice_ko_en() {
+    let n = |level, spend, limit| KeyLimitNotice {
+        source: "anthropic".into(),
+        label: "회사".into(),
+        level,
+        spend,
+        limit,
+    };
+    let ko = key_limit_notice(&n(80, 4.3, 5.0), Lang::Ko);
+    assert_eq!(
+        (ko.title.as_str(), ko.body.as_str()),
+        (
+            "Claude 회사 키 — 이번 달 한도의 80%",
+            "$4.30 / $5 썼어요(예상). 넘으면 이 키로는 실행을 멈춰요."
+        )
+    );
+    assert_eq!(ko.target, Target::AiSettings);
+    assert_eq!(
+        ko.target.payload(),
+        serde_json::json!({"kind": "aiSettings"})
+    );
+    let en = key_limit_notice(&n(100, 2.1, 2.0), Lang::En);
+    assert_eq!(
+        (en.title.as_str(), en.body.as_str()),
+        (
+            "Claude 회사 key — over this month's limit",
+            "$2.10 / $2 (estimated). AI nodes using this key stop until next month."
+        )
+    );
+    assert_eq!(en.target, Target::AiSettings);
 }

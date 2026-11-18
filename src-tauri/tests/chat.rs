@@ -14,7 +14,7 @@ use ieum_desktop_lib::builder_host::{AppHost, no_pick};
 use ieum_desktop_lib::chat::{CHAT_BUSY, CHAT_EMPTY, CHAT_MODEL_REQUIRED, send};
 use ieum_desktop_lib::credentials::AccountCredentials;
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
-use ieum_desktop_lib::supervisor::{Deps, Supervisor};
+use ieum_desktop_lib::supervisor::{AppEvent, Deps, Supervisor};
 use ieum_engine::Workflow;
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::KeyError;
@@ -72,7 +72,8 @@ impl AiProvider for Script {
             text,
             usage: Some(AiUsage {
                 source: "anthropic".into(),
-                model: None,
+                // 단가표에 있는 모델 — 한도 검사에 금액이 잡히게.
+                model: Some("claude-opus-5-5".into()),
                 input_tokens: 1,
                 output_tokens: 0,
                 cache_read_tokens: None,
@@ -107,6 +108,7 @@ struct Env {
     sup: Supervisor,
     store: Store,
     creds: AccountCredentials,
+    events: Arc<Mutex<Vec<AppEvent>>>,
 }
 
 impl Env {
@@ -125,6 +127,8 @@ fn env(script: Arc<Script>) -> Env {
     let store = Store::new(root.join("data"));
     let creds = AccountCredentials::new(root.join("data"), "0123456789abcdef", Arc::new(NoKeys));
     let ai = AiRunner::empty().with_provider("fake", script);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let ev = events.clone();
     let sup = Supervisor::start(Deps {
         store: store.clone(),
         app_data: root.join("data"),
@@ -132,7 +136,7 @@ fn env(script: Arc<Script>) -> Env {
         trash_dir: root.join("trash"),
         ai: Arc::new(ai.with_resolver(Arc::new(creds.clone()))),
         github: no_github(),
-        emit: Arc::new(|_| {}),
+        emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),
             repeat_window: Duration::from_secs(30),
@@ -148,6 +152,7 @@ fn env(script: Arc<Script>) -> Env {
         sup,
         store,
         creds,
+        events,
     }
 }
 
@@ -355,4 +360,41 @@ async fn second_turn_while_running_is_busy() {
             .await
             .is_ok()
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chat_over_limit_emits_key_limit() {
+    let env = env(Script::new([ans("네", json!([]))]));
+    env.store
+        .set_key_limit("anthropic:k1", Some(0.000001))
+        .unwrap();
+    let id = save(&env, ai_only_wf(&env.dir("watch")), false);
+    // 기록되는 키 id는 채팅의 `credential`에서 온다.
+    let ai = AiDefault {
+        credential: Some("k1".into()),
+        ..ai()
+    };
+    send(
+        &env.sup,
+        &builder(&env),
+        &id,
+        "안녕",
+        ai,
+        Limits::default(),
+        &|_| {},
+    )
+    .await
+    .unwrap();
+    let got: Vec<_> = env
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            AppEvent::KeyLimit(n) => Some(n.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!((got[0].source.as_str(), got[0].level), ("anthropic", 100));
 }

@@ -12,8 +12,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::active::Active;
 use crate::builder_host::{PickFolder, builder_of};
+use crate::key_limits::{after_use, used_keys};
 use crate::store::now;
-use crate::supervisor::Supervisor;
+use crate::supervisor::{AppEvent, Supervisor};
 
 /// 그 워크플로우의 턴이 이미 돌고 있다.
 pub const CHAT_BUSY: &str = "CHAT_BUSY";
@@ -138,6 +139,11 @@ pub async fn send(
             usage: u.clone(),
         }));
     })?;
+    // 사용량을 채팅 파일에 쓴 뒤 — 이번 턴 지출이 이번 달 합계에 들어가야 한다.
+    let used = used_keys(turn.usage.iter().cloned());
+    for n in after_use(store, &used, chrono::Local::now()) {
+        sup.emit(AppEvent::KeyLimit(n));
+    }
     Ok(ChatTurn {
         say: turn.say,
         cards: turn.cards,
