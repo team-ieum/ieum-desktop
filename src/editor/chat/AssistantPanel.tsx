@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { IeumMark } from "../../assets/providers";
 import { t } from "../../i18n";
+import { useClosing } from "../useClosing";
 import { ChatSlot } from "./ChatSlot";
 import { TerminalSlot } from "./TerminalSlot";
 
@@ -44,6 +45,9 @@ export function AssistantPanel({
 }) {
   const [open, setOpen] = useState(false);
   const [opened, setOpened] = useState(false);
+  // 패널이 화면에 보이나 — 닫을 때 open은 바로 false, shown은 빠지는 움직임 뒤에 false.
+  const [shown, setShown] = useState(false);
+  const { closing, close, cancel } = useClosing(() => setShown(false));
   const [saved, setSaved] = useState(lastMode);
   // 터미널을 쓸 수 있나(설치·로그인된 CLI가 있거나 세션이 살아 있다). 확인 전(null)에는 숨기지 않는다.
   const [terminalOk, setTerminalOk] = useState<boolean | null>(null);
@@ -80,6 +84,8 @@ export function AssistantPanel({
         onClick={() => {
           setOpen(true);
           setOpened(true);
+          setShown(true);
+          cancel();
           onOpenChange?.(true);
         }}
         aria-label={t("assistant.open")}
@@ -93,8 +99,10 @@ export function AssistantPanel({
       {opened && (
         <aside
           aria-label="IEUM Assistant"
-          hidden={!open}
-          className="absolute right-4 top-4 bottom-4 z-30 flex flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white transition-[width] duration-200 motion-reduce:transition-none"
+          hidden={!shown}
+          className={`absolute right-4 top-4 bottom-4 z-30 flex flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white transition-[width] duration-200 motion-reduce:transition-none ${
+            closing ? "ieum-slide-out" : "ieum-grow-tr"
+          }`}
           style={{ width: WIDTH[mode], boxShadow: "0 24px 48px -8px rgba(16, 24, 40, 0.18), 0 8px 16px -4px rgba(16, 24, 40, 0.1)" }}
         >
           <div className="flex shrink-0 items-center gap-3 bg-main-deep-blue px-4 py-3.5 text-white">
@@ -126,6 +134,7 @@ export function AssistantPanel({
               onClick={() => {
                 setOpen(false);
                 onOpenChange?.(false);
+                close();
               }}
               aria-label={t("assistant.close")}
               title={t("assistant.close")}
