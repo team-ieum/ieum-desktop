@@ -16,10 +16,10 @@ pub use model::{Edge, Node, Workflow};
 pub use render::{Outputs, referenced_node_ids, references, render_deep};
 pub use run::{
     NodeCtx, NodeError, NodeRecord, NodeRunner, NodeStatus, RejectReason, RunResult, Runners,
-    run_workflow,
+    run_node, run_workflow,
 };
 pub use transform::TransformMapRunner;
 pub use validate::{
-    ErrorCode, ValidationError, condition_branches, declared_outputs, upstream_ids, validate,
-    validate_fields,
+    ErrorCode, ValidationError, condition_branches, declared_outputs, node_errors, upstream_ids,
+    validate, validate_fields,
 };

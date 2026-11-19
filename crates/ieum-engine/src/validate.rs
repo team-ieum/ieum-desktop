@@ -29,6 +29,8 @@ pub enum ErrorCode {
     Required,
     Choice,
     Cron,
+    /// `node_errors`만 낸다 — 전체 실행은 `RejectReason::UnknownEvent`로 거부한다.
+    UnknownEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -824,25 +826,71 @@ fn cut_loc(s: String) -> String {
 pub fn validate_fields(wf: &Workflow, catalog: &Catalog) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     for node in &wf.nodes {
-        let Some(entry) = catalog.get(&node.event) else {
-            continue;
-        };
-        for f in &entry.input_fields {
-            let path = field_path(f);
-            if unused_field(entry, node, &path) {
-                continue;
-            }
-            let mut value = get_path(node, &path);
-            if entry.node_type == NodeType::Condition
-                && is_empty(value)
-                && let Some(alias) = condition_alias(&path)
-            {
-                value = get_path(node, alias);
-            }
-            check_required_choice(f, value, &path, sid(&node.id), &mut errors);
-        }
+        required_choice_errors(node, catalog, &mut errors);
     }
     errors
+}
+
+fn required_choice_errors(node: &Node, catalog: &Catalog, errors: &mut Vec<ValidationError>) {
+    let Some(entry) = catalog.get(&node.event) else {
+        return;
+    };
+    for f in &entry.input_fields {
+        let path = field_path(f);
+        if unused_field(entry, node, &path) {
+            continue;
+        }
+        let mut value = get_path(node, &path);
+        if entry.node_type == NodeType::Condition
+            && is_empty(value)
+            && let Some(alias) = condition_alias(&path)
+        {
+            value = get_path(node, alias);
+        }
+        check_required_choice(f, value, &path, sid(&node.id), errors);
+    }
+}
+
+/// 노드 테스트용 — 그 노드 하나의 오류만. 노드 하나만 돌리니 그래프 오류(트리거 수·고아·사이클·엣지)는 보지 않는다.
+/// 카탈로그에 없는 event → cron → 필수·선택지 → 참조 금지 칸 → 참조식 순. 없는 node_id면 빈 목록.
+pub fn node_errors(wf: &Workflow, catalog: &Catalog, node_id: &str) -> Vec<ValidationError> {
+    let Some(node) = wf.nodes.iter().find(|n| n.id == node_id) else {
+        return Vec::new();
+    };
+    let nid = sid(node_id);
+    let mut errors = Vec::new();
+    if catalog.get(&node.event).is_none() {
+        errors.push(err(
+            UnknownEvent,
+            format!("실행할 수 없는 노드 종류예요: {}", clip(&node.event)),
+            nid,
+            None,
+        ));
+    }
+    if let Some(nid) = nid
+        && node
+            .r#type
+            .as_deref()
+            .is_some_and(|t| t.to_uppercase() == "TRIGGER")
+    {
+        errors.extend(cron_error(node, nid, catalog));
+    }
+    required_choice_errors(node, catalog, &mut errors);
+    errors.extend(field_errors(node, catalog));
+    let mut out = Collector::default();
+    for e in errors {
+        if !out.push(e) {
+            return out.errors;
+        }
+    }
+    let by_id: HashMap<&str, &Node> = wf
+        .nodes
+        .iter()
+        .filter_map(|n| sid(&n.id).map(|id| (id, n)))
+        .collect();
+    let preds = predecessors(&wf.edges, &by_id);
+    ref_errors(node, catalog, &by_id, &preds, &mut HashMap::new(), &mut out);
+    out.errors
 }
 
 fn check_required_choice(
