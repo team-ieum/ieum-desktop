@@ -59,6 +59,22 @@ test("write_node_asks_one_line", async () => {
   expect(testNode).not.toHaveBeenCalled();
 });
 
+test("confirm_sends_what_card_showed", async () => {
+  vi.spyOn(api, "getSamples").mockResolvedValue({});
+  const testNode = vi.spyOn(api, "testNode").mockResolvedValue(result({ output: { status: 201 } }));
+  const a = node("a", "http.request", { method: "POST", url: "https://a.example" }, "보내기 A");
+  const r = await show({ nodes: [a], edges: [] }, a);
+  await press();
+  expect(screen.getByRole("dialog", { name: "테스트로 실제 요청을 보낼까요?" })).toBeTruthy();
+  // 카드가 떠 있는 동안 url을 바꿔도 카드에 보인 요청만 보낸다.
+  const changed = { ...a, config: { method: "POST", url: "https://b.example/{{nodes.x.output.token}}" } };
+  r.rerender(<NodeTestSection workflowId="w1" workflow={{ nodes: [changed], edges: [] }} node={changed} onOpen={() => {}} />);
+  const card = screen.getByRole("dialog", { name: "테스트로 실제 요청을 보낼까요?" });
+  await act(async () => fireEvent.click(within(card).getByRole("button", { name: "보내기" })));
+  expect(testNode).toHaveBeenCalledTimes(1);
+  expect(testNode).toHaveBeenCalledWith("w1", { nodes: [a], edges: [] }, "a");
+});
+
 test("missing_lists_open_buttons", async () => {
   vi.spyOn(api, "getSamples").mockResolvedValue({});
   vi.spyOn(api, "testNode").mockResolvedValue(result({ status: "missing", output: null, testedAt: null, missing: ["a"], runId: null }));

@@ -25,6 +25,8 @@ export function useNodeTest(workflowId: string | null, workflow: Workflow, node:
   const [result, setResult] = useState<NodeTestResult | null>(null);
   const [running, setRunning] = useState(false);
   const [ask, setAsk] = useState<HttpLine[] | null>(null);
+  // 카드에 보인 요청 그대로 보내도록, 카드를 띄운 때의 편집본·노드를 잡아 둔다.
+  const asked = useRef<{ workflow: Workflow; node: WfNode } | null>(null);
 
   useEffect(() => {
     if (!workflowId) return;
@@ -38,7 +40,7 @@ export function useNodeTest(workflowId: string | null, workflow: Workflow, node:
     };
   }, [workflowId, node.id]);
 
-  const go = async () => {
+  const go = async (workflow: Workflow, node: WfNode) => {
     if (!workflowId) return;
     // 폴더 트리거는 테스트할 파일을 고른다.
     const folder = node.event === "local.folder_new_file";
@@ -66,8 +68,11 @@ export function useNodeTest(workflowId: string | null, workflow: Workflow, node:
 
   const run = async () => {
     const line = isGithubWrite(node) ? githubLine(node, workflow.nodes) : node.event === "http.request" ? httpLine(node, workflow.nodes) : null;
-    if (line && line.method !== "GET") return setAsk([line]);
-    return go();
+    if (line && line.method !== "GET") {
+      asked.current = { workflow, node };
+      return setAsk([line]);
+    }
+    return go(workflow, node);
   };
   // 두 번 눌러도 한 번만 돌린다.
   const asking = useRef(false);
@@ -76,7 +81,9 @@ export function useNodeTest(workflowId: string | null, workflow: Workflow, node:
     if (!asking.current) return;
     asking.current = false;
     setAsk(null);
-    if (send) void go();
+    const snap = asked.current;
+    asked.current = null;
+    if (send && snap) void go(snap.workflow, snap.node);
   };
   return { sample, result, running, run, ask, answer };
 }
