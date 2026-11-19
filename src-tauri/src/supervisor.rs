@@ -1,7 +1,7 @@
 //! 실행 감독: 켜진 폴더 트리거 워크플로우마다 감시 하나, 워크플로우별 실행 줄(한 번에 하나), 실행 기록·되돌리기.
 //! Tauri 없이 돈다 — 저장소·휴지통·AI 러너·이벤트 송신을 `Deps`로 주입한다.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -13,26 +13,29 @@ use ieum_engine::schedule::{
     Decision, GRACE, Schedule, decide, schedule_cron, schedule_output, to_quartz, triggered_at,
 };
 use ieum_engine::{
-    BuiltinRunners, Catalog, ExecEvent, GITHUB_EVENTS, NodeRunner, NodeStatus, RunResult,
-    RunStatus, Runners, ValidationError, Workflow, run_workflow, validate,
+    BuiltinRunners, Catalog, ExecEvent, GITHUB_EVENTS, Node, NodeRecord, NodeRunner, NodeStatus,
+    Outputs, RunResult, RunStatus, Runners, ValidationError, Workflow, node_errors,
+    referenced_node_ids, run_node, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
 use ieum_local::builder::{HttpLine, TestRun, TestTrigger};
 use ieum_local::github::GithubRunner;
 use ieum_local::{
-    AllowedRoots, FileMoveRunner, FileRenameRunner, FileTrashRunner, FolderWatcher, HttpRunner,
-    Journal, NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo,
+    AllowedRoots, FileMoveRunner, FileOp, FileRenameRunner, FileTrashRunner, FolderWatcher,
+    HttpRunner, Journal, NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo,
     user_folders, validate_user_folder,
 };
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use tokio::runtime::Handle;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::http_confirm::HttpConfirmGate;
 use crate::key_limits::{KeyLimitNotice, after_use, used_keys};
-use crate::store::{RunTrigger, Store, StoredRun, StoredWorkflow, clip_http_bodies, now};
+use crate::store::{
+    RunTrigger, Sample, SampleStatus, Store, StoredRun, StoredWorkflow, clip_http_bodies, now,
+};
 
 /// 워크플로우 하나의 대기 실행 상한. 넘으면 가장 오래된 것부터 버린다.
 pub const QUEUE_CAP: usize = 100;
@@ -246,6 +249,97 @@ enum JobSource {
     Manual,
     /// 채팅 빌더의 노드 테스트 — 저장본 대신 돌릴 그래프(대상까지 자른 것).
     Test(Workflow),
+    /// 노드 패널 테스트 — 편집본의 노드 하나만 돌리고 결과는 `reply`로(실행 이벤트 없음).
+    NodeTest {
+        wf: Workflow,
+        node_id: String,
+        file: Option<PathBuf>,
+        reply: oneshot::Sender<Result<NodeTestResult, String>>,
+    },
+}
+
+/// 노드 패널 테스트 결과. 화면 타입은 `src/api.ts` `NodeTestResult`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NodeTestStatus {
+    Succeeded,
+    Failed,
+    /// 노드 단위 검증 실패 — 실행하지 않았다.
+    Invalid,
+    /// 참조하는 앞 노드의 성공 샘플이 없다 — 실행하지 않았다.
+    Missing,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeTestResult {
+    pub status: NodeTestStatus,
+    pub output: Option<Map<String, Value>>,
+    pub error: Option<String>,
+    pub error_code: Option<String>,
+    pub tested_at: Option<String>,
+    /// `Missing`일 때 성공 샘플이 없는 앞 노드 id.
+    pub missing: Vec<String>,
+    /// 테스트가 한 파일 작업을 되돌렸다(뒤 노드는 원래 경로로 테스트된다).
+    pub undone: bool,
+    /// 되돌리지 못한 파일 작업 수.
+    pub undo_failed: usize,
+    /// 실행 기록 id(실제로 실행했을 때만 — 트리거 테스트는 기록이 없다).
+    pub run_id: Option<String>,
+}
+
+impl NodeTestResult {
+    fn new(status: NodeTestStatus) -> Self {
+        Self {
+            status,
+            output: None,
+            error: None,
+            error_code: None,
+            tested_at: None,
+            missing: Vec::new(),
+            undone: false,
+            undo_failed: 0,
+            run_id: None,
+        }
+    }
+}
+
+/// 샘플의 노드 스냅숏 — 화면이 지금 편집본과 비교해 낡음을 보인다.
+fn snapshot(n: &Node) -> Value {
+    json!({"event": n.event, "config": n.config})
+}
+
+/// 출력의 글 값 중 되돌린 작업의 `to`(경로)와 같은 것은 `from`으로, `to`의 파일 이름과 같은 것은 `from`의
+/// 파일 이름으로 바꾼다(중첩 객체·목록도). 테스트 뒤 파일은 원래 자리라 뒤 노드가 있는 파일로 테스트되게.
+/// 같은 파일을 여러 번 옮겼으면 맨 처음 자리까지 따라간다.
+pub fn rewrite_undone_paths(output: &mut Map<String, Value>, restored: &[FileOp]) {
+    let text = |p: &Path| p.to_string_lossy().into_owned();
+    let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().into_owned());
+    let mut pairs = Vec::new();
+    for op in restored {
+        pairs.push((text(&op.to), text(&op.from)));
+        if let (Some(to), Some(from)) = (name(&op.to), name(&op.from)) {
+            pairs.push((to, from));
+        }
+    }
+    output.values_mut().for_each(|v| rewrite_value(v, &pairs));
+}
+
+fn rewrite_value(v: &mut Value, pairs: &[(String, String)]) {
+    match v {
+        Value::String(s) => {
+            // 되돌린 작업이 서로 이어지면(a→b→c) 끝까지 — 고리가 있어도 작업 수만큼만 돈다.
+            for _ in 0..pairs.len() {
+                match pairs.iter().find(|(to, _)| to == s) {
+                    Some((_, from)) if from != s => *s = from.clone(),
+                    _ => break,
+                }
+            }
+        }
+        Value::Array(list) => list.iter_mut().for_each(|v| rewrite_value(v, pairs)),
+        Value::Object(m) => m.values_mut().for_each(|v| rewrite_value(v, pairs)),
+        _ => {}
+    }
 }
 
 enum Pushed {
@@ -891,6 +985,22 @@ impl Supervisor {
                     }
                 }
             };
+            if let JobSource::NodeTest {
+                wf,
+                node_id,
+                file,
+                reply,
+            } = job.source
+            {
+                let result = self
+                    .node_test(workflow_id, wf, &node_id, file.as_deref())
+                    .await;
+                if let Err(e) = &result {
+                    eprintln!("[ieum] 노드를 테스트하지 못했어요: 워크플로우 {workflow_id}: {e}");
+                }
+                let _ = reply.send(result);
+                continue;
+            }
             let result = self.run_one(workflow_id, job.source, job.trigger).await;
             if let Err(e) = &result {
                 eprintln!("[ieum] 실행하지 못했어요: 워크플로우 {workflow_id}: {e}");
@@ -901,36 +1011,9 @@ impl Supervisor {
         }
     }
 
-    /// 실행 하나 → 기록 저장. run_id를 돌려준다. 파일 작업이 생길 때마다 기록을 먼저 쓴다.
-    async fn run_one(
-        &self,
-        workflow_id: &str,
-        source: JobSource,
-        trigger: Map<String, Value>,
-    ) -> Result<String, String> {
-        let mut wf = self.store().get_workflow(workflow_id)?;
-        let (run_trigger, scheduled_for) = match &source {
-            JobSource::Test(_) => (RunTrigger::Test, None),
-            JobSource::Watch(_) => (RunTrigger::Watch, None),
-            JobSource::Manual => (RunTrigger::Manual, None),
-            JobSource::Schedule { slot } => (RunTrigger::Schedule, Some(triggered_at(*slot))),
-        };
-        match source {
-            // 노드 테스트는 저장본 대신 대상까지 자른 그래프를 돌린다.
-            JobSource::Test(test) => wf.workflow = test,
-            // 감시가 보낸 뒤 꺼졌거나 폴더가 바뀐 워크플로우의 늦은 트리거는 버린다.
-            JobSource::Watch(f) if trigger_folder(&wf).as_ref() != Some(&f) => {
-                return Err("꺼졌거나 감시 폴더가 바뀌어 늦게 온 트리거를 버렸어요.".into());
-            }
-            JobSource::Schedule { .. } if enabled_schedule(&wf).is_none() => {
-                return Err("꺼졌거나 스케줄이 아니게 되어 차례를 버렸어요.".into());
-            }
-            _ => {}
-        }
-        // 저장 때 검사했지만 저장소에 직접 심은 정의도 막는다.
-        self.check_folders(&wf.workflow)?;
-        let roots = roots_for_workflow(&wf.workflow);
-        let (journal, recent) = (Journal::default(), self.0.recent.clone());
+    /// 실행 하나의 러너 — 파일 노드는 `roots` 안에서만 움직이고 작업을 `journal`에 남긴다.
+    fn runners(&self, roots: &AllowedRoots, journal: &Journal) -> Runners {
+        let recent = self.0.recent.clone();
         let mut runners = Runners::with_builtin();
         let local: [(&str, Arc<dyn NodeRunner>); 5] = [
             (
@@ -967,6 +1050,42 @@ impl Supervisor {
         runners.extend(local.into_iter().map(|(k, v)| (k.to_string(), v)));
         let github: Arc<dyn NodeRunner> = self.0.deps.github.clone();
         runners.extend(GITHUB_EVENTS.map(|e| (e.to_string(), github.clone())));
+        runners
+    }
+
+    /// 실행 하나 → 기록 저장. run_id를 돌려준다. 파일 작업이 생길 때마다 기록을 먼저 쓴다.
+    async fn run_one(
+        &self,
+        workflow_id: &str,
+        source: JobSource,
+        trigger: Map<String, Value>,
+    ) -> Result<String, String> {
+        let mut wf = self.store().get_workflow(workflow_id)?;
+        let (run_trigger, scheduled_for) = match &source {
+            JobSource::Test(_) | JobSource::NodeTest { .. } => (RunTrigger::Test, None),
+            JobSource::Watch(_) => (RunTrigger::Watch, None),
+            JobSource::Manual => (RunTrigger::Manual, None),
+            JobSource::Schedule { slot } => (RunTrigger::Schedule, Some(triggered_at(*slot))),
+        };
+        match source {
+            // 노드 테스트는 저장본 대신 대상까지 자른 그래프를 돌린다.
+            JobSource::Test(test) => wf.workflow = test,
+            // 노드 패널 테스트는 `drain`이 `node_test`로 돌린다.
+            JobSource::NodeTest { .. } => return Err("노드 테스트는 따로 돌아요.".into()),
+            // 감시가 보낸 뒤 꺼졌거나 폴더가 바뀐 워크플로우의 늦은 트리거는 버린다.
+            JobSource::Watch(f) if trigger_folder(&wf).as_ref() != Some(&f) => {
+                return Err("꺼졌거나 감시 폴더가 바뀌어 늦게 온 트리거를 버렸어요.".into());
+            }
+            JobSource::Schedule { .. } if enabled_schedule(&wf).is_none() => {
+                return Err("꺼졌거나 스케줄이 아니게 되어 차례를 버렸어요.".into());
+            }
+            _ => {}
+        }
+        // 저장 때 검사했지만 저장소에 직접 심은 정의도 막는다.
+        self.check_folders(&wf.workflow)?;
+        let roots = roots_for_workflow(&wf.workflow);
+        let journal = Journal::default();
+        let runners = self.runners(&roots, &journal);
 
         let started_at = now();
         let stored = |run: RunResult, finished_at: String| StoredRun {
@@ -1147,13 +1266,274 @@ impl Supervisor {
             TestTrigger::Output(output) => output,
         };
         // 되돌리기는 실행 줄(`run_one`)이 한다 — 이 future가 버려져도 끝까지 간다.
-        let run_id = self.queue(workflow_id, trigger, Some(wf)).await?;
+        let run_id = self.queue(workflow_id, trigger, Some(wf.clone())).await?;
         let stored = self.store().get_run(&run_id)?;
+        self.save_test_samples(workflow_id, &wf, &stored);
         Ok(TestRun {
             run_id,
             status: stored.run.status,
             nodes: stored.run.nodes,
             undo: stored.undo.unwrap_or_default(),
+        })
+    }
+
+    /// 빌더 테스트에서 실제로 실행된 노드(성공·실패)마다 샘플을 남긴다(경로는 되돌린 뒤 경로로).
+    /// 쓰지 못해도 테스트 결과는 그대로 돌려준다.
+    fn save_test_samples(&self, workflow_id: &str, wf: &Workflow, stored: &StoredRun) {
+        let restored = stored.undo.as_ref().map_or(&[][..], |u| &u.restored[..]);
+        let tested_at = now();
+        let samples = wf
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let rec = stored.run.nodes.get(&n.id)?;
+                let status = match rec.status {
+                    NodeStatus::Succeeded => SampleStatus::Succeeded,
+                    NodeStatus::Failed => SampleStatus::Failed,
+                    _ => return None,
+                };
+                let mut output = rec.output.clone();
+                if let Some(o) = output.as_mut() {
+                    rewrite_undone_paths(o, restored);
+                }
+                let sample = Sample {
+                    status,
+                    output,
+                    error: rec.error.clone(),
+                    error_code: rec.error_code.clone(),
+                    tested_at: tested_at.clone(),
+                    node: snapshot(n),
+                };
+                Some((n.id.clone(), sample))
+            })
+            .collect();
+        if let Err(e) = self.store().put_samples(workflow_id, samples) {
+            eprintln!("[ieum] 테스트 결과를 샘플로 쓰지 못했어요: {e}");
+        }
+    }
+
+    /// 노드 패널 테스트: 편집본 `wf`의 노드 `node_id` 하나만 같은 워크플로우 실행 줄에서 돌린다 — 전체 실행·다른
+    /// 테스트와 겹치지 않는다. 앞 노드 값은 앞 노드의 성공 샘플. 실행 이벤트(`exec-event`)는 내지 않는다.
+    /// 검증 실패(`Invalid`)·앞 노드 샘플 없음(`Missing`)은 실행하지 않고 샘플도 덮지 않는다.
+    /// HTTP·GitHub 쓰기 확인은 화면이 이 명령을 부르기 전에 받는다(`useTestRun`·`HttpConfirm`).
+    pub async fn test_node(
+        &self,
+        workflow_id: &str,
+        wf: Workflow,
+        node_id: &str,
+        file: Option<&Path>,
+    ) -> Result<NodeTestResult, String> {
+        // 샘플을 둘 곳 — 한 번도 저장하지 않은 워크플로우는 테스트하지 않는다.
+        if self.store().get_workflow(workflow_id).is_err() {
+            return Err("먼저 저장해 주세요".into());
+        }
+        if !wf.nodes.iter().any(|n| n.id == node_id) {
+            return Err(format!("노드를 찾을 수 없어요: {node_id}"));
+        }
+        if let Some(e) = node_errors(&wf, &self.0.catalog, node_id)
+            .into_iter()
+            .next()
+        {
+            return Ok(NodeTestResult {
+                error: Some(e.message),
+                ..NodeTestResult::new(NodeTestStatus::Invalid)
+            });
+        }
+        let (tx, rx) = oneshot::channel();
+        self.push(
+            workflow_id,
+            Job {
+                trigger: Map::new(),
+                source: JobSource::NodeTest {
+                    wf,
+                    node_id: node_id.to_string(),
+                    file: file.map(Path::to_path_buf),
+                    reply: tx,
+                },
+                reply: None,
+            },
+        );
+        rx.await.map_err(|_| "실행이 취소됐어요.".to_string())?
+    }
+
+    /// 실행 줄 안에서 도는 `test_node` 본문.
+    async fn node_test(
+        &self,
+        workflow_id: &str,
+        wf: Workflow,
+        node_id: &str,
+        file: Option<&Path>,
+    ) -> Result<NodeTestResult, String> {
+        // 줄을 서는 동안 지워졌으면 샘플·기록을 남기지 않는다.
+        self.store().get_workflow(workflow_id)?;
+        let node = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == node_id)
+            .ok_or_else(|| format!("노드를 찾을 수 없어요: {node_id}"))?;
+        let save_sample = |sample: Sample| {
+            self.store()
+                .put_samples(workflow_id, BTreeMap::from([(node_id.to_string(), sample)]))
+        };
+        // 트리거는 지금 실행과 같은 출력을 만들어 샘플로만 남긴다(실행 기록 없음).
+        if node
+            .r#type
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("TRIGGER"))
+        {
+            let output = match node.event.as_str() {
+                "manual.run" => Map::new(),
+                "local.folder_new_file" => {
+                    self.file_trigger(&wf, file.ok_or("파일을 골라 주세요")?)?
+                }
+                e if e.starts_with("schedule.") => {
+                    schedule_output(e, &node.config, (self.0.deps.now)())
+                }
+                _ => return Err("이 트리거는 테스트할 수 없어요.".into()),
+            };
+            let tested_at = now();
+            save_sample(Sample {
+                status: SampleStatus::Succeeded,
+                output: Some(output.clone()),
+                error: None,
+                error_code: None,
+                tested_at: tested_at.clone(),
+                node: snapshot(node),
+            })?;
+            return Ok(NodeTestResult {
+                output: Some(output),
+                tested_at: Some(tested_at),
+                ..NodeTestResult::new(NodeTestStatus::Succeeded)
+            });
+        }
+
+        // 앞 노드 값 = 참조하는 앞 노드의 성공 샘플. 실패 샘플은 없는 것으로 본다.
+        let samples = self.store().get_samples(workflow_id)?;
+        let (mut outputs, mut missing) = (Outputs::new(), Vec::new());
+        for id in referenced_node_ids(&Value::Object(node.config.clone())) {
+            match samples.get(&id) {
+                Some(s) if s.status == SampleStatus::Succeeded => {
+                    outputs.insert(id, s.output.clone().unwrap_or_default());
+                }
+                _ => missing.push(id),
+            }
+        }
+        if !missing.is_empty() {
+            return Ok(NodeTestResult {
+                missing,
+                ..NodeTestResult::new(NodeTestStatus::Missing)
+            });
+        }
+
+        self.check_folders(&wf)?;
+        let roots = roots_for_workflow(&wf);
+        let journal = Journal::default();
+        let runners = self.runners(&roots, &journal);
+        let started_at = now();
+        // 이벤트는 버린다 — 캔버스·실행 표시는 노드 테스트를 모른다.
+        let (result, usage) = run_node(
+            node,
+            &runners,
+            &outputs,
+            &mpsc::unbounded_channel().0,
+            &CancellationToken::new(),
+        )
+        .await;
+        let (status, output, error, error_code) = match result {
+            Ok(o) => (NodeStatus::Succeeded, Some(o), None, None),
+            Err(e) => (NodeStatus::Failed, None, Some(e.message), e.code),
+        };
+        let ok = status == NodeStatus::Succeeded;
+        let record = NodeRecord {
+            status,
+            output: output.clone(),
+            error: error.clone(),
+            usage,
+            error_code: error_code.clone(),
+            output_clipped: false,
+        };
+        let mut stored = StoredRun {
+            run: RunResult {
+                run_id: uuid::Uuid::new_v4().to_string(),
+                status: if ok {
+                    RunStatus::Succeeded
+                } else {
+                    RunStatus::Failed
+                },
+                validation_errors: Vec::new(),
+                reject_reason: None,
+                nodes: BTreeMap::from([(node_id.to_string(), record)]),
+            },
+            workflow_id: workflow_id.to_string(),
+            started_at,
+            finished_at: String::new(),
+            file_ops: journal.ops(),
+            allowed_roots: roots.paths().to_vec(),
+            undo: None,
+            trigger: Some(RunTrigger::Test),
+            scheduled_for: None,
+        };
+        // 파일 작업이 있으면 되돌리기 전에 끝나지 않은 기록으로 먼저 쓴다 — 도중에 앱이 꺼져도 다음 시작 때 되돌린다.
+        if !stored.file_ops.is_empty()
+            && let Err(e) = self.store().save_run(&stored)
+        {
+            eprintln!("[ieum] 실행 도중 기록을 쓰지 못했어요: {e}");
+        }
+        let report = {
+            let _one_at_a_time = lock(&self.0.undo_lock);
+            self.undo_ops(&stored)
+        };
+        let (undone, undo_failed) = (!report.restored.is_empty(), report.skipped.len());
+        let mut output = output;
+        if let Some(o) = output.as_mut() {
+            rewrite_undone_paths(o, &report.restored);
+        }
+        stored.undo = Some(report);
+        stored.finished_at = now();
+        clip_http_bodies(&mut stored.run, &wf);
+        let saved = self.store().save_run(&stored);
+        let run_id = stored.run.run_id.clone();
+        if undo_failed > 0 {
+            self.emit(AppEvent::TestUndoFailed {
+                workflow_id: workflow_id.to_string(),
+                run_id: run_id.clone(),
+                at_start: None,
+            });
+        }
+        // 키 한도·지출은 실행 기록의 `usage`에서 센다 — 기록을 쓴 뒤에 본다.
+        if saved.is_ok() {
+            let used = used_keys(crate::usage::run_usages(&stored));
+            for n in after_use(self.store(), &used, Local::now()) {
+                self.emit(AppEvent::KeyLimit(n));
+            }
+        }
+        saved?;
+        let tested_at = stored.finished_at;
+        save_sample(Sample {
+            status: if ok {
+                SampleStatus::Succeeded
+            } else {
+                SampleStatus::Failed
+            },
+            output: output.clone(),
+            error: error.clone(),
+            error_code: error_code.clone(),
+            tested_at: tested_at.clone(),
+            node: snapshot(node),
+        })?;
+        Ok(NodeTestResult {
+            output,
+            error,
+            error_code,
+            tested_at: Some(tested_at),
+            undone,
+            undo_failed,
+            run_id: Some(run_id),
+            ..NodeTestResult::new(if ok {
+                NodeTestStatus::Succeeded
+            } else {
+                NodeTestStatus::Failed
+            })
         })
     }
 
