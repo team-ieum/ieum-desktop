@@ -1,11 +1,12 @@
-import { Play, Plus, Trash2, X } from "lucide-react";
+import { Plus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type StoredWorkflow, type ValidationError, type WfNode, type WorkflowEntry } from "../api";
-import { Canvas, LocalBadge, nodeTitle, StatusIcon } from "../editor/Canvas";
+import { Canvas, LocalBadge, nodeTitle } from "../editor/Canvas";
 import { AssistantPanel } from "../editor/chat/AssistantPanel";
 import { FinishCard } from "../editor/chat/FinishCard";
 import { HttpConfirm, HttpTestCard } from "../editor/chat/HttpTestCard";
 import { ConfigPanel } from "../editor/ConfigPanel";
+import { NodeTestSection } from "../editor/NodeTestSection";
 import { Palette } from "../editor/Palette";
 import { RunErrorCard } from "../editor/RunErrorCard";
 import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
@@ -209,6 +210,8 @@ export function Editor({
   const testRun = useTestRun(draft.id, base.workflow.nodes);
   /** 빌더의 테스트가 되돌리지 못한 파일(`원래 자리 → 지금 자리`) — 터미널 입구에는 결과 카드가 없어 여기 배너로 보인다. */
   const [stuck, setStuck] = useState<string[]>([]);
+  /** 캔버스 자리 — 노드 테스트 확인 카드를 패널 밖 여기에 띄운다. */
+  const [area, setArea] = useState<HTMLDivElement | null>(null);
 
   // 고칠 때마다 검증 결과를 노드 위에 보여 준다.
   useEffect(() => {
@@ -338,7 +341,6 @@ export function Editor({
     (m): m is string => !!m,
   );
   const unsaved = dirty || !draft.id;
-  const nodeStatus = selected && live.nodes[selected.id];
   // 취소한 실행은 실패로 보이지 않는다.
   const showRun = live.status !== "cancelled";
   const nodeRight = cover > 0 ? cover + 12 + 384 : 400;
@@ -374,7 +376,7 @@ export function Editor({
           ))}
         </ul>
       )}
-      <div className="relative min-h-0 flex-1">
+      <div ref={setArea} className="relative min-h-0 flex-1">
         <div className="absolute inset-0">
           <Canvas
             workflow={wf}
@@ -435,37 +437,17 @@ export function Editor({
             <div className="flex-1 p-5">
               <ConfigPanel key={selected.id} node={selected} workflow={wf} onChange={setNode} />
             </div>
-            {/* 시험 실행은 워크플로우 전체 — 결과는 이 노드 것만(마지막 실행의 상태·오류·출력 조각). */}
-            <section className="flex flex-col gap-2 border-t border-neutral-200 bg-neutral-50 p-5">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="typo-body2_bold text-neutral-800">{t("editor.test")}</h3>
-                <button
-                  type="button"
-                  className={BUTTON}
-                  onClick={() => void testRun.run()}
-                  disabled={unsaved || testRun.running}
-                  title={unsaved ? t("run.saveFirst") : t("editor.testHint")}
-                >
-                  <Play size={14} aria-hidden="true" />
-                  {t("editor.test")}
-                </button>
-              </div>
-              <p className="typo-caption1_regular text-neutral-500">{t("editor.testHint")}</p>
-              {nodeStatus ? (
-                <p className="flex items-center gap-2 typo-body3_semibold text-neutral-800">
-                  <StatusIcon status={nodeStatus} />
-                  {t(`status.${nodeStatus}`)}
-                </p>
-              ) : (
-                <p className="typo-body3_regular text-neutral-500">{t("editor.noResult")}</p>
-              )}
-              {live.errors[selected.id] && <p className="typo-caption1_semibold text-danger-700">{live.errors[selected.id]}</p>}
-              {live.chunks[selected.id] && (
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-brand-sm border border-neutral-200 bg-white p-2.5 font-mono text-xs text-neutral-700">
-                  {live.chunks[selected.id]}
-                </pre>
-              )}
-            </section>
+            <NodeTestSection
+              key={selected.id}
+              workflowId={draft.id || null}
+              workflow={wf}
+              node={selected}
+              onOpen={showNode}
+              lastFailed={showRun && live.nodes[selected.id] === "failed"}
+              lastError={live.errors[selected.id]}
+              chunk={live.chunks[selected.id]}
+              host={area}
+            />
           </SidePanel>
         )}
       </div>
