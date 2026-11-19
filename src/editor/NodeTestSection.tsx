@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { WfNode, Workflow } from "../api";
 import { locale, t } from "../i18n";
 import { DEFS } from "../nodes/defs";
-import { BUTTON } from "../screens/Editor";
+import { BUTTON } from "./buttons";
 import { nodeTitle } from "./Canvas";
 import { HttpConfirm } from "./chat/HttpTestCard";
 import { OutputView } from "./OutputView";
@@ -104,7 +104,13 @@ export function NodeTestSection({
           })}
         </>
       )}
-      {result?.status === "invalid" && <div className={ERR}>{result.error}</div>}
+      {running && (
+        <div role="status" className="flex items-center gap-1.5 text-[13px] font-semibold text-neutral-600">
+          <span aria-hidden="true" className="size-3.5 animate-spin rounded-full border-2 border-neutral-300 border-t-neutral-600" />
+          {t("status.running")}
+        </div>
+      )}
+      {result?.status === "invalid" && result.error && <div className={ERR}>{result.error}</div>}
       {sample ? (
         <>
           <div className="flex items-center gap-1.5 text-[13px] font-semibold" style={{ color: ok ? OK : "var(--color-danger-700)" }}>
@@ -115,7 +121,7 @@ export function NodeTestSection({
             <span className="ml-auto text-xs font-normal text-neutral-500">{when(sample.testedAt)}</span>
           </div>
           {stale && <div className={WARN}>{t("editor.testOutdated")}</div>}
-          {ok ? sample.output && <OutputView output={sample.output} fields={DEFS[node.event]?.outputFields} /> : <div className={ERR}>{sample.error}</div>}
+          {ok ? sample.output && <OutputView output={sample.output} fields={DEFS[node.event]?.outputFields} /> : sample.error && <div className={ERR}>{sample.error}</div>}
           {ran && result.undone && <div className={INFO}>{t("editor.testUndone")}</div>}
         </>
       ) : (

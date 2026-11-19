@@ -155,3 +155,40 @@ test("tested_time_label", async () => {
     vi.useRealTimers();
   }
 });
+
+test("folder_trigger_double_click_opens_one_dialog", async () => {
+  vi.spyOn(api, "getSamples").mockResolvedValue({});
+  let pick!: (p: string | null) => void;
+  const pickPath = vi.spyOn(api, "pickPath").mockReturnValue(new Promise((r) => (pick = r)));
+  const testNode = vi.spyOn(api, "testNode").mockResolvedValue(result({}));
+  const n = node("f", "local.folder_new_file");
+  await show({ nodes: [n], edges: [] }, n);
+  await press();
+  await press();
+  expect(pickPath).toHaveBeenCalledTimes(1);
+  // 창을 닫으면(취소) 다시 누를 수 있다.
+  await act(async () => pick(null));
+  expect(testNode).not.toHaveBeenCalled();
+  await press();
+  expect(pickPath).toHaveBeenCalledTimes(2);
+});
+
+test("running_indicator_while_testing", async () => {
+  vi.spyOn(api, "getSamples").mockResolvedValue({});
+  let done!: (r: NodeTestResult) => void;
+  vi.spyOn(api, "testNode").mockReturnValue(new Promise((r) => (done = r)));
+  const n = node("a", "http.request", { method: "GET", url: "https://a.example" });
+  await show({ nodes: [n], edges: [] }, n);
+  await press();
+  expect(screen.getByRole("status").textContent).toBe("실행 중");
+  await act(async () => done(result({})));
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+test("failed_sample_without_error_has_no_empty_band", async () => {
+  const n = node("a", "http.request", { method: "GET", url: "https://a.example" });
+  vi.spyOn(api, "getSamples").mockResolvedValue({ a: sample(n, { status: "failed", output: null, error: null }) });
+  const { container } = await show({ nodes: [n], edges: [] }, n);
+  expect(screen.getByText("실패")).toBeTruthy();
+  expect(container.querySelector(".bg-danger-100")).toBeNull();
+});

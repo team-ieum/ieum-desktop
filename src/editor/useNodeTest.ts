@@ -26,6 +26,7 @@ export function useNodeTest(workflowId: string | null, workflow: Workflow, node:
   const [running, setRunning] = useState(false);
   const [ask, setAsk] = useState<HttpLine[] | null>(null);
   // 카드에 보인 요청 그대로 보내도록, 카드를 띄운 때의 편집본·노드를 잡아 둔다.
+  const busy = useRef(false);
   const asked = useRef<{ workflow: Workflow; node: WfNode } | null>(null);
 
   useEffect(() => {
@@ -41,12 +42,18 @@ export function useNodeTest(workflowId: string | null, workflow: Workflow, node:
   }, [workflowId, node.id]);
 
   const go = async (workflow: Workflow, node: WfNode) => {
-    if (!workflowId) return;
+    if (!workflowId || busy.current) return;
+    // 파일 고르는 창이 떠 있는 동안에도 다시 눌러 두 번 열리지 않게 먼저 잠근다.
+    busy.current = true;
+    setRunning(true);
     // 폴더 트리거는 테스트할 파일을 고른다.
     const folder = node.event === "local.folder_new_file";
     const file = folder ? await api.pickPath(false).catch((e) => (setResult(notRun(String(e))), null)) : null;
-    if (folder && !file) return;
-    setRunning(true);
+    if (folder && !file) {
+      busy.current = false;
+      setRunning(false);
+      return;
+    }
     try {
       const r = await (file ? api.testNode(workflowId, workflow, node.id, file) : api.testNode(workflowId, workflow, node.id));
       setResult(r);
@@ -62,6 +69,7 @@ export function useNodeTest(workflowId: string | null, workflow: Workflow, node:
     } catch (e) {
       setResult(notRun(String(e)));
     } finally {
+      busy.current = false;
       setRunning(false);
     }
   };

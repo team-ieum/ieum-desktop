@@ -15,14 +15,12 @@ import { useClosing } from "../editor/useClosing";
 import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
 import { isLocal, newNode, nextPosition } from "../nodes/defs";
+import { BUTTON, PRIMARY } from "../editor/buttons";
 import { nodeMeta, toneStyle } from "../nodes/meta";
 import { emptyLive, useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
 
-export const BUTTON =
-  "inline-flex items-center gap-1.5 rounded-brand-sm border border-neutral-300 bg-white px-3 py-2 typo-button1_semibold text-neutral-700 hover:bg-neutral-100 disabled:opacity-40";
-export const PRIMARY =
-  "inline-flex items-center gap-1.5 rounded-brand-sm bg-main-blue px-3 py-2 typo-button1_semibold text-white hover:bg-main-deep-blue disabled:opacity-40";
+export { BUTTON, PRIMARY };
 
 const strip = ({ watch: _w, watchMessage: _m, ...wf }: WorkflowEntry): StoredWorkflow => wf;
 
