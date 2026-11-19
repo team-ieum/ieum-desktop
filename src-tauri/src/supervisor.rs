@@ -322,6 +322,8 @@ pub fn rewrite_undone_paths(output: &mut Map<String, Value>, restored: &[FileOp]
             pairs.push((to, from));
         }
     }
+    // 이름 그대로 옮긴 짝(b.pdf→b.pdf)은 뺀다 — 남기면 그 짝에 걸려 다음 작업(이름 바꾸기)까지 못 간다.
+    pairs.retain(|(to, from)| to != from);
     output.values_mut().for_each(|v| rewrite_value(v, &pairs));
 }
 

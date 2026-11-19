@@ -369,6 +369,32 @@ fn rewrite_undone_paths_nested() {
             "other": "그대로"
         })
     );
+
+    // 이름 바꾸기(a→b) 뒤 이름 그대로 옮기기(b→sorted/b) — undo는 거꾸로 돌려준다.
+    // 이름이 그대로인 짝(b.pdf→b.pdf)에 걸려 멈추지 않고 a.pdf까지 가야 한다.
+    let restored = [
+        FileOp {
+            kind: FileOpKind::Move,
+            from: "/x/b.pdf".into(),
+            to: "/x/sorted/b.pdf".into(),
+            file_id: None,
+        },
+        FileOp {
+            kind: FileOpKind::Move,
+            from: "/x/a.pdf".into(),
+            to: "/x/b.pdf".into(),
+            file_id: None,
+        },
+    ];
+    let mut out = json!({"path": "/x/sorted/b.pdf", "name": "b.pdf"})
+        .as_object()
+        .cloned()
+        .unwrap();
+    rewrite_undone_paths(&mut out, &restored);
+    assert_eq!(
+        Value::Object(out),
+        json!({"path": "/x/a.pdf", "name": "a.pdf"})
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
