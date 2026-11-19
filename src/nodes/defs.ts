@@ -35,6 +35,14 @@ import githubFindRepo from "../../catalog/events/github/find_repo.json";
 import githubFindUser from "../../catalog/events/github/find_user.json";
 import githubGetFile from "../../catalog/events/github/get_file.json";
 import githubCheckOrgMembership from "../../catalog/events/github/check_org_membership.json";
+import githubCreatePullRequest from "../../catalog/events/github/create_pull_request.json";
+import githubUpdatePullRequest from "../../catalog/events/github/update_pull_request.json";
+import githubRequestReviewers from "../../catalog/events/github/request_reviewers.json";
+import githubFindPullRequest from "../../catalog/events/github/find_pull_request.json";
+import githubFindOrCreatePullRequest from "../../catalog/events/github/find_or_create_pull_request.json";
+import githubGetPrFiles from "../../catalog/events/github/get_pr_files.json";
+import githubGetPrReviews from "../../catalog/events/github/get_pr_reviews.json";
+import githubSubmitPrReview from "../../catalog/events/github/submit_pr_review.json";
 import httpRequest from "../../catalog/events/http/request.json";
 import manualRun from "../../catalog/events/manual/run.json";
 import scheduleDaily from "../../catalog/events/schedule/daily.json";
@@ -73,10 +81,15 @@ export interface NodeDef {
   outputsFrom?: string;
 }
 
-/** 카탈로그 github 정의에 입력 표(`github_inputs.json`)를 합친다 — 엔진(`catalog.rs`)과 같은 규칙: `{key, type:"string"} ← 표 ← fields[key]`. */
+/** 입력 표 칸 + 카탈로그 칸 합치기 — 엔진(`catalog.rs`)과 같은 순서: `{key, type:"string"} ← 표(desktop 뺀 것) ← fields[key] ← desktop`. */
+export function mergeGithubFields(rows: (Partial<Field> & { desktop?: Partial<Field> })[], fields: Record<string, Partial<Field>>): Field[] {
+  return rows.map(({ desktop, ...row }) => ({ key: row.key, type: "string", ...row, ...fields[row.key!], ...desktop }) as Field);
+}
+
+/** 카탈로그 github 정의에 입력 표(`github_inputs.json`)를 합친다. */
 function githubDef(event: string, d: { fields: Record<string, Partial<Field>> }) {
-  const table = (githubInputs as Record<string, Partial<Field>[]>)[event];
-  return { ...d, inputFields: table.map((row) => ({ key: row.key, type: "string", ...row, ...d.fields[row.key!] })) };
+  const table = (githubInputs as Record<string, (Partial<Field> & { desktop?: Partial<Field> })[]>)[event];
+  return { ...d, inputFields: mergeGithubFields(table, d.fields) };
 }
 
 const raw: [string, unknown][] = [
@@ -129,6 +142,14 @@ const raw: [string, unknown][] = [
   ["github.find_user", githubDef("github.find_user", githubFindUser)],
   ["github.get_file", githubDef("github.get_file", githubGetFile)],
   ["github.check_org_membership", githubDef("github.check_org_membership", githubCheckOrgMembership)],
+  ["github.create_pull_request", githubDef("github.create_pull_request", githubCreatePullRequest)],
+  ["github.update_pull_request", githubDef("github.update_pull_request", githubUpdatePullRequest)],
+  ["github.request_reviewers", githubDef("github.request_reviewers", githubRequestReviewers)],
+  ["github.find_pull_request", githubDef("github.find_pull_request", githubFindPullRequest)],
+  ["github.find_or_create_pull_request", githubDef("github.find_or_create_pull_request", githubFindOrCreatePullRequest)],
+  ["github.get_pr_files", githubDef("github.get_pr_files", githubGetPrFiles)],
+  ["github.get_pr_reviews", githubDef("github.get_pr_reviews", githubGetPrReviews)],
+  ["github.submit_pr_review", githubDef("github.submit_pr_review", githubSubmitPrReview)],
 ];
 
 /** 팔레트 순서 그대로. 입력 칸 없는 정의(`manual.run`)는 빈 목록. */

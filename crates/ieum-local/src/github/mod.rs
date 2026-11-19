@@ -4,6 +4,8 @@ mod api;
 mod input;
 mod issues;
 mod lookup;
+mod pulls;
+mod review;
 
 use std::sync::Arc;
 
@@ -14,12 +16,17 @@ use serde_json::{Map, Value};
 pub use api::{GithubApi, Resp};
 
 /// 저장소에 쓰는 노드 — 빌더 테스트 전에 사람이 확인한다.
-pub const GITHUB_WRITE_EVENTS: [&str; 5] = [
+pub const GITHUB_WRITE_EVENTS: [&str; 10] = [
     "github.create_issue",
     "github.update_issue",
     "github.find_or_create_issue",
     "github.add_labels",
     "github.create_comment",
+    "github.create_pull_request",
+    "github.update_pull_request",
+    "github.request_reviewers",
+    "github.find_or_create_pull_request",
+    "github.submit_pr_review",
 ];
 
 /// 노드 하나를 실행할 때마다 토큰을 준다. 캐시하지 않는다.
@@ -59,6 +66,16 @@ impl NodeRunner for GithubRunner {
                 "github.check_org_membership" => lookup::check_org_membership(api, token, c).await,
                 "github.find_branch" => lookup::find_branch(api, token, c).await,
                 "github.get_file" => lookup::get_file(api, token, c).await,
+                "github.create_pull_request" => pulls::create_pull_request(api, token, c).await,
+                "github.update_pull_request" => pulls::update_pull_request(api, token, c).await,
+                "github.request_reviewers" => pulls::request_reviewers(api, token, c).await,
+                "github.find_pull_request" => pulls::find_pull_request(api, token, c).await,
+                "github.find_or_create_pull_request" => {
+                    pulls::find_or_create_pull_request(api, token, c).await
+                }
+                "github.get_pr_files" => review::get_pr_files(api, token, c).await,
+                "github.get_pr_reviews" => review::get_pr_reviews(api, token, c).await,
+                "github.submit_pr_review" => review::submit_pr_review(api, token, c).await,
                 other => Err(NodeError {
                     message: format!("{other} 노드는 아직 실행할 수 없어요."),
                     code: None,

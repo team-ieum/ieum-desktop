@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-/// 데스크톱이 러너를 가진 GitHub 이슈·조회 노드. 카탈로그엔 이 밖에도 있지만 싣지 않는다.
-pub const GITHUB_EVENTS: [&str; 13] = [
+/// 데스크톱이 러너를 가진 GitHub 이슈·PR·조회 노드. 카탈로그엔 이 밖에도 있지만 싣지 않는다.
+pub const GITHUB_EVENTS: [&str; 21] = [
     "github.create_issue",
     "github.update_issue",
     "github.find_issue",
@@ -19,6 +19,14 @@ pub const GITHUB_EVENTS: [&str; 13] = [
     "github.find_user",
     "github.get_file",
     "github.check_org_membership",
+    "github.create_pull_request",
+    "github.update_pull_request",
+    "github.request_reviewers",
+    "github.find_pull_request",
+    "github.find_or_create_pull_request",
+    "github.get_pr_files",
+    "github.get_pr_reviews",
+    "github.submit_pr_review",
 ];
 
 const GITHUB_INPUTS: &str = include_str!("../../ieum-local/github_inputs.json");
@@ -298,7 +306,15 @@ impl Catalog {
             "find_repo",
             "find_user",
             "get_file",
-            "check_org_membership"
+            "check_org_membership",
+            "create_pull_request",
+            "update_pull_request",
+            "request_reviewers",
+            "find_pull_request",
+            "find_or_create_pull_request",
+            "get_pr_files",
+            "get_pr_reviews",
+            "submit_pr_review"
         );
         Self::parse(sources, &github_table(GITHUB_INPUTS)?)
     }
@@ -410,7 +426,7 @@ fn github_table(text: &str) -> Result<Map<String, Value>, CatalogError> {
     })
 }
 
-/// 칸 하나 = `{key, type: string}` ← 데스크톱 표 항목 ← 카탈로그 `fields[key]`(뒤가 앞을 덮는다).
+/// 칸 하나 = `{key, type: string}` ← 데스크톱 표 항목(`desktop` 뺀 것) ← 카탈로그 `fields[key]` ← 표 항목의 `desktop`(뒤가 앞을 덮는다).
 fn merge_fields(
     path: &Path,
     rows: Option<&Value>,
@@ -422,12 +438,18 @@ fn merge_fields(
     rows.iter()
         .map(|row| {
             let mut merged = json!({"type": "string"}).as_object().cloned().unwrap();
+            let mut desktop = None;
             if let Some(row) = row.as_object() {
-                merged.extend(row.clone());
+                let mut row = row.clone();
+                desktop = row.remove("desktop");
+                merged.extend(row);
             }
             let key = merged.get("key").and_then(Value::as_str).unwrap_or("");
             if let Some(over) = fields.and_then(|f| f.get(key)).and_then(Value::as_object) {
                 merged.extend(over.clone());
+            }
+            if let Some(Value::Object(over)) = desktop {
+                merged.extend(over);
             }
             serde_json::from_value(Value::Object(merged)).map_err(|source| CatalogError::Json {
                 path: path.to_path_buf(),
@@ -454,4 +476,35 @@ fn json_files(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn merge(rows: Value, fields: Value) -> Vec<InputField> {
+        merge_fields(Path::new("t"), Some(&rows), fields.as_object()).unwrap()
+    }
+
+    #[test]
+    fn desktop_overrides_catalog() {
+        let out = merge(
+            json!([{"key":"author","desktop":{"default":"me","choices":[{"id":"me","name":"내 GitHub 계정"}]}}]),
+            json!({"author":{"title":"리뷰 작성자","default":"bot","choices":[{"id":"bot","name":"IEUM 봇"},{"id":"me","name":"내 GitHub 계정"}]}}),
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].default, Some(json!("me")));
+        assert_eq!(out[0].choices.len(), 1);
+        assert_eq!(out[0].choices[0].id, "me");
+        assert_eq!(out[0].title.as_deref(), Some("리뷰 작성자"));
+    }
+
+    #[test]
+    fn no_desktop_keeps_catalog_last() {
+        let out = merge(
+            json!([{"key":"n","type":"integer"}]),
+            json!({"n":{"type":"text"}}),
+        );
+        assert_eq!(out[0].kind.as_deref(), Some("text"));
+    }
 }

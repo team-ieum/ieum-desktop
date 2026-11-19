@@ -188,3 +188,37 @@ pub(crate) fn base_ref(v: &Value) -> Option<String> {
     ref_path(v)?;
     Some(s.to_string())
 }
+
+/// PR head/base — `user:branch`(포크) 또는 브랜치. JSON·쿼리로 보내므로 트림한 원문을 돌려준다.
+pub(crate) fn head_ref(v: &Value) -> Option<String> {
+    let s = v.as_str()?.trim();
+    match s.split_once(':') {
+        Some((user, branch)) => {
+            let ok = is_login(&Value::from(user))
+                && branch == branch.trim()
+                && !branch.contains(':')
+                && ref_path(&Value::from(branch)).is_some();
+            ok.then(|| s.to_string())
+        }
+        None => ref_path(&Value::from(s)).map(|_| s.to_string()),
+    }
+}
+
+/// (head, base). head를 먼저 검사한다. base는 `user:branch`를 받지 않는다.
+pub(crate) fn pr_refs(head: &Value, base: &Value) -> Result<(String, String), NodeError> {
+    let head =
+        head_ref(head).ok_or_else(|| input_error("head 브랜치 형식이 올바르지 않습니다."))?;
+    let base = head_ref(base)
+        .filter(|b| !b.contains(':'))
+        .ok_or_else(|| input_error("base 브랜치 형식이 올바르지 않습니다."))?;
+    Ok((head, base))
+}
+
+/// PR 목록 API의 head 필터는 `owner:branch` 형식이어야 한다.
+pub(crate) fn head_query(owner: &str, head: &str) -> String {
+    if head.contains(':') {
+        head.to_string()
+    } else {
+        format!("{owner}:{head}")
+    }
+}
