@@ -70,6 +70,10 @@ export interface Field {
   description?: string;
   choices?: { id: string; name: string }[];
   children?: Field[];
+  /** 카탈로그 목록 공급원(예: "github.repos") — 그 목록에서 고르는 칸. */
+  optionsSource?: string;
+  /** 목록을 부를 때 넘길 같은 노드의 칸 key들. */
+  optionsInputs?: string[];
 }
 
 export interface NodeDef {
