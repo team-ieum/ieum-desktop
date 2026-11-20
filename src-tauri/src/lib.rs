@@ -325,6 +325,7 @@ pub fn run() {
             github::github_open_device,
             github::github_install,
             github::github_job,
+            github::github_options,
             commands::save_workflow,
             commands::delete_workflow,
             commands::validate_workflow,

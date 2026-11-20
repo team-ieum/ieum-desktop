@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use ieum_engine::NodeError;
 use ieum_local::ai::{sh_quote, shell_output, shell_run};
-use ieum_local::github::GithubToken;
+use ieum_local::github::{GithubApi, GithubToken, OptionList, options};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -434,6 +434,41 @@ async fn status_of(active: &Active) -> Result<GithubStatus, String> {
     tauri::async_runtime::spawn_blocking(move || status_at(&app_data, &dir))
         .await
         .map_err(|e| e.to_string())?
+}
+
+/// 칸 목록 조회 실패 — 코드(있으면)와 사람이 읽는 문구만. 응답 본문·토큰은 싣지 않는다.
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OptionError {
+    pub code: Option<String>,
+    pub message: String,
+}
+
+impl From<NodeError> for OptionError {
+    fn from(e: NodeError) -> Self {
+        OptionError {
+            code: e.code,
+            message: e.message,
+        }
+    }
+}
+
+/// 편집기 콤보박스 목록. 토큰은 노드 실행과 같은 연결 확인(`GhToken`)으로 읽는다.
+#[tauri::command]
+pub async fn github_options(
+    active: State<'_, Active>,
+    source: String,
+    inputs: serde_json::Map<String, serde_json::Value>,
+) -> Result<OptionList, OptionError> {
+    let account_dir = active.account_dir().await.map_err(|message| OptionError {
+        code: None,
+        message,
+    })?;
+    let token = GhToken {
+        app_data: active.app_data().to_path_buf(),
+        account_dir,
+    };
+    Ok(options(&GithubApi::new(), &token, &source, &inputs).await?)
 }
 
 #[tauri::command]
