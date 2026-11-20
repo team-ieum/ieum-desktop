@@ -329,6 +329,8 @@ pub fn run() {
             commands::delete_workflow,
             commands::validate_workflow,
             commands::run_now,
+            commands::test_node,
+            commands::get_samples,
             commands::list_runs,
             commands::get_run,
             commands::usage_summary,

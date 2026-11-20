@@ -86,3 +86,12 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `github.*` | — | PR 리뷰 작성자: `bot` 없음(데스크톱은 `me`만, 그 밖은 입력 오류) · `include_comments` 글 `"false"`를 거짓으로 처리 · PR 노드도 오류 문구에 응답 본문을 안 실음 | `github_review.rs` `author_bot_rejected`·`reviews_rejects`, `github_pulls.rs` `pulls_422_is_invalid` |
 | `github.create_pull_request`·`find_or_create_pull_request` | `draft`·`maintainer_can_modify` | `include_comments`처럼 글 `"false"`를 거짓으로 처리(agent는 `bool("false")`가 참) | `github_pulls.rs` `create_pr_bool_strings` |
 | `github.submit_pr_review` | — | `리뷰 내용이 없습니다.` 확인: 파일·`/user` 호출 뒤 → 토큰을 읽고 요청을 보내기 전에 먼저. 요청이 줄 뿐 결과는 같다(그 호출이 실패하는 경우만 다름) | `github_review.rs` `empty_review_rejected` |
+
+## 노드별 테스트 — 데스크톱이 클라우드와 다르게 도는 곳
+
+| 칸 | 차이 | 고정 테스트 |
+|---|---|---|
+| 샘플 저장 | 클라우드는 노드 테스트 결과만 샘플이 됨 → 데스크톱은 빌더 AI의 테스트 결과도 샘플이 된다 | 없`src-tauri/tests/node_test.rs` `builder_test_writes_samples` |
+| 파일 노드 | 해당 없음 → 파일 노드 테스트는 실행한 뒤 되돌리고, 샘플의 경로를 원래 경로로 바꿔 저장한다 | 없`src-tauri/tests/node_test.rs` `file_node_sample_uses_undone_path` |
+| 실행 기록 | 클라우드는 사용량·한도 때문에 남김 → 데스크톱도 노드 테스트가 `test` 실행 기록을 남긴다(exec-event는 내지 않아 캔버스·실행 목록은 그대로) | 없`src-tauri/tests/node_test.rs` `run_record_keeps_usage` |
+| 검증 | 클라우드는 그래프 전체 검증 → 데스크톱은 노드 단위 검증만으로 테스트한다(그래프 오류는 막지 않음) | 없`crates/ieum-engine/tests/run_node.rs` `node_errors_ignores_graph_errors` |

@@ -29,6 +29,7 @@ beforeAll(() => {
   vi.spyOn(api, "setEditing").mockResolvedValue();
   vi.spyOn(api, "pendingFinish").mockResolvedValue(null);
   vi.spyOn(api, "onTestUndoFailed").mockImplementation(async (cb) => ((undoFailed = cb), () => {}));
+  vi.spyOn(api, "getSamples").mockResolvedValue({});
   // 채팅 패널(갈래 D) — 패널을 여는 테스트가 실제 invoke를 타지 않게.
   vi.spyOn(api, "getChat").mockResolvedValue({ messages: [], state: { outline: [], baseline: null, tests: {}, pendingFinish: null }, usage: [] });
   vi.spyOn(api, "onChatStage").mockResolvedValue(() => {});
@@ -407,4 +408,70 @@ test("node_panel_sits_left_of_open_chat", async () => {
   await openAssistant(); // 채팅 탭 폭 380 + 16 = cover 396
   await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
   expect(screen.getByRole("complementary", { name: "m" }).style.right).toBe("408px");
+});
+
+const panelOf = async (r: { container: HTMLElement }, name: string) => {
+  await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
+  return screen.getByRole("complementary", { name });
+};
+
+test("test_runs_single_node_with_draft", async () => {
+  const testNode = vi.spyOn(api, "testNode").mockResolvedValue({
+    status: "succeeded",
+    output: { trashed: "/in/a.pdf" },
+    error: null,
+    errorCode: null,
+    testedAt: new Date().toISOString(),
+    missing: [],
+    undone: false,
+    undoFailed: 0,
+    runId: "r1",
+  });
+  const runNow = vi.spyOn(api, "runNow").mockResolvedValue("r0");
+  const r = await openSaved(entry([N("a", 0)], "v1"));
+  const panel = await panelOf(r, "a");
+  // 저장하지 않은 편집이 있어도 막지 않고 편집본을 보낸다.
+  await act(async () => fireEvent.change(within(panel).getByLabelText("노드 이름"), { target: { value: "고친 이름" } }));
+  const button = within(screen.getByRole("complementary")).getByRole("button", { name: "테스트" });
+  expect((button as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => fireEvent.click(button));
+  expect(testNode).toHaveBeenCalledTimes(1);
+  const [id, wf, nodeId] = testNode.mock.calls[0];
+  expect([id, nodeId]).toEqual(["w1", "a"]);
+  expect(wf.nodes[0].label).toBe("고친 이름");
+  expect(runNow).not.toHaveBeenCalled();
+  expect(screen.getByText("trashed")).toBeTruthy();
+});
+
+test("test_disabled_without_id", async () => {
+  await open();
+  await addNode(PALETTE[0]);
+  const button = within(screen.getByRole("complementary")).getByRole("button", { name: "테스트" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  expect(button.title).toBe("먼저 저장해야 실행할 수 있어요.");
+  expect(api.getSamples).not.toHaveBeenCalled();
+});
+
+test("sample_loaded_on_open", async () => {
+  vi.mocked(api.getSamples).mockResolvedValueOnce({
+    a: { status: "succeeded", output: { kept: 3 }, error: null, errorCode: null, testedAt: new Date().toISOString(), node: { event: "local.file_trash", config: {} } },
+  });
+  const r = await openSaved(entry([N("a", 0)], "v1"));
+  const panel = await panelOf(r, "a");
+  expect(api.getSamples).toHaveBeenCalledWith("w1");
+  expect(within(panel).getByText("성공")).toBeTruthy();
+  expect(within(panel).getByText("kept")).toBeTruthy();
+  expect(within(panel).queryByText("설정을 바꿨어요. 결과는 바꾸기 전 기준이에요.")).toBeNull();
+});
+
+test("last_run_failure_line", async () => {
+  failRun();
+  const r = await openSaved(entry([N("m", 0)], "v1"));
+  const panel = await panelOf(r, "m");
+  expect(within(panel).getByText(`마지막 실행: 실패 · ${GH_MSG}`)).toBeTruthy();
+  cleanup();
+  failRun("cancelled");
+  const r2 = await openSaved(entry([N("m", 0)], "v1"));
+  const panel2 = await panelOf(r2, "m");
+  expect(within(panel2).queryByText(/마지막 실행/)).toBeNull();
 });

@@ -62,26 +62,57 @@ pub fn clip_http_bodies(run: &mut RunResult, wf: &Workflow) {
         let Some(body) = rec.output.as_mut().and_then(|o| o.get_mut("body")) else {
             continue;
         };
-        let text = match &*body {
-            serde_json::Value::String(s) => s.clone(),
-            other => other.to_string(),
-        };
-        let total = text.encode_utf16().count();
-        if total <= MAX_STORED_BODY_UNITS {
-            continue;
+        if clip_body(body) {
+            rec.output_clipped = true;
         }
-        // 대리쌍을 가르지 않게 글자 단위로 센다.
-        let mut units = 0;
-        let end = text
-            .char_indices()
-            .find(|(_, c)| {
-                units += c.len_utf16();
-                units > MAX_STORED_BODY_UNITS
-            })
-            .map_or(text.len(), |(i, _)| i);
-        *body = format!("{}…(잘림, 전체 {total}자)", &text[..end]).into();
-        rec.output_clipped = true;
     }
+}
+
+/// 본문 값이 상한을 넘으면 앞부분 글 + 줄임 표시로 바꾸고 true.
+fn clip_body(body: &mut serde_json::Value) -> bool {
+    let text = match &*body {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let total = text.encode_utf16().count();
+    if total <= MAX_STORED_BODY_UNITS {
+        return false;
+    }
+    // 대리쌍을 가르지 않게 글자 단위로 센다.
+    let mut units = 0;
+    let end = text
+        .char_indices()
+        .find(|(_, c)| {
+            units += c.len_utf16();
+            units > MAX_STORED_BODY_UNITS
+        })
+        .map_or(text.len(), |(i, _)| i);
+    *body = format!("{}…(잘림, 전체 {total}자)", &text[..end]).into();
+    true
+}
+
+/// 노드 테스트 결과 한 건(마지막 것만 둔다) — 뒤 노드 테스트가 앞 노드 값으로 쓴다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SampleStatus {
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sample {
+    pub status: SampleStatus,
+    #[serde(default)]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    /// RFC3339.
+    pub tested_at: String,
+    /// 테스트한 때의 `{event, config}` 스냅숏.
+    pub node: serde_json::Value,
 }
 
 /// 채팅 패널의 AI 호출 한 건(채팅 파일의 `usage` 항목 + 어느 워크플로우의 채팅인지).
@@ -196,6 +227,8 @@ static CHAT_LOCK: Mutex<()> = Mutex::new(());
 static SCHEDULE_LOCK: Mutex<()> = Mutex::new(());
 /// `key-limits.json` 읽기-고치기-쓰기를 차례로.
 static KEY_LIMITS_LOCK: Mutex<()> = Mutex::new(());
+/// `samples/<id>.json` 읽기-덮기-쓰기와 삭제를 차례로.
+static SAMPLES_LOCK: Mutex<()> = Mutex::new(());
 
 /// 키별 월 한도(USD)와 이미 보낸 알림 기록(`key-limits.json`). 키는 `"anthropic:3fa9c1d2"` 꼴.
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
@@ -286,6 +319,40 @@ impl Store {
     fn chat_path(&self, id: &str) -> Result<PathBuf, String> {
         check_id(id)?;
         Ok(self.root.join("chats").join(format!("{id}.json")))
+    }
+
+    fn samples_path(&self, id: &str) -> Result<PathBuf, String> {
+        check_id(id)?;
+        Ok(self.root.join("samples").join(format!("{id}.json")))
+    }
+
+    /// 노드별 마지막 테스트 결과(`samples/<워크플로우 id>.json`). 없으면 빈 맵.
+    pub fn get_samples(&self, workflow_id: &str) -> Result<BTreeMap<String, Sample>, String> {
+        let path = self.samples_path(workflow_id)?;
+        if !path.exists() {
+            return Ok(BTreeMap::new());
+        }
+        read_json(&path)
+    }
+
+    /// 기존 샘플을 읽어 노드 id별로 덮어 쓴다. HTTP 응답 본문은 기록과 같은 규칙으로 자른다.
+    pub fn put_samples(
+        &self,
+        workflow_id: &str,
+        samples: BTreeMap<String, Sample>,
+    ) -> Result<(), String> {
+        let path = self.samples_path(workflow_id)?;
+        let _g = SAMPLES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all = self.get_samples(workflow_id)?;
+        for (id, mut s) in samples {
+            if s.node["event"] == "http.request"
+                && let Some(body) = s.output.as_mut().and_then(|o| o.get_mut("body"))
+            {
+                clip_body(body);
+            }
+            all.insert(id, s);
+        }
+        write_atomic(&path, &all)
     }
 
     /// 채팅 상태 파일(`chats/<워크플로우 id>.json`). 없으면 빈 값.
@@ -405,6 +472,15 @@ impl Store {
                 };
             }
             return Err(format!("{}: {e}", chat.display()));
+        }
+        {
+            let _s = SAMPLES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let samples = self.samples_path(id)?;
+            if let Err(e) = fs::remove_file(&samples)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(format!("{}: {e}", samples.display()));
+            }
         }
         fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
     }

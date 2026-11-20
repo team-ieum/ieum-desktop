@@ -486,6 +486,31 @@ export type GithubStatus =
   | { kind: "unreachable"; error: string };
 export type GithubJob = { kind: "login" | "install"; code: string | null };
 
+/** 노드별 마지막 테스트 결과 — 러스트 `store::Sample`. */
+export interface Sample {
+  status: "succeeded" | "failed";
+  output: Obj | null;
+  error: string | null;
+  errorCode: string | null;
+  /** RFC3339. */
+  testedAt: string;
+  /** 테스트한 때의 `{event, config}`. */
+  node: { event: string; config: Obj };
+}
+/** 노드 패널 테스트 결과 — 러스트 `supervisor::NodeTestResult`. */
+export interface NodeTestResult {
+  status: "succeeded" | "failed" | "invalid" | "missing";
+  output: Obj | null;
+  error: string | null;
+  errorCode: string | null;
+  testedAt: string | null;
+  /** `missing`일 때 성공 샘플이 없는 앞 노드 id. */
+  missing: string[];
+  undone: boolean;
+  undoFailed: number;
+  runId: string | null;
+}
+
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
   saveWorkflow: (wf: StoredWorkflow) => invoke<StoredWorkflow>("save_workflow", { wf }),
@@ -494,6 +519,10 @@ export const api = {
   /** 실행이 끝나면 run id를 돌려준다. */
   /** 폴더 트리거는 `filePath` 필수, 스케줄·수동은 없이. */
   runNow: (id: string, filePath?: string) => invoke<string>("run_now", { id, filePath: filePath ?? null }),
+  /** 편집본의 노드 하나만 돌린다. 앞 노드 값은 앞 노드의 샘플. 폴더 트리거 이후 노드는 `filePath` 선택. */
+  testNode: (id: string, workflow: Workflow, nodeId: string, filePath?: string) =>
+    invoke<NodeTestResult>("test_node", { id, workflow, nodeId, filePath: filePath ?? null }),
+  getSamples: (id: string) => invoke<Record<string, Sample>>("get_samples", { id }),
   listRuns: (workflowId?: string) => invoke<RunSummary[]>("list_runs", { workflowId: workflowId ?? null }),
   getRun: (runId: string) => invoke<StoredRun>("get_run", { runId }),
   undoRun: (runId: string) => invoke<UndoReport>("undo_run", { runId }),

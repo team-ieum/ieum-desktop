@@ -1,5 +1,6 @@
 //! 화면이 부르는 Tauri 명령 — 로직은 `store`·`supervisor`에 두고 여기는 얇게 감싼다.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -22,9 +23,9 @@ use crate::key_limits::{self, KeyLimitsView};
 use crate::permissions;
 use crate::plan_usage::PlanUsage;
 use crate::pricing;
-use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
+use crate::store::{RunSummary, Sample, Settings, Store, StoredRun, StoredWorkflow};
 use crate::sub_usage::{AntigravityUsageClient, SubscriptionUsage};
-use crate::supervisor::{Supervisor, WorkflowEntry};
+use crate::supervisor::{NodeTestResult, Supervisor, WorkflowEntry};
 use crate::terminal::Terms;
 use crate::usage::{self, UsageReport, UsageSummary};
 use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
@@ -132,6 +133,32 @@ pub async fn run_now(
 ) -> Result<String, String> {
     let file = file_path.map(PathBuf::from);
     active.sup().await?.run_now(&id, file.as_deref()).await
+}
+
+/// 노드 패널 테스트 — 편집본의 노드 하나만 돌린다(실행 이벤트 없음). 확인 카드는 화면이 먼저 받는다.
+#[tauri::command]
+pub async fn test_node(
+    active: State<'_, Active>,
+    id: String,
+    workflow: Workflow,
+    node_id: String,
+    file_path: Option<String>,
+) -> Result<NodeTestResult, String> {
+    let file = file_path.map(PathBuf::from);
+    active
+        .sup()
+        .await?
+        .test_node(&id, workflow, &node_id, file.as_deref())
+        .await
+}
+
+/// 노드별 마지막 테스트 결과.
+#[tauri::command]
+pub async fn get_samples(
+    active: State<'_, Active>,
+    id: String,
+) -> Result<BTreeMap<String, Sample>, String> {
+    active.sup().await?.store().get_samples(&id)
 }
 
 #[tauri::command]

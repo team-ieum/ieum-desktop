@@ -5,6 +5,8 @@ const COMMANDS: &[&str] = &[
     "delete_workflow",
     "validate_workflow",
     "run_now",
+    "test_node",
+    "get_samples",
     "list_runs",
     "get_run",
     "usage_summary",
