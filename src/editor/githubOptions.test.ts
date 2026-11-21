@@ -73,8 +73,10 @@ test("prefetch_error_hidden_until_open", async () => {
   const h = renderHook(({ open }) => useGithubOptions("github.repos", st, { open }), { initialProps: { open: false } });
   await waitFor(() => expect(h.result.current.loading).toBe(false));
   expect(h.result.current.error).toBeNull();
+  // 열면 오류 항목을 다시 부르고, 그 결과 오류가 보인다
   h.rerender({ open: true });
-  expect(h.result.current.error).toEqual({ code: "GITHUB_NOT_CONNECTED", message: "연결 필요" });
+  await waitFor(() => expect(h.result.current.error).toEqual({ code: "GITHUB_NOT_CONNECTED", message: "연결 필요" }));
+  expect(api.githubOptions).toHaveBeenCalledTimes(2);
 });
 
 test("blocked_does_not_load", () => {

@@ -171,6 +171,21 @@ test("not_connected_opens_settings", async () => {
   }
 });
 
+test("reconnect_then_reopen_loads", async () => {
+  mockOptions(() => Promise.reject({ code: "GITHUB_NOT_CONNECTED", message: "연결 문제" }));
+  const r = render(<Combo field={REPO} config={{ owner: "reconnect" }} />);
+  fireEvent.click(box());
+  await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("GitHub 연결이 필요해요."));
+  r.unmount();
+  vi.restoreAllMocks();
+  // 설정에서 연결하고 60초 안에 돌아와 다시 연다
+  mockOptions(async () => REPOS);
+  render(<Combo field={REPO} config={{ owner: "reconnect" }} />);
+  fireEvent.click(box());
+  await waitFor(() => expect(options()).toHaveLength(3));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 test("error_retry", async () => {
   let fail = true;
   const call = mockOptions(() => (fail ? Promise.reject({ code: "GITHUB_RATE_LIMIT", message: "GitHub 요청 한도를 넘었어요." }) : Promise.resolve(REPOS)));

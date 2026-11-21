@@ -49,11 +49,12 @@ function subscribe(l: () => void) {
 const toError = (e: unknown): OptionError =>
   typeof e === "object" && e !== null && "message" in e ? (e as OptionError) : { code: null, message: String(e) };
 
-/** 새것이면 그대로, 같은 묶음을 부르는 중이면 그 요청을 함께 쓴다. `force`는 캐시를 무시한다. */
+/** 새것이면 그대로, 같은 묶음을 부르는 중이면 그 요청을 함께 쓴다. `force`는 캐시를 무시한다.
+ *  오류는 새것으로 보지 않는다 — 설정에서 연결하고 돌아와 다시 열면 바로 다시 부른다. */
 function load(source: string, inputs: Record<string, string>, force: boolean) {
   const key = cacheKey(source, inputs);
   const e = cache.get(key);
-  if (!force && e && (e.promise || Date.now() - e.at < TTL)) return;
+  if (!force && e && (e.promise || (!e.error && Date.now() - e.at < TTL))) return;
   const promise = api.githubOptions(source, inputs);
   put(key, { at: e?.at ?? 0, list: e?.list ?? null, error: null, promise });
   // 다시 시도로 더 새 요청이 나갔으면 늦게 온 옛 결과는 버린다.
