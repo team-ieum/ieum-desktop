@@ -474,7 +474,6 @@ export interface ChatAi {
   effort: string | null;
 }
 export type ChatStage = { id: string; stage: "designing" | "testing" };
-/** 설정 > 연동의 GitHub 줄 상태(Rust `GithubStatus`). */
 /** GitHub 칸 목록 한 항목(소유자·저장소·브랜치·마일스톤). */
 export interface OptionItem {
   id: string;
@@ -494,6 +493,7 @@ export interface OptionError {
   message: string;
 }
 
+/** 설정 > 연동의 GitHub 줄 상태(Rust `GithubStatus`). */
 export type GithubStatus =
   | { kind: "notInstalled" }
   | { kind: "outdated"; version: string }
@@ -599,10 +599,10 @@ export const api = {
   githubInstall: () => invoke<GithubStatus>("github_install"),
   githubCancel: () => invoke<void>("github_cancel"),
   githubOpenDevice: () => invoke<void>("github_open_device"),
-  /** 진행 중인 로그인·설치(없으면 null) — 다시 들어온 화면이 [취소]·코드 카드를 보이게. */
   /** source 예: "github.repos". 실패는 {code?, message}를 그대로 던진다. */
   githubOptions: (source: string, inputs: Record<string, string>) =>
     invoke<OptionList>("github_options", { source, inputs }),
+  /** 진행 중인 로그인·설치(없으면 null) — 다시 들어온 화면이 [취소]·코드 카드를 보이게. */
   githubJob: () => invoke<GithubJob | null>("github_job"),
   onGithubLoginCode: (cb: (p: { code: string }) => void): Promise<UnlistenFn> =>
     listen<{ code: string }>("github-login-code", (e) => cb(e.payload)),

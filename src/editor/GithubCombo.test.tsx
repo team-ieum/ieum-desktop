@@ -227,3 +227,32 @@ test("truncated_note", async () => {
   fireEvent.click(box());
   await waitFor(() => expect(screen.getByText("앞 300개만 보여요 — 목록에 없으면 직접 쳐 주세요")).toBeTruthy());
 });
+
+test("arrow_while_loading_keeps_first_active", async () => {
+  let done!: (l: OptionList) => void;
+  mockOptions(() => new Promise((r) => (done = r)));
+  render(<Combo field={REPO} config={{ owner: "loading-arrow" }} />);
+  fireEvent.keyDown(box(), { key: "ArrowDown" });
+  fireEvent.keyDown(box(), { key: "ArrowDown" });
+  await act(async () => done(REPOS));
+  expect(options()[0].getAttribute("aria-selected")).toBe("true");
+  fireEvent.keyDown(box(), { key: "Enter" });
+  expect(screen.getByTestId("value").textContent).toBe("GitHubTest");
+});
+
+test("active_option_scrolls_into_view", async () => {
+  mockOptions(async () => REPOS);
+  const scroll = vi.fn();
+  Element.prototype.scrollIntoView = scroll;
+  try {
+    render(<Combo field={OWNER} />);
+    fireEvent.keyDown(box(), { key: "ArrowDown" });
+    await waitFor(() => expect(options()).toHaveLength(2));
+    fireEvent.keyDown(box(), { key: "ArrowDown" });
+    expect(scroll).toHaveBeenLastCalledWith({ block: "nearest" });
+    expect(scroll.mock.contexts[scroll.mock.contexts.length - 1]).toBe(options()[1]);
+  } finally {
+    // @ts-expect-error jsdom 기본값(없음)으로 되돌린다
+    delete Element.prototype.scrollIntoView;
+  }
+});

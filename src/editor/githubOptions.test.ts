@@ -71,6 +71,7 @@ test("prefetch_error_hidden_until_open", async () => {
   vi.spyOn(api, "githubOptions").mockRejectedValue({ code: "GITHUB_NOT_CONNECTED", message: "연결 필요" });
   const st = ready({ owner: "prefetchErr" });
   const h = renderHook(({ open }) => useGithubOptions("github.repos", st, { open }), { initialProps: { open: false } });
+  await waitFor(() => expect(api.githubOptions).toHaveBeenCalledTimes(1));
   await waitFor(() => expect(h.result.current.loading).toBe(false));
   expect(h.result.current.error).toBeNull();
   // 열면 오류 항목을 다시 부르고, 그 결과 오류가 보인다
@@ -98,4 +99,22 @@ test("retry_bypasses_cache", async () => {
   // 성공해 캐시에 있어도 다시 시도는 바로 부른다
   await act(async () => h.result.current.retry());
   expect(call).toHaveBeenCalledTimes(3);
+});
+
+test("prefetch_debounced_open_immediate", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  const call = vi.spyOn(api, "githubOptions").mockResolvedValue(LIST);
+  const h = renderHook(({ o }) => useGithubOptions("github.repos", ready({ owner: o }), { open: false }), { initialProps: { o: "t" } });
+  for (const o of ["te", "tea", "team"]) {
+    vi.advanceTimersByTime(100);
+    h.rerender({ o });
+  }
+  expect(call).not.toHaveBeenCalled();
+  await act(async () => void vi.advanceTimersByTime(300));
+  expect(call).toHaveBeenCalledTimes(1);
+  expect(call).toHaveBeenCalledWith("github.repos", { owner: "team" });
+  // 열기는 기다리지 않는다
+  const k = renderHook(() => useGithubOptions("github.repos", ready({ owner: "openNow" }), { open: true }));
+  expect(call).toHaveBeenCalledTimes(2);
+  k.unmount();
 });

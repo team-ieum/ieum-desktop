@@ -67,12 +67,19 @@ function load(source: string, inputs: Record<string, string>, force: boolean) {
   );
 }
 
-/** 칸이 화면에 나오면 미리 부르고(오류는 목록을 열 때만 보인다), 열 때 60초 지났으면 다시 부른다. */
+const PREFETCH_DELAY = 300;
+
+/** 칸이 화면에 나오면 미리 부르고(오류는 목록을 열 때만 보인다), 열 때 60초 지났으면 다시 부른다.
+ *  미리 부르기는 입력이 300ms 멎은 뒤 — 앞 칸을 치는 동안 접두어마다 부르지 않게. 열 때는 바로. */
 export function useGithubOptions(source: string, state: OptionsState, { open }: { open: boolean }) {
   const key = state.kind === "ready" ? cacheKey(source, state.inputs) : null;
   const entry = useSyncExternalStore(subscribe, () => (key ? cache.get(key) : undefined));
   useEffect(() => {
-    if (state.kind === "ready") load(source, state.inputs, false);
+    if (state.kind !== "ready") return;
+    const run = () => load(source, state.inputs, false);
+    if (open) return run();
+    const timer = setTimeout(run, PREFETCH_DELAY);
+    return () => clearTimeout(timer);
     // key가 source·inputs를 담는다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, open]);

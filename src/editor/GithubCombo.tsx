@@ -10,7 +10,7 @@ import { optionsState, useGithubOptions } from "./githubOptions";
 // 앱이 주는 덧말(한국어 이름표) → 화면 문구.
 const HINT: Record<string, Key> = { "내 계정": "editor.gh.hint.me", 조직: "editor.gh.hint.org", 공개: "editor.gh.hint.public", 비공개: "editor.gh.hint.private" };
 const hintText = (h: string) => (HINT[h] ? t(HINT[h]) : h);
-const ago = (iso: string) => (Math.abs(Date.now() - Date.parse(iso)) < 60_000 ? t("editor.justNow") : formatRelative(iso));
+const ago = (iso: string) => (Math.abs(Date.now() - Date.parse(iso)) < 60_000 ? t("editor.justNow") : formatRelative(iso, Date.now(), "always"));
 
 function Highlight({ text, q }: { text: string; q: string }) {
   const i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
@@ -71,6 +71,12 @@ export function GithubCombo({
   const optId = (n: number) => `${id}-opt-${n}`;
   const showList = open && state.kind === "ready" && !error;
 
+  // 키보드로 옮긴 줄이 목록 밖으로 나가지 않게 따라간다(jsdom엔 scrollIntoView가 없다).
+  useEffect(() => {
+    if (showList && list) document.getElementById(optId(cur))?.scrollIntoView?.({ block: "nearest" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cur, showList, !!list]);
+
   const show = (filter: boolean) => {
     setOpen(true);
     setFiltering(filter);
@@ -84,7 +90,7 @@ export function GithubCombo({
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
       if (!open) show(false);
-      else setActive(e.key === "ArrowDown" ? Math.min(rows.length - 1, cur + 1) : Math.max(0, cur - 1));
+      else setActive(e.key === "ArrowDown" ? Math.max(0, Math.min(rows.length - 1, cur + 1)) : Math.max(0, cur - 1));
     } else if (e.key === "Enter" && showList && rows[cur]) {
       e.preventDefault();
       pick(rows[cur]);
