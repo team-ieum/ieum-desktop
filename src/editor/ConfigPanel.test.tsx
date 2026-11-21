@@ -525,3 +525,44 @@ test("ai_node_without_provider_does_not_look_like_claude_is_picked", () => {
   choose(/^AI 공급원/, "Codex (구독)");
   expect(onChange.mock.lastCall![0].config).toEqual({ prompt: "p", provider: "cli:codex" });
 });
+
+const pr = (config: Record<string, unknown>): WfNode => ({ id: "p", event: "github.create_pull_request", type: "ACTION", config });
+const textbox = (key: string) => screen.getByTestId(`field-${key}`).querySelector("input")!;
+
+test("clears_dependents_on_parent_change", () => {
+  setLang("ko");
+  vi.spyOn(api, "githubOptions").mockResolvedValue({ items: [], truncated: false });
+  const onChange = vi.fn();
+  const node = pr({ owner: "hodoon", repo: "GitHubTest", head: "main", title: "t" });
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
+  // 소유자를 바꾸면 소유자를 의존 칸으로 둔 저장소·브랜치를 비운다 — 빈 칸(base)은 그대로 둔다
+  fireEvent.change(textbox("owner"), { target: { value: "team-ieum" } });
+  expect(onChange.mock.lastCall![0].config).toEqual({ owner: "team-ieum", repo: "", head: "", title: "t" });
+  // 저장소를 바꾸면 브랜치가 빈다
+  fireEvent.change(textbox("repo"), { target: { value: "blog" } });
+  expect(onChange.mock.lastCall![0].config).toEqual({ owner: "hodoon", repo: "blog", head: "", title: "t" });
+  // 다른 칸은 아무것도 비우지 않는다
+  fireEvent.change(textbox("title"), { target: { value: "새 제목" } });
+  expect(onChange.mock.lastCall![0].config).toEqual({ owner: "hodoon", repo: "GitHubTest", head: "main", title: "새 제목" });
+});
+
+test("non_github_text_fields_unchanged", () => {
+  setLang("ko");
+  vi.spyOn(api, "githubOptions").mockResolvedValue({ items: [], truncated: false });
+  const trig: WfNode = { id: "t", event: "local.folder_new_file", type: "TRIGGER", config: {} };
+  const node = pr({});
+  const wf: Workflow = { nodes: [trig, node], edges: [{ source: "t", target: "p" }] };
+  const onChange = vi.fn();
+  render(<ConfigPanel node={node} workflow={wf} onChange={onChange} />);
+  // 목록 칸은 콤보, 제목 칸은 그냥 글 칸
+  expect(textbox("owner").getAttribute("role")).toBe("combobox");
+  expect(textbox("head").getAttribute("role")).toBe("combobox");
+  expect(textbox("title").getAttribute("role")).toBeNull();
+  // 칸 이름을 누르면 콤보 글 칸으로 간다
+  expect(screen.getByLabelText(/^소유자/)).toBe(textbox("owner"));
+  // 앞 단계 값 넣기는 콤보 아래 그대로 — 고르면 글 끝에 붙인다
+  const owner = within(screen.getByTestId("field-owner"));
+  fireEvent.click(owner.getByRole("button", { name: /^앞 단계 값 넣기/ }));
+  fireEvent.click(within(screen.getByRole("listbox")).getAllByRole("option")[1]);
+  expect(onChange.mock.lastCall![0].config.owner).toMatch(/^\{\{nodes\.t\.output\.\w+\}\}$/);
+});

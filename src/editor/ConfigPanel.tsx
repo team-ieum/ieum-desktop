@@ -9,6 +9,8 @@ import { DEFS, fieldKey, FOLDER_FIELDS, newItem, outputKeys, upstream, type Fiel
 import { Dropdown } from "../usage/parts";
 import { nodeTitle } from "./Canvas";
 import { DictField, useDraft } from "./DictField";
+import { GithubCombo } from "./GithubCombo";
+import { GITHUB_SOURCES } from "./githubOptions";
 import { effortItems, effortLevels, modelItems, shownModel, useModels } from "./models";
 
 type Ref = { value: string; label: string };
@@ -32,6 +34,11 @@ interface FieldProps {
   provider?: unknown;
   /** AI 노드의 저장된 모델·수준 — 모델·수준 칸이 서로 본다(예전 Antigravity 값 나눠 보기, 모델별 수준). */
   ai?: { model: string; effort: string };
+  /** 같은 노드의 설정·칸 — GitHub 목록 칸이 의존 칸 값을 본다. */
+  config?: Obj;
+  fields?: Field[];
+  /** GitHub 목록 칸의 [설정 › 연동 열기]. */
+  onOpenIntegrations?: () => void;
 }
 
 const PROVIDER_LOGO: Record<string, LogoId> = { "cli:claude": "claude", "cli:codex": "openai", "cli:agy": "antigravity", "api:anthropic": "claude", "api:openai": "openai", "api:gemini": "antigravity" };
@@ -202,7 +209,7 @@ function EffortSelect({ label, provider, ai, onChange }: { label: string; provid
   );
 }
 
-function FieldInput({ event, field, path, value, onChange, refs, pickFolder, provider, ai = { model: "", effort: "" } }: FieldProps) {
+function FieldInput({ event, field, path, value, onChange, refs, pickFolder, provider, ai = { model: "", effort: "" }, config = {}, fields = [], onOpenIntegrations }: FieldProps) {
   const id = useId();
   const label = tDyn(fieldKey(event, path)) ?? field.title ?? field.key;
   const desc = tDyn(`fieldDesc.${event}.${path}`);
@@ -365,6 +372,13 @@ function FieldInput({ event, field, path, value, onChange, refs, pickFolder, pro
         )}
       </div>
     );
+  } else if (field.type === "string" && !field.list && (GITHUB_SOURCES as readonly string[]).includes(field.optionsSource ?? "")) {
+    input = (
+      <div className="flex flex-col gap-1.5">
+        <GithubCombo id={id} event={event} field={field} value={str} config={config} fields={fields} onChange={onChange} onOpenIntegrations={onOpenIntegrations} />
+        {field.ref !== false && refs.length > 0 && <RefMenu refs={refs} onPick={(r) => onChange(str + r)} />}
+      </div>
+    );
   } else {
     const Tag = field.type === "text" ? "textarea" : "input";
     input = (
@@ -394,9 +408,10 @@ export interface ConfigPanelProps {
   workflow: Workflow;
   onChange: (node: WfNode) => void;
   pickFolder?: () => Promise<string | null>;
+  onOpenIntegrations?: () => void;
 }
 
-export function ConfigPanel({ node, workflow, onChange, pickFolder = () => api.pickPath(true) }: ConfigPanelProps) {
+export function ConfigPanel({ node, workflow, onChange, pickFolder = () => api.pickPath(true), onOpenIntegrations }: ConfigPanelProps) {
   const labelId = useId();
   const def = DEFS[node.event];
   const refs: Ref[] = upstream(workflow, node.id).flatMap((n) =>
@@ -436,6 +451,9 @@ export function ConfigPanel({ node, workflow, onChange, pickFolder = () => api.p
             }
             // 모델마다 받는 수준이 달라 모델을 바꾸면 수준은 기본으로.
             if (node.event === "local.ai" && f.key === "model") delete rest.effort;
+            // 값이 바뀌면 이 칸을 의존 칸으로 둔 목록 칸을 비운다(한 단계). 이미 빈 칸은 그대로.
+            if (v !== node.config[f.key])
+              for (const g of fields) if (g.optionsInputs?.includes(f.key) && rest[g.key] !== undefined && rest[g.key] !== "") rest[g.key] = "";
             // 예전 Antigravity 값(`…-high`)에서 수준을 고르면 모델은 수준을 뗀 이름으로 함께 저장한다.
             if (node.event === "local.ai" && f.key === "effort") {
               const model = str(node.config.model);
@@ -448,6 +466,9 @@ export function ConfigPanel({ node, workflow, onChange, pickFolder = () => api.p
           pickFolder={pickFolder}
           provider={node.config.provider}
           ai={{ model: str(node.config.model), effort: str(node.config.effort) }}
+          config={node.config}
+          fields={fields}
+          onOpenIntegrations={onOpenIntegrations}
         />
       ))}
     </div>

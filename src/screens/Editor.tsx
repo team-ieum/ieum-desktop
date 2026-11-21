@@ -433,7 +433,7 @@ export function Editor({
             }
           >
             <div className="flex-1 p-5">
-              <ConfigPanel key={selected.id} node={selected} workflow={wf} onChange={setNode} />
+              <ConfigPanel key={selected.id} node={selected} workflow={wf} onChange={setNode} onOpenIntegrations={onOpenIntegrations} />
             </div>
             <NodeTestSection
               key={selected.id}
