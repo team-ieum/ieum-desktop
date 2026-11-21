@@ -138,7 +138,7 @@ test("blocked_messages", () => {
 
   const ref = render(<Combo field={REPO} config={{ owner: "{{nodes.a.output.o}}" }} />);
   fireEvent.click(screen.getByRole("button", { name: "목록 보기" }));
-  expect(screen.getByRole("note").textContent).toBe("'소유자'이 앞 단계 값이라 목록을 보여 줄 수 없어요. 실행할 때 그 값으로 정해져요.");
+  expect(screen.getByRole("note").textContent).toBe("'소유자'가 앞 단계 값이라 목록을 보여 줄 수 없어요. 실행할 때 그 값으로 정해져요.");
   ref.unmount();
 
   render(<Combo field={REPO} config={{ owner: "a b" }} />);
@@ -164,7 +164,7 @@ test("not_connected_opens_settings", async () => {
     fireEvent.click(box());
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("GitHub 연결이 필요해요."));
     expect(screen.queryByText("연결 문제")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "설정 > 연동 열기" }));
+    fireEvent.click(screen.getByRole("button", { name: "설정 › 연동 열기" }));
     expect(onOpen).toHaveBeenCalledTimes(1);
     r.unmount();
     vi.restoreAllMocks();
@@ -177,7 +177,7 @@ test("error_retry", async () => {
   render(<Combo field={REPO} config={{ owner: "retryOwner" }} />);
   fireEvent.click(box());
   await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("GitHub 요청 한도를 넘었어요."));
-  expect(screen.queryByRole("button", { name: "설정 > 연동 열기" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "설정 › 연동 열기" })).toBeNull();
   fail = false;
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "다시 시도" })));
   await waitFor(() => expect(options()).toHaveLength(3));

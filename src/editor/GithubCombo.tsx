@@ -161,7 +161,7 @@ export function GithubCombo({
           {opensIntegrations(error.code ?? undefined) ? (
             onOpenIntegrations && (
               <button type="button" className="rounded-[7px] border border-neutral-300 bg-white px-2 py-0.5 typo-caption1_semibold text-neutral-700" onClick={onOpenIntegrations}>
-                {t("editor.runError.openIntegrations")}
+                {t("editor.gh.openIntegrations")}
               </button>
             )
           ) : (
