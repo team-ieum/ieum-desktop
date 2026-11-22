@@ -2,7 +2,7 @@ import { ChevronDown } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { OptionItem } from "../api";
 import { formatRelative } from "../dashboard/format";
-import { t, tDyn, type Key } from "../i18n";
+import { locale, t, tDyn, type Key } from "../i18n";
 import { fieldKey, type Field } from "../nodes/defs";
 import { opensIntegrations } from "../stores/runs";
 import { optionsState, useGithubOptions } from "./githubOptions";
@@ -10,7 +10,16 @@ import { optionsState, useGithubOptions } from "./githubOptions";
 // 앱이 주는 덧말(한국어 이름표) → 화면 문구.
 const HINT: Record<string, Key> = { "내 계정": "editor.gh.hint.me", 조직: "editor.gh.hint.org", 공개: "editor.gh.hint.public", 비공개: "editor.gh.hint.private" };
 const hintText = (h: string) => (HINT[h] ? t(HINT[h]) : h);
-const ago = (iso: string) => (Math.abs(Date.now() - Date.parse(iso)) < 60_000 ? t("editor.justNow") : formatRelative(iso, Date.now(), "always"));
+// 30일부터는 달·해 단위 — 마지막 푸시가 오래된 저장소를 "731일 전"으로 보이지 않게.
+export const agoText = (iso: string, now = Date.now()) => {
+  const diff = Date.parse(iso) - now;
+  const days = Math.abs(diff) / 86_400_000;
+  if (days >= 30) {
+    const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: "always" });
+    return days >= 365 ? rtf.format(Math.round(diff / (365 * 86_400_000)), "year") : rtf.format(Math.round(diff / (30 * 86_400_000)), "month");
+  }
+  return Math.abs(diff) < 60_000 ? t("editor.justNow") : formatRelative(iso, now, "always");
+};
 
 function Highlight({ text, q }: { text: string; q: string }) {
   const i = q ? text.toLowerCase().indexOf(q.toLowerCase()) : -1;
@@ -222,7 +231,7 @@ export function GithubCombo({
                       </span>
                       {(row.item.hint || row.item.updatedAt) && (
                         <span className="ml-auto shrink-0 typo-caption2_regular text-neutral-500">
-                          {[row.item.hint && hintText(row.item.hint), row.item.updatedAt && ago(row.item.updatedAt)].filter(Boolean).join(" · ")}
+                          {[row.item.hint && hintText(row.item.hint), row.item.updatedAt && agoText(row.item.updatedAt)].filter(Boolean).join(" · ")}
                         </span>
                       )}
                     </>

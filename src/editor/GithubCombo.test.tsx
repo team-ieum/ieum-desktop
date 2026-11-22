@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api, type OptionList } from "../api";
 import { setLang } from "../i18n";
 import type { Field } from "../nodes/defs";
-import { GithubCombo } from "./GithubCombo";
+import { agoText, GithubCombo } from "./GithubCombo";
 
 beforeEach(() => setLang("ko"));
 afterEach(() => {
@@ -255,4 +255,17 @@ test("active_option_scrolls_into_view", async () => {
     // @ts-expect-error jsdom 기본값(없음)으로 되돌린다
     delete Element.prototype.scrollIntoView;
   }
+});
+
+test("상대 시간: 30일부터 달, 365일부터 해 단위", () => {
+  const now = Date.parse("2026-11-22T00:00:00Z");
+  const at = (days: number) => new Date(now - days * 86_400_000).toISOString();
+  expect(agoText(at(11), now)).toBe("11일 전");
+  expect(agoText(at(29), now)).toBe("29일 전");
+  expect(agoText(at(60), now)).toBe("2개월 전");
+  expect(agoText(at(400), now)).toBe("1년 전");
+  expect(agoText(at(731), now)).toBe("2년 전");
+  setLang("en");
+  expect(agoText(at(60), now)).toBe("2 months ago");
+  expect(agoText(at(731), now)).toBe("2 years ago");
 });

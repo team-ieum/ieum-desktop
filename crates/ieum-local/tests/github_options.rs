@@ -113,10 +113,37 @@ async fn repos_me_uses_user_repos() {
             paths(&log),
             [
                 "/user",
-                "/user/repos?affiliation=owner&sort=updated&per_page=100&page=1"
+                "/user/repos?affiliation=owner&sort=pushed&per_page=100&page=1"
             ]
         );
     }
+}
+
+#[tokio::test]
+async fn repos_time_prefers_pushed_at() {
+    let (base, _) = server(vec![
+        ("/user", 200, json!({"login": "me"})),
+        (
+            "/user/repos",
+            200,
+            json!([
+                {"name": "a", "updated_at": "2020-01-01T00:00:00Z", "pushed_at": "2026-05-01T00:00:00Z"},
+                {"name": "b", "updated_at": "2020-01-02T00:00:00Z", "pushed_at": null},
+            ]),
+        ),
+    ])
+    .await;
+    let out = run(&base, "github.repos", json!({"owner": "me"}))
+        .await
+        .unwrap();
+    assert_eq!(
+        out.items[0].updated_at.as_deref(),
+        Some("2026-05-01T00:00:00Z")
+    );
+    assert_eq!(
+        out.items[1].updated_at.as_deref(),
+        Some("2020-01-02T00:00:00Z")
+    );
 }
 
 #[tokio::test]
@@ -138,8 +165,8 @@ async fn repos_org_then_user_fallback() {
         paths(&log),
         [
             "/user",
-            "/orgs/bob/repos?sort=updated&per_page=100&page=1",
-            "/users/bob/repos?sort=updated&per_page=100&page=1"
+            "/orgs/bob/repos?sort=pushed&per_page=100&page=1",
+            "/users/bob/repos?sort=pushed&per_page=100&page=1"
         ]
     );
 }

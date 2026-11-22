@@ -129,12 +129,12 @@ pub async fn options(
                     api,
                     tok,
                     "/user/repos",
-                    &[("affiliation", "owner"), ("sort", "updated")],
+                    &[("affiliation", "owner"), ("sort", "pushed")],
                     &[],
                 )
                 .await?
             } else {
-                let q = [("sort", "updated")];
+                let q = [("sort", "pushed")];
                 match pages(api, tok, &format!("/orgs/{owner}/repos"), &q, &[404]).await? {
                     Some(f) => Some(f),
                     None => pages(api, tok, &format!("/users/{owner}/repos"), &q, &[]).await?,
@@ -150,7 +150,12 @@ pub async fn options(
                     } else {
                         "공개"
                     };
-                    Some(item(n.clone(), n, Some(hint), s(r, "updated_at")))
+                    Some(item(
+                        n.clone(),
+                        n,
+                        Some(hint),
+                        s(r, "pushed_at").or_else(|| s(r, "updated_at")),
+                    ))
                 })
                 .collect();
             return Ok(OptionList { items, truncated });
