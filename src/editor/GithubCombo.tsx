@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Lock } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { OptionItem } from "../api";
 import { formatRelative } from "../dashboard/format";
@@ -230,7 +230,8 @@ export function GithubCombo({
                         <Highlight text={row.item.name} q={q} />
                       </span>
                       {(row.item.hint || row.item.updatedAt) && (
-                        <span className="ml-auto shrink-0 typo-caption2_regular text-neutral-500">
+                        <span className="ml-auto flex shrink-0 items-center gap-1 typo-caption2_regular text-neutral-500">
+                          {row.item.hint === "비공개" && <Lock size={11} aria-hidden="true" />}
                           {[row.item.hint && hintText(row.item.hint), row.item.updatedAt && agoText(row.item.updatedAt)].filter(Boolean).join(" · ")}
                         </span>
                       )}

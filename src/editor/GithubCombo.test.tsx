@@ -74,11 +74,14 @@ test("filters_and_highlights", async () => {
   await waitFor(() => expect(options()).toHaveLength(3));
   expect(screen.getByText("hlOwner의 저장소 · 최근 수정 순")).toBeTruthy();
   expect(options()[0].textContent).toContain("공개 · 1시간 전");
-  expect(options()[1].textContent).toContain("🔒 비공개 · 3일 전");
+  expect(options()[1].textContent).toContain("비공개 · 3일 전");
+  // 비공개는 이모지 대신 선 아이콘(자물쇠) — 공개 줄엔 없다
+  expect(options()[1].querySelector("svg.lucide-lock")).toBeTruthy();
+  expect(options()[0].querySelector("svg.lucide-lock")).toBeNull();
   expect(options()[2].textContent).toContain("공개 · 방금");
   // 치면 대소문자 무시로 거르고 맞은 부분을 강조
   type("Git");
-  expect(options().map((o) => o.textContent)).toEqual(["GitHubTest공개 · 1시간 전", "git-notes🔒 비공개 · 3일 전", '"Git" 그대로 쓰기']);
+  expect(options().map((o) => o.textContent)).toEqual(["GitHubTest공개 · 1시간 전", "git-notes비공개 · 3일 전", '"Git" 그대로 쓰기']);
   expect([...screen.getByRole("listbox").querySelectorAll("mark")].map((m) => m.textContent)).toEqual(["Git", "git"]);
   expect(options()[0].getAttribute("aria-selected")).toBe("true");
 });
