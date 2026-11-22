@@ -82,6 +82,7 @@ const COMMANDS: &[&str] = &[
     "github_open_device",
     "github_install",
     "github_job",
+    "github_options",
 ];
 
 fn main() {

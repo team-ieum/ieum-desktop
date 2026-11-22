@@ -82,7 +82,7 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `schedule.every` | `cron` | 둘 다 거절해 같은 것: 요일 목록에 `#`·`L`이 섞인 `,`(`2#1,6#3`·`6L,2`), 일·요일이 둘 다 지정되거나 둘 다 `?`인 Quartz 식, 일·요일을 둘 다 지정한 Unix 5필드, 두 자리 Unix 요일(`07`·`00`), 이름 요일에 간격(Unix `MON/2`) | `schedule.rs` `unsupported_quartz_rejected`·`unix_weekday_single_digit_only`·`quartz_features`·`to_quartz_matches_be` |
 | `github.*` | — | 오류 문구: `GitHub API 오류 (코드): <응답 본문>` → 상태 코드별 정해 둔 문구(본문 안 실음) | `crates/ieum-local/tests/github_api.rs` `status_table` |
 | `github.*` | — | 응답 크기: 상한 없음 → 응답 하나당 32MB 넘으면 실패 | `github_api.rs` `too_large_fails` |
-| `github.*` | — | 조회 노드: 403 문구가 읽기·쓰기로 나뉨(agent는 응답 본문을 실음), 드롭다운(`github.owners`·`repos`·`branches`) 없음 → 직접 입력 | `crates/ieum-local/tests/github_api.rs` `status_table` |
+| `github.*` | — | 조회 노드: 403 문구가 읽기·쓰기로 나뉨(agent는 응답 본문을 실음), 드롭다운(`github.owners`·`repos`·`branches`·`milestones`)은 목록 + 검색 + 직접 입력·앞 단계 값(클라우드는 선택만), 목록은 300개까지 받아 화면에서 거름(클라우드는 페이지 + 브랜치·마일스톤 `q`), 남의 개인 계정 저장소는 `/users/{owner}/repos`로 공개 저장소를 보임 | `crates/ieum-local/tests/github_api.rs` `status_table` |
 | `github.*` | — | PR 리뷰 작성자: `bot` 없음(데스크톱은 `me`만, 그 밖은 입력 오류) · `include_comments` 글 `"false"`를 거짓으로 처리 · PR 노드도 오류 문구에 응답 본문을 안 실음 | `github_review.rs` `author_bot_rejected`·`reviews_rejects`, `github_pulls.rs` `pulls_422_is_invalid` |
 | `github.create_pull_request`·`find_or_create_pull_request` | `draft`·`maintainer_can_modify` | `include_comments`처럼 글 `"false"`를 거짓으로 처리(agent는 `bool("false")`가 참) | `github_pulls.rs` `create_pr_bool_strings` |
 | `github.submit_pr_review` | — | `리뷰 내용이 없습니다.` 확인: 파일·`/user` 호출 뒤 → 토큰을 읽고 요청을 보내기 전에 먼저. 요청이 줄 뿐 결과는 같다(그 호출이 실패하는 경우만 다름) | `github_review.rs` `empty_review_rejected` |

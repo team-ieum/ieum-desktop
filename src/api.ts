@@ -474,6 +474,25 @@ export interface ChatAi {
   effort: string | null;
 }
 export type ChatStage = { id: string; stage: "designing" | "testing" };
+/** GitHub 칸 목록 한 항목(소유자·저장소·브랜치·마일스톤). */
+export interface OptionItem {
+  id: string;
+  name: string;
+  /** "내 계정"·"조직"·"공개"·"비공개" */
+  hint: string | null;
+  updatedAt: string | null;
+}
+export interface OptionList {
+  items: OptionItem[];
+  /** 300개를 다 채워 더 있을 수 있다. */
+  truncated: boolean;
+}
+/** 목록 조회 실패 — 그대로 던져진다. */
+export interface OptionError {
+  code?: string | null;
+  message: string;
+}
+
 /** 설정 > 연동의 GitHub 줄 상태(Rust `GithubStatus`). */
 export type GithubStatus =
   | { kind: "notInstalled" }
@@ -580,6 +599,9 @@ export const api = {
   githubInstall: () => invoke<GithubStatus>("github_install"),
   githubCancel: () => invoke<void>("github_cancel"),
   githubOpenDevice: () => invoke<void>("github_open_device"),
+  /** source 예: "github.repos". 실패는 {code?, message}를 그대로 던진다. */
+  githubOptions: (source: string, inputs: Record<string, string>) =>
+    invoke<OptionList>("github_options", { source, inputs }),
   /** 진행 중인 로그인·설치(없으면 null) — 다시 들어온 화면이 [취소]·코드 카드를 보이게. */
   githubJob: () => invoke<GithubJob | null>("github_job"),
   onGithubLoginCode: (cb: (p: { code: string }) => void): Promise<UnlistenFn> =>

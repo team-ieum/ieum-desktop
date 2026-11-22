@@ -86,6 +86,7 @@
     "allow-github-open-device",
     "allow-github-install",
     "allow-github-job",
+    "allow-github-options",
     "dialog:allow-open"
   ]
 }

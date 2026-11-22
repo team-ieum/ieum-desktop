@@ -4,6 +4,7 @@ mod api;
 mod input;
 mod issues;
 mod lookup;
+mod options;
 mod pulls;
 mod review;
 
@@ -14,6 +15,7 @@ use ieum_engine::{NodeCtx, NodeError, NodeRunner};
 use serde_json::{Map, Value};
 
 pub use api::{GithubApi, Resp};
+pub use options::{OptionItem, OptionList, options};
 
 /// 저장소에 쓰는 노드 — 빌더 테스트 전에 사람이 확인한다.
 pub const GITHUB_WRITE_EVENTS: [&str; 10] = [
