@@ -305,17 +305,21 @@ impl Supervisor {
             .reset_at
             .and_then(|s| DateTime::from_timestamp(s, 0))
             .unwrap_or(now + chrono::Duration::minutes(1));
+        // 쉬기는 폴러만 정한다 — 샘플이 쉬게 하면 오류 표시 없이 폴러가 멈춘다. 다음 확인이 같은 응답으로
+        // 쉬기와 오류 문구를 함께 정한다.
         if matches!(r.status, 403 | 429) && r.rate_limited {
-            *lock(&self.0.github_pause) = Some(until);
+            if polling {
+                *lock(&self.0.github_pause) = Some(until);
+            }
             return Fetched::Stop(format!("GitHub 한도 초과 — {}에 다시 확인", hhmm(until)));
         }
         // 사용자의 다른 gh 작업 몫을 남긴다 — 남은 한도가 10% 아래면 풀릴 때까지 쉰다.
         if let (Some(remaining), Some(limit)) = (r.remaining, r.limit)
             && remaining * 10 < limit
         {
-            *lock(&self.0.github_pause) = Some(until);
             // 사용자가 직접 누른 샘플은 쉬지 않고 아래에서 상태대로 판정한다 — 쉬는 것은 폴러만.
             if polling {
+                *lock(&self.0.github_pause) = Some(until);
                 return Fetched::Stop(format!(
                     "GitHub 요청 여유가 적어 {}에 다시 확인해요",
                     hhmm(until)

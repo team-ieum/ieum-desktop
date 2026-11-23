@@ -963,3 +963,25 @@ async fn github_unusable_repo_shows_watch_error() {
     env.sup.github_tick_for_test().await;
     assert!(env.requests().is_empty());
 }
+
+/// 사용자가 누른 샘플이 한도 예방 구간 응답을 받아도 폴러를 쉬게 하지 않는다 — 쉬기와 오류 표시는 폴러가 함께 정한다.
+#[tokio::test(flavor = "multi_thread")]
+async fn github_sample_reserve_does_not_pause_poller() {
+    let env = env().await;
+    env.set_issues(&[(9, mins(1))]);
+    let wf = issue_wf("o", "r");
+    let id = env.add(wf.clone());
+    let reset = (env.now() + mins(30)).timestamp();
+    env.gh.lock().unwrap().extra = format!(
+        "x-ratelimit-remaining: 400\r\nx-ratelimit-limit: 5000\r\nx-ratelimit-reset: {reset}\r\n"
+    );
+    let r = env.sup.test_node(&id, wf, "t", None).await.unwrap();
+    assert_eq!(r.status, NodeTestStatus::Succeeded, "{r:?}");
+    assert_eq!(env.entry(&id), (WatchState::Watching, None));
+
+    env.gh.lock().unwrap().extra = String::new();
+    env.clear();
+    env.sup.github_tick_for_test().await;
+    assert_eq!(env.requests().len(), 1, "샘플 뒤 폴러가 쉬었다");
+    assert_eq!(env.issue_max(&id), 9);
+}
