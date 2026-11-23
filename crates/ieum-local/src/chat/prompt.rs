@@ -42,7 +42,7 @@ actions를 내면 앱이 차례로 실행하고 결과를 "이번 턴에 실행�
      - github.new_issue(GitHub 새 이슈) — 칸: owner·repo.
      - github.new_pull_request(GitHub 새 PR) — 칸: owner·repo, onOpened·onSynchronize·onReopened·onReadyForReview·excludeDrafts.
    - 스케줄·수동 트리거의 test는 파일 없이 돕니다(스케줄 출력은 triggeredAt = 실행 시각).
-   - GitHub 트리거의 test는 파일 없이 그 저장소의 최신 항목으로 돈다.
+   - GitHub 트리거의 test는 파일 없이 그 저장소의 최신 항목으로 돕니다.
    - 값을 다듬는 변환·포맷터 노드(formatter.*, transform.map)와 HTTP 요청 노드(http.request)도 있습니다. 자세한 것은 events로 봅니다.
    - 앞 노드 값은 {{nodes.<노드 id>.output.<이름>}}로 참조합니다. 이름은 fields의 upstream outputs에 있는 것만 씁니다.
    - 폴더 칸(folder, baseFolder)은 set으로 채울 수 없습니다. pick-folder를 내면 사용자에게 폴더 고르기 카드가 뜨고 턴이 끝납니다. 사용자가 고른 뒤 다음 턴에 이어서 합니다.

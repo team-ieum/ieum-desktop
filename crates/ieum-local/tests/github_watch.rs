@@ -97,6 +97,27 @@ fn issue_new_runs_and_skips_prs_and_own() {
 }
 
 #[test]
+fn issue_same_state_no_rerun() {
+    let seen = Seen::Issue { issue_max: 7 };
+    let list = [issue(8, now())];
+    let (runs, next) = diff_issues(&seen, &list, now(), &|_| false);
+    assert_eq!(runs.len(), 1);
+    let (again, _) = diff_issues(&next, &list, now(), &|_| false);
+    assert!(again.is_empty());
+}
+
+#[test]
+fn pr_same_state_no_rerun() {
+    let seen = pr_seen(10, &[(5, "a", true)], true);
+    let last = now() - Duration::minutes(1);
+    let list = [pr(5, "b", false, now() - Duration::days(1), now())];
+    let (runs, next) = diff_prs(&seen, &list, &all_on(), last, now());
+    assert_eq!(runs.len(), 1);
+    let (again, _) = diff_prs(&next, &list, &all_on(), last, now());
+    assert!(again.is_empty());
+}
+
+#[test]
 fn issue_outside_grace_recorded_only() {
     let seen = Seen::Issue { issue_max: 7 };
     let list = [issue(8, now() - Duration::hours(3))];
