@@ -93,7 +93,7 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 
 | event | 칸 | 차이 | 고정 테스트 |
 |---|---|---|---|
-| `github.*` | — | 받는 방식: 웹훅 즉시 → 1분마다 확인. 앱이 켜져 있고 로그인한 계정의 켜진 워크플로우만 | `github_trigger.rs` `github_new_issue_runs_once`·`github_zero_workflows_no_token_call` |
+| `github.*` | — | 받는 방식: 웹훅 즉시 → 1분마다 확인. 앱이 켜져 있고 로그인한 계정의 켜진 워크플로우만 | `github_trigger.rs` `github_new_issue_runs_once`·`github_pr_poll_end_to_end`·`github_zero_workflows_no_token_call` |
 | `github.*` | — | 놓친 변화: 앱이 꺼져 있던 동안은 2시간 안의 것만 실행(이슈·opened는 만든 시각, 나머지는 갱신 시각), 넘으면 기록만 | `github_trigger.rs` `github_restart_runs_only_within_grace`, `github_watch.rs` `issue_outside_grace_recorded_only`·`pr_outside_grace_recorded_only` |
 | `github.new_pull_request` | — | 두 확인 사이 여러 변화: 이벤트마다 실행 → PR당 하나(opened > reopened > ready_for_review > synchronize) | `github_watch.rs` `pr_priority_one_action`·`pr_opened_reopened_ready_sync` |
 | `github.new_pull_request` | — | 1분 안의 왕복: 1분 안에 닫았다 다시 연 PR·초안으로 되돌렸다 준비 완료한 PR·열렸다 닫힌 PR은 못 잡는다(이슈는 잡음) | 없음(설계상 확인 간격) |
@@ -102,7 +102,8 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | `github.*` | — | 중복: delivery id(4일) → 상태(번호·SHA) 기준. 클라우드보다 중복이 적다 | `github_watch.rs` `issue_same_state_no_rerun`·`pr_same_state_no_rerun`, `github_trigger.rs` `github_new_issue_runs_once` |
 | `github.*` | — | 테스트 샘플: BE와 같은 방식(이슈 최근 20건에서 PR 뺀 첫 항목, PR 최근 20건에서 멤버·초안 거른 첫 항목, action `opened`). 다른 점: 항목이 없으면 막는다 | `github_watch.rs` `samples`, `github_trigger.rs` `github_node_test_no_items_errors`·`github_pr_sample_skips_non_members` |
 | `github.new_pull_request` | — | 열린 PR이 100건을 넘는 저장소: 목록 밖 PR의 변화는 잡지 못하고, 그런 PR이 목록에 처음 나타나면 실행 없이 기록만 | `github_watch.rs` `pr_truncated_keeps_open_and_records_unknown` |
-| `github.*` | — | 한도: 웹훅이라 해당 없음 → 남은 한도가 10% 아래면 확인을 쉰다(직접 누른 샘플은 안 막음) | `github_trigger.rs` `github_rate_limit_pauses`·`github_sample_ignores_reserve` |
+| `github.*` | — | 한도: 웹훅이라 해당 없음 → 남은 한도가 10% 아래면 확인을 쉰다(직접 누른 샘플은 안 막고, 샘플이 확인을 쉬게 하지도 않음) | `github_trigger.rs` `github_rate_limit_pauses`·`github_sample_ignores_reserve`·`github_sample_reserve_does_not_pause_poller` |
+| `github.*` | — | 확인 실패 표시: 웹훅이라 해당 없음 → 목록 카드에 오류로 보인다(저장소 미선택·이름 형식·404·403·주소 바뀜 301/302/307/308·이슈 꺼짐 410은 그 워크플로우만, 401 재확인 실패는 전부 "GitHub 연결이 필요해요."). 5xx·연결 실패·연결 확인이 잠시 닿지 못한 것은 표시 없이 다음 확인에서 다시 | `github_trigger.rs` `github_errors_show_watch_error`·`github_unusable_repo_shows_watch_error`·`github_moved_and_gone_show_error`·`github_401_rechecks_then_errors`·`github_token_unreachable_is_not_disconnect` |
 
 ## 노드별 테스트 — 데스크톱이 클라우드와 다르게 도는 곳
 
