@@ -204,9 +204,10 @@ pub fn route(n: &RunNotice, p: &Prefs, focused: bool, lang: Lang) -> Route {
             (None, true) => "실패했어요".into(),
             (None, false) => "Failed".into(),
         },
-        (RunTrigger::Watch | RunTrigger::Schedule, NoticeKind::Finished { .. })
-            if p.watch_end && !focused =>
-        {
+        (
+            RunTrigger::Watch | RunTrigger::Schedule | RunTrigger::Github,
+            NoticeKind::Finished { .. },
+        ) if p.watch_end && !focused => {
             return Route::Batch;
         }
         _ => return Route::Drop,
@@ -300,7 +301,7 @@ pub fn on_run_notice(app: &AppHandle, n: &RunNotice) {
     let watch_end = matches!(
         (n.trigger, &n.kind),
         (
-            RunTrigger::Watch | RunTrigger::Schedule,
+            RunTrigger::Watch | RunTrigger::Schedule | RunTrigger::Github,
             NoticeKind::Finished { .. }
         )
     );
