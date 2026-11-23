@@ -330,6 +330,11 @@ impl Supervisor {
             200 | 304 => Fetched::Ok(r),
             404 => Fetched::Error("저장소를 찾을 수 없어요."),
             403 => Fetched::Error("저장소를 읽을 권한이 없어요."),
+            // 리다이렉트를 따라가지 않으므로 이름이 바뀐 저장소는 매번 같은 답 — 일시 오류가 아니다.
+            301 | 302 | 307 | 308 => {
+                Fetched::Error("저장소 주소가 바뀌었어요. 소유자·저장소 이름을 확인해 주세요.")
+            }
+            410 => Fetched::Error("이 저장소는 이슈를 쓰지 않아요."),
             s => {
                 eprintln!("[ieum] GitHub 목록을 받지 못했어요: HTTP {s}");
                 Fetched::Skip

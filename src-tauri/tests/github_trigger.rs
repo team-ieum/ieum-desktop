@@ -985,3 +985,29 @@ async fn github_sample_reserve_does_not_pause_poller() {
     assert_eq!(env.requests().len(), 1, "샘플 뒤 폴러가 쉬었다");
     assert_eq!(env.issue_max(&id), 9);
 }
+
+/// 저장소 이동(301·302·307·308)과 이슈 꺼짐(410)은 매번 같은 답이라 일시 오류가 아니라 오류로 보인다.
+#[tokio::test(flavor = "multi_thread")]
+async fn github_moved_and_gone_show_error() {
+    let env = env().await;
+    let id = env.add(issue_wf("o", "r"));
+    let moved = "저장소 주소가 바뀌었어요. 소유자·저장소 이름을 확인해 주세요.";
+    let gone = "이 저장소는 이슈를 쓰지 않아요.";
+    for (status, msg) in [
+        (301, moved),
+        (302, moved),
+        (307, moved),
+        (308, moved),
+        (410, gone),
+    ] {
+        env.gh.lock().unwrap().status = Some((status, String::new()));
+        env.sup.github_tick_for_test().await;
+        assert_eq!(
+            env.entry(&id),
+            (WatchState::WatchError, Some(msg.to_string())),
+            "{status}"
+        );
+        let err = env.sup.run_now(&id, None).await.unwrap_err();
+        assert_eq!(err, msg, "샘플 {status}");
+    }
+}
