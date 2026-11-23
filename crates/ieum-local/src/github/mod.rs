@@ -7,6 +7,7 @@ mod lookup;
 mod options;
 mod pulls;
 mod review;
+pub mod watch;
 
 use std::sync::Arc;
 
