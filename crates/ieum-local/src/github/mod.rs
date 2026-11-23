@@ -38,6 +38,34 @@ pub trait GithubToken: Send + Sync {
     async fn token(&self) -> Result<String, NodeError>;
 }
 
+/// 토큰 원문. `Debug`가 값을 가린다.
+#[derive(Clone)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Secret(value.into())
+    }
+
+    /// 헤더에 넣을 때만 쓴다.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(…)")
+    }
+}
+
+/// 폴링용 토큰 — 매분 부르므로 캐시할 수 있다.
+#[async_trait]
+pub trait WatchToken: Send + Sync {
+    /// force = 전체 연결 확인을 지금 한다(401 받았을 때).
+    async fn token(&self, force: bool) -> Result<Secret, NodeError>;
+}
+
 /// GitHub 노드 전부를 event로 나눠 돌린다.
 pub struct GithubRunner {
     api: GithubApi,
