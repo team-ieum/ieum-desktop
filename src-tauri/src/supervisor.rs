@@ -752,7 +752,6 @@ impl Supervisor {
                 eprintln!("[ieum] 스케줄 기록을 지우지 못했어요: {e}");
             }
             self.github_reset(id);
-            lock(&self.0.github_errors).remove(id);
         }
         self.sync();
         Ok(())
@@ -1034,9 +1033,9 @@ impl Supervisor {
         self.push_locked(&mut lanes, workflow_id, job)
     }
 
-    fn push(&self, workflow_id: &str, job: Job) {
+    fn push(&self, workflow_id: &str, job: Job) -> Pushed {
         let mut lanes = lock(&self.0.lanes);
-        self.push_locked(&mut lanes, workflow_id, job);
+        self.push_locked(&mut lanes, workflow_id, job)
     }
 
     fn push_locked(

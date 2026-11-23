@@ -12,7 +12,7 @@ use ieum_local::github::watch::{
 use ieum_local::github::{Resp, Secret};
 use serde_json::{Map, Value};
 
-use super::{Job, JobSource, Supervisor, enabled_github, github_hash, lock, trigger_sig};
+use super::{Job, JobSource, Pushed, Supervisor, enabled_github, github_hash, lock, trigger_sig};
 
 const NEED_CONNECT: &str = "GitHub 연결이 필요해요.";
 
@@ -271,23 +271,15 @@ impl Supervisor {
     /// 실행을 줄에 넣고 상태를 쓴다 — 저장과 같은 잠금 안에서, 확인 시작 때와 같은 워크플로우에만.
     fn github_commit(&self, targets: &[Target], got: &HashMap<RepoKey, Got>, now: DateTime<Utc>) {
         let _one = lock(&self.0.tick_lock);
-        if self.is_stopped() {
+        let Some(current) = self.github_current() else {
             return;
-        }
-        let list = match self.store().list_workflows() {
-            Ok(l) => l,
-            Err(e) => return eprintln!("[ieum] GitHub 트리거를 확인하지 못했어요: {e}"),
         };
         let state = self.github_state();
-        let gens = lock(&self.0.github_gen).clone();
         for t in targets {
             let Some(result) = got.get(&t.key) else {
                 continue;
             };
-            let hash = list.iter().find(|w| w.id == t.id).and_then(github_hash);
-            if hash.as_ref() != Some(&t.hash)
-                || gens.get(&t.id).copied().unwrap_or(0) != t.generation
-            {
+            if !current(t) {
                 continue;
             }
             let (items, latest) = match result {
@@ -324,7 +316,13 @@ impl Supervisor {
                     source,
                     reply: None,
                 };
-                self.push(&t.id, job);
+                // 멈춘 감독은 실행을 받지 않는다 — 상태를 넘기지 않아 다음 감독(재시작·계정 복귀)이 돌린다.
+                if matches!(self.push(&t.id, job), Pushed::Stopped) {
+                    return;
+                }
+            }
+            if self.is_stopped() {
+                return;
             }
             let entry = WatchEntry {
                 owner: t.owner.clone(),
@@ -348,10 +346,35 @@ impl Supervisor {
         errors.insert(id.to_string(), msg.to_string());
     }
 
+    /// 커밋과 같은 확인을 거친다 — 확인 도중 끄거나 지우거나 멈췄으면 오류를 남기지도 알리지도 않는다.
     fn github_fail_all(&self, targets: &[Target], msg: &str) {
-        for t in targets {
+        let _one = lock(&self.0.tick_lock);
+        let Some(current) = self.github_current() else {
+            return;
+        };
+        for t in targets.iter().filter(|t| current(t)) {
             self.github_error(&t.id, msg);
         }
+    }
+
+    /// `tick_lock`을 잡은 채 부른다. 멈췄으면 None, 아니면 "확인 시작 때와 같은 워크플로우인가"(지금 저장본이
+    /// 켜져 있고 `config_hash`·세대가 같은가) 판정.
+    fn github_current(&self) -> Option<impl Fn(&Target) -> bool> {
+        if self.is_stopped() {
+            return None;
+        }
+        let list = match self.store().list_workflows() {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("[ieum] GitHub 트리거를 확인하지 못했어요: {e}");
+                return None;
+            }
+        };
+        let gens = lock(&self.0.github_gen).clone();
+        Some(move |t: &Target| {
+            let hash = list.iter().find(|w| w.id == t.id).and_then(github_hash);
+            hash.as_ref() == Some(&t.hash) && gens.get(&t.id).copied().unwrap_or(0) == t.generation
+        })
     }
 
     /// 저장소 상태 + 쓰지 못한 메모리 상태(앞선다).
@@ -377,13 +400,14 @@ impl Supervisor {
         }
     }
 
-    /// 상태를 지우고 세대를 올리고 대기 중인 GitHub 실행을 버린다 — 다음 확인은 기준점부터.
+    /// 상태·오류를 지우고 세대를 올리고 대기 중인 GitHub 실행을 버린다 — 다음 확인은 기준점부터.
     /// `tick_lock`을 잡은 채 부른다.
     pub(super) fn github_reset(&self, id: &str) {
         if let Err(e) = self.store().remove_github_watch(id) {
             eprintln!("[ieum] GitHub 트리거 상태를 지우지 못했어요: {e}");
         }
         lock(&self.0.github_unsaved).remove(id);
+        lock(&self.0.github_errors).remove(id);
         *lock(&self.0.github_gen).entry(id.to_string()).or_default() += 1;
         if let Some(lane) = lock(&self.0.lanes).get_mut(id) {
             lane.jobs

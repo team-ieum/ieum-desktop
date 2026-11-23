@@ -52,6 +52,8 @@ struct Gh {
     extra: String,
     /// 이 토큰으로 오면 401.
     bad_token: Option<String>,
+    /// 경로에 `/{이 이름}/`이 있으면 404.
+    missing: Option<String>,
     /// 다음 응답을 만든 뒤·보내기 전에 한 번 부른다.
     hook: Option<Hook>,
 }
@@ -69,6 +71,12 @@ fn respond(gh: Arc<Mutex<Gh>>) -> impl Fn(&Req) -> Vec<u8> + Send + 'static {
                 resp(401, "", b"{}")
             } else if let Some((s, extra)) = &g.status {
                 resp(*s, extra, b"{}")
+            } else if g
+                .missing
+                .as_ref()
+                .is_some_and(|m| req.path.contains(&format!("/{m}/")))
+            {
+                resp(404, "", b"{}")
             } else if req.path.contains("/issues") {
                 let etag = format!("\"{}\"", serde_json::to_string(&g.issues).unwrap().len());
                 if req.header("if-none-match") == Some(etag.clone()) {
@@ -100,6 +108,8 @@ struct Env {
     log: Log,
     ai: Arc<GateAi>,
     events: Arc<Mutex<Vec<AppEvent>>>,
+    /// 넣어 두면 다음 실패 `WatchStatus`를 낼 때 이 감독을 멈춘다(확인 도중 `stop()` 경합).
+    stop_on_fail: Arc<Mutex<Option<Supervisor>>>,
 }
 
 impl Env {
@@ -170,10 +180,15 @@ impl Env {
 
     /// 감독을 거치지 않고 저장소에 바로 넣는다 — 저장이 루프를 깨우지 않아 확인을 테스트가 직접 부른다.
     fn add(&self, wf: Workflow) -> String {
+        self.add_named("깃허브", wf)
+    }
+
+    /// 확인은 이름 순으로 돈다(`list_workflows`).
+    fn add_named(&self, name: &str, wf: Workflow) -> String {
         self.store
             .save_workflow(StoredWorkflow {
                 id: String::new(),
-                name: "깃허브".into(),
+                name: name.into(),
                 enabled: true,
                 workflow: wf,
                 updated_at: String::new(),
@@ -265,7 +280,8 @@ async fn env_with(poll: Duration) -> Env {
         calls: AtomicUsize::new(0),
     });
     let events = Arc::new(Mutex::new(Vec::new()));
-    let (c, ev) = (clock.clone(), events.clone());
+    let stop_on_fail: Arc<Mutex<Option<Supervisor>>> = Arc::default();
+    let (c, ev, stopper) = (clock.clone(), events.clone(), stop_on_fail.clone());
     let sup = Supervisor::start(Deps {
         store: store.clone(),
         app_data: root.join("data"),
@@ -279,7 +295,14 @@ async fn env_with(poll: Duration) -> Env {
         github_watch: watch.clone(),
         github_created: created.clone(),
         github_poll: poll,
-        emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
+        emit: Arc::new(move |e| {
+            if matches!(e, AppEvent::WatchStatus { ok: false, .. })
+                && let Some(sup) = stopper.lock().unwrap().take()
+            {
+                sup.stop();
+            }
+            ev.lock().unwrap().push(e)
+        }),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),
             repeat_window: Duration::from_secs(30),
@@ -300,6 +323,7 @@ async fn env_with(poll: Duration) -> Env {
         log,
         ai,
         events,
+        stop_on_fail,
     }
 }
 
@@ -617,4 +641,74 @@ async fn github_late_job_dropped_after_disable() {
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(env.ai.calls.load(Ordering::SeqCst), 1);
     assert_eq!(env.run_numbers(&id), [4]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn github_stop_during_commit_keeps_state() {
+    let env = env().await;
+    env.set_issues(&[(3, mins(3))]);
+    // 이름 순: a(곧 404)를 먼저 커밋하다 오류 알림에서 멈추고, 그다음 b의 새 이슈를 넣으려 한다.
+    let a = env.add_named("a", issue_wf("o", "missing"));
+    let b = env.add_named("b", issue_wf("o", "r"));
+    env.sup.github_tick_for_test().await;
+    assert_eq!((env.issue_max(&a), env.issue_max(&b)), (3, 3));
+
+    {
+        let mut g = env.gh.lock().unwrap();
+        g.missing = Some("missing".into());
+    }
+    env.set_issues(&[(4, mins(1)), (3, mins(3))]);
+    *env.stop_on_fail.lock().unwrap() = Some(env.sup.clone());
+    env.sup.github_tick_for_test().await;
+    assert!(env.stop_on_fail.lock().unwrap().is_none(), "멈추지 않았다");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(env.runs(&b), 0);
+    assert_eq!(env.issue_max(&b), 3, "실행을 못 넣고도 상태를 넘겼다");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn github_disable_during_failed_poll_leaves_no_error() {
+    let env = env().await;
+    env.set_issues(&[(3, mins(3))]);
+    let id = env.add(issue_wf("o", "r"));
+    env.sup.github_tick_for_test().await;
+
+    // 401 → 다시 확인도 실패 → 전부 오류. 그런데 응답 전에 사용자가 껐다.
+    env.gh.lock().unwrap().bad_token = Some("t".into());
+    *env.watch.forced.lock().unwrap() = None;
+    let sup = env.sup.clone();
+    let wid = id.clone();
+    env.gh.lock().unwrap().hook = Some(Box::new(move || {
+        let mut wf = sup.store().get_workflow(&wid).unwrap();
+        wf.enabled = false;
+        sup.save_workflow(wf).unwrap();
+    }));
+    env.sup.github_tick_for_test().await;
+    let failed = env.events.lock().unwrap().iter().any(
+        |e| matches!(e, AppEvent::WatchStatus { workflow_id, ok: false, .. } if *workflow_id == id),
+    );
+    assert!(!failed, "끈 워크플로우의 오류를 알렸다");
+    // 감독을 거치지 않고 다시 켜도(초기화 없음) 옛 오류가 남아 있지 않다.
+    let mut wf = env.store.get_workflow(&id).unwrap();
+    wf.enabled = true;
+    env.store.save_workflow(wf).unwrap();
+    assert_eq!(env.entry(&id), (WatchState::Watching, None));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn github_fixed_repo_clears_error_on_save() {
+    let env = env().await;
+    let id = env.add(issue_wf("o", "missing"));
+    env.gh.lock().unwrap().missing = Some("missing".into());
+    env.sup.github_tick_for_test().await;
+    assert_eq!(env.entry(&id).0, WatchState::WatchError);
+
+    // 저장으로 깨운 확인은 일시 오류(500)라 오류를 지우지 못한다 — 저장 자체가 지워야 한다.
+    env.gh.lock().unwrap().status = Some((500, String::new()));
+    let mut wf = env.store.get_workflow(&id).unwrap();
+    wf.workflow = issue_wf("o", "r");
+    env.sup.save_workflow(wf).unwrap();
+    assert_eq!(env.entry(&id), (WatchState::Watching, None));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(env.entry(&id), (WatchState::Watching, None));
 }
