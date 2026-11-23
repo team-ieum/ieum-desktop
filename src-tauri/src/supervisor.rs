@@ -1531,6 +1531,7 @@ impl Supervisor {
                 e if e.starts_with("schedule.") => {
                     schedule_output(e, &node.config, (self.0.deps.now)())
                 }
+                e if GITHUB_TRIGGERS.contains(&e) => self.github_sample(node).await?,
                 _ => return Err("이 트리거는 테스트할 수 없어요.".into()),
             };
             let tested_at = now();

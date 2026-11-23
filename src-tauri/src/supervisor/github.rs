@@ -166,7 +166,14 @@ impl Supervisor {
             };
             let etag = lock(&self.0.github_cache).get(key).map(|(e, _)| e.clone());
             let fetched = self
-                .github_get(&mut token, &mut rechecked, &path, &query, etag.as_deref())
+                .github_get(
+                    &mut token,
+                    &mut rechecked,
+                    &path,
+                    &query,
+                    etag.as_deref(),
+                    true,
+                )
                 .await;
             let items = match fetched {
                 Fetched::Stop(msg) => return self.github_fail_all(&targets, &msg),
@@ -197,7 +204,7 @@ impl Supervisor {
             if *kind == WatchKind::Pr && needs_baseline(key) {
                 let query = list_query("all", "created", 1);
                 match self
-                    .github_get(&mut token, &mut rechecked, &path, &query, None)
+                    .github_get(&mut token, &mut rechecked, &path, &query, None, true)
                     .await
                 {
                     Fetched::Stop(msg) => return self.github_fail_all(&targets, &msg),
@@ -237,7 +244,7 @@ impl Supervisor {
             (self.0.deps.github_watch.token(false).await).map_err(|_| NEED_CONNECT.to_string())?;
         let query = list_query("all", "created", 20);
         let r = match self
-            .github_get(&mut token, &mut false, &path, &query, None)
+            .github_get(&mut token, &mut false, &path, &query, None, false)
             .await
         {
             Fetched::Ok(r) => r,
@@ -263,6 +270,7 @@ impl Supervisor {
         path: &str,
         query: &[(&str, String)],
         etag: Option<&str>,
+        polling: bool,
     ) -> Fetched {
         let api = self.0.deps.github.api();
         let r = loop {
@@ -294,6 +302,10 @@ impl Supervisor {
             && remaining * 10 < limit
         {
             *lock(&self.0.github_pause) = Some(until);
+            // 사용자가 직접 누른 샘플은 이미 받은 응답을 버리지 않는다 — 쉬는 것은 폴러만.
+            if !polling {
+                return Fetched::Ok(r);
+            }
             return Fetched::Stop(format!(
                 "GitHub 요청 여유가 적어 {}에 다시 확인해요",
                 hhmm(until)

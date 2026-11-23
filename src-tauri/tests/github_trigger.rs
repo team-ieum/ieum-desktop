@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use github_support::{FakeWatch, Log, Req, bind, fake_watch, resp, serve};
 use ieum_desktop_lib::store::{RunTrigger, Store, StoredWorkflow};
-use ieum_desktop_lib::supervisor::{AppEvent, Deps, Supervisor, WatchState};
+use ieum_desktop_lib::supervisor::{AppEvent, Deps, NodeTestStatus, Supervisor, WatchState};
 use ieum_engine::Workflow;
 use ieum_local::WatchTiming;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
@@ -753,21 +753,15 @@ async fn github_node_test_uses_latest_issue() {
     e.set_issues(&[(9, mins(1)), (8, mins(2))]);
     let wf = issue_wf("o", "r");
     let id = e.add(wf.clone());
-    let r = e.sup.run_test(&id, wf, TestTrigger::Github).await.unwrap();
-    assert_eq!(r.nodes["t"].output.as_ref().unwrap()["issueNumber"], 9);
+    let r = e.sup.test_node(&id, wf, "t", None).await.unwrap();
+    assert_eq!(r.status, NodeTestStatus::Succeeded, "{r:?}");
+    assert_eq!(r.output.as_ref().unwrap()["issueNumber"], 9);
     let samples = e.store.get_samples(&id).unwrap();
     assert_eq!(samples["t"].output.as_ref().unwrap()["issueNumber"], 9);
-    // 테스트 기록은 Test 출처뿐 — 확인 루프·지금 실행 기록은 없다
-    assert!(
-        e.store
-            .list_runs(Some(&id))
-            .unwrap()
-            .iter()
-            .all(|r| r.trigger == Some(RunTrigger::Test))
-    );
-    let reqs = e.requests();
+    // 노드 테스트는 샘플만 남기고 실행 기록은 없다
+    assert!(e.store.list_runs(Some(&id)).unwrap().is_empty());
     assert_eq!(
-        reqs[0].path,
+        e.requests()[0].path,
         "/repos/o/r/issues?state=all&sort=created&direction=desc&per_page=20"
     );
 }
@@ -777,12 +771,50 @@ async fn github_node_test_no_items_errors() {
     let e = env().await;
     let wf = issue_wf("o", "r");
     let id = e.add(wf.clone());
-    let err = e
-        .sup
-        .run_test(&id, wf, TestTrigger::Github)
-        .await
-        .unwrap_err();
+    let err = e.sup.test_node(&id, wf, "t", None).await.unwrap_err();
     assert_eq!(err, "이 저장소에 이슈가 없어요.");
+}
+
+/// 빌더 테스트 경로(`run_test` + `TestTrigger::Github`).
+#[tokio::test]
+async fn github_builder_test_uses_latest_issue() {
+    let e = env().await;
+    e.set_issues(&[(9, mins(1))]);
+    let wf = issue_wf("o", "r");
+    let id = e.add(wf.clone());
+    let r = e.sup.run_test(&id, wf, TestTrigger::Github).await.unwrap();
+    assert_eq!(r.nodes["t"].output.as_ref().unwrap()["issueNumber"], 9);
+    assert!(
+        e.store
+            .list_runs(Some(&id))
+            .unwrap()
+            .iter()
+            .all(|r| r.trigger == Some(RunTrigger::Test))
+    );
+}
+
+/// 남은 한도가 10% 아래여도 사용자가 직접 누른 샘플은 받은 응답을 쓴다(폴러만 쉰다).
+#[tokio::test]
+async fn github_sample_ignores_reserve() {
+    let e = env().await;
+    e.set_issues(&[(9, mins(1))]);
+    e.gh.lock().unwrap().extra = "x-ratelimit-remaining: 400\r\nx-ratelimit-limit: 5000\r\n".into();
+    let wf = issue_wf("o", "r");
+    let id = e.add(wf.clone());
+    let r = e.sup.test_node(&id, wf, "t", None).await.unwrap();
+    assert_eq!(r.status, NodeTestStatus::Succeeded, "{r:?}");
+    assert_eq!(r.output.as_ref().unwrap()["issueNumber"], 9);
+}
+
+/// 저장소가 비면 노드 검증이 먼저 막는다(`Invalid`) — 요청도 가지 않는다.
+#[tokio::test]
+async fn github_node_test_empty_repo_is_invalid() {
+    let e = env().await;
+    let wf = issue_wf("o", "");
+    let id = e.add(wf.clone());
+    let r = e.sup.test_node(&id, wf, "t", None).await.unwrap();
+    assert_eq!(r.status, NodeTestStatus::Invalid, "{r:?}");
+    assert!(e.requests().is_empty());
 }
 
 #[tokio::test]
