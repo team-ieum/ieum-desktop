@@ -15,6 +15,7 @@ use ieum_desktop_lib::supervisor::{AppEvent, Deps, Supervisor, WatchState};
 use ieum_engine::Workflow;
 use ieum_local::WatchTiming;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
+use ieum_local::builder::TestTrigger;
 use ieum_local::github::watch::{CreatedIssues, Seen, WatchEntry};
 use ieum_local::github::{GithubApi, GithubRunner};
 use serde_json::{Value, json};
@@ -50,6 +51,8 @@ struct Gh {
     status: Option<(u16, String)>,
     /// 200·304 응답에 붙일 헤더(GitHub는 304에도 한도 헤더를 준다).
     extra: String,
+    /// `/pulls` 목록(최신 먼저).
+    pulls: Vec<Value>,
     /// 이 토큰으로 오면 401.
     bad_token: Option<String>,
     /// 경로에 `/{이 이름}/`이 있으면 404.
@@ -85,6 +88,8 @@ fn respond(gh: Arc<Mutex<Gh>>) -> impl Fn(&Req) -> Vec<u8> + Send + 'static {
                     let body = serde_json::to_vec(&g.issues).unwrap();
                     resp(200, &format!("etag: {etag}\r\n{}", g.extra), &body)
                 }
+            } else if req.path.contains("/pulls") {
+                resp(200, &g.extra, &serde_json::to_vec(&g.pulls).unwrap())
             } else {
                 resp(200, &g.extra, b"[]")
             };
@@ -711,4 +716,132 @@ async fn github_fixed_repo_clears_error_on_save() {
     assert_eq!(env.entry(&id), (WatchState::Watching, None));
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(env.entry(&id), (WatchState::Watching, None));
+}
+
+fn pr(n: u64, association: &str, draft: bool) -> Value {
+    json!({
+        "number": n,
+        "title": format!("PR {n}"),
+        "body": "",
+        "html_url": format!("https://github.com/o/r/pull/{n}"),
+        "user": {"login": "u"},
+        "author_association": association,
+        "draft": draft,
+        "state": "open",
+        "created_at": "2026-11-16T01:00:00Z",
+        "updated_at": "2026-11-16T01:00:00Z",
+        "base": {"ref": "main"},
+        "head": {"ref": "f", "sha": "abc"},
+        "labels": [],
+    })
+}
+
+fn pr_wf(config: Value) -> Workflow {
+    serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "github.new_pull_request", "config": config},
+            {"id": "m", "type": "TRANSFORM", "event": "transform.map", "config": {"mappings": {"n": "{{nodes.t.output.prNumber}}"}}}
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "m"}]
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn github_node_test_uses_latest_issue() {
+    let e = env().await;
+    e.set_issues(&[(9, mins(1)), (8, mins(2))]);
+    let wf = issue_wf("o", "r");
+    let id = e.add(wf.clone());
+    let r = e.sup.run_test(&id, wf, TestTrigger::Github).await.unwrap();
+    assert_eq!(r.nodes["t"].output.as_ref().unwrap()["issueNumber"], 9);
+    let samples = e.store.get_samples(&id).unwrap();
+    assert_eq!(samples["t"].output.as_ref().unwrap()["issueNumber"], 9);
+    // 테스트 기록은 Test 출처뿐 — 확인 루프·지금 실행 기록은 없다
+    assert!(
+        e.store
+            .list_runs(Some(&id))
+            .unwrap()
+            .iter()
+            .all(|r| r.trigger == Some(RunTrigger::Test))
+    );
+    let reqs = e.requests();
+    assert_eq!(
+        reqs[0].path,
+        "/repos/o/r/issues?state=all&sort=created&direction=desc&per_page=20"
+    );
+}
+
+#[tokio::test]
+async fn github_node_test_no_items_errors() {
+    let e = env().await;
+    let wf = issue_wf("o", "r");
+    let id = e.add(wf.clone());
+    let err = e
+        .sup
+        .run_test(&id, wf, TestTrigger::Github)
+        .await
+        .unwrap_err();
+    assert_eq!(err, "이 저장소에 이슈가 없어요.");
+}
+
+#[tokio::test]
+async fn github_pr_sample_skips_non_members() {
+    let e = env().await;
+    e.gh.lock().unwrap().pulls = vec![
+        pr(5, "CONTRIBUTOR", false),
+        pr(4, "MEMBER", true),
+        pr(3, "OWNER", false),
+    ];
+    let wf = pr_wf(json!({"owner": "o", "repo": "r"}));
+    let id = e.add(wf.clone());
+    // 초안 제외가 기본 — 멤버의 초안(4)도 건너뛰고 3
+    let r = e.sup.run_test(&id, wf, TestTrigger::Github).await.unwrap();
+    assert_eq!(r.nodes["t"].output.as_ref().unwrap()["prNumber"], 3);
+    assert!(
+        e.requests()[0]
+            .path
+            .starts_with("/repos/o/r/pulls?state=all&sort=created&direction=desc&per_page=20")
+    );
+    // 멤버가 연 PR이 없으면 문구
+    e.gh.lock().unwrap().pulls = vec![pr(5, "NONE", false)];
+    let wf = pr_wf(json!({"owner": "o", "repo": "r"}));
+    let err = e
+        .sup
+        .run_test(&id, wf, TestTrigger::Github)
+        .await
+        .unwrap_err();
+    assert_eq!(err, "이 저장소에 고를 수 있는 PR이 없어요(멤버가 연 PR만).");
+}
+
+#[tokio::test]
+async fn github_run_now_uses_sample() {
+    let e = env().await;
+    e.set_issues(&[(7, mins(1))]);
+    let id = e.add(issue_wf("o", "r"));
+    let run_id = e.sup.run_now(&id, None).await.unwrap();
+    let run = e.store.get_run(&run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Manual));
+    assert_eq!(
+        run.run.nodes["t"].output.as_ref().unwrap()["issueNumber"],
+        7
+    );
+}
+
+#[tokio::test]
+async fn github_sample_requires_repo() {
+    let e = env().await;
+    for (owner, repo) in [("", "r"), ("o", ""), ("{{nodes.x.output.a}}", "r")] {
+        let wf = issue_wf(owner, repo);
+        let id = e.add(wf.clone());
+        let err = e.sup.run_now(&id, None).await.unwrap_err();
+        assert_eq!(err, "저장소를 먼저 골라 주세요.", "{owner}/{repo}");
+        let err = e
+            .sup
+            .run_test(&id, wf, TestTrigger::Github)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "저장소를 먼저 골라 주세요.");
+    }
+    assert!(e.requests().is_empty());
 }

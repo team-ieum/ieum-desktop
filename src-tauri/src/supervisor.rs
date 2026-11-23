@@ -239,6 +239,14 @@ fn enabled_schedule(wf: &StoredWorkflow) -> Option<Result<Schedule, String>> {
     )
 }
 
+fn first_trigger(wf: &Workflow) -> Option<&ieum_engine::Node> {
+    wf.nodes.iter().find(|n| {
+        n.r#type
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("TRIGGER"))
+    })
+}
+
 fn is_github(wf: &StoredWorkflow) -> bool {
     matches!(trigger_kind(wf), TriggerKind::Github { .. })
 }
@@ -1353,7 +1361,11 @@ impl Supervisor {
                 schedule_output(&event, &config, (self.0.deps.now)())
             }
             TriggerKind::Manual => Map::new(),
-            TriggerKind::Github { .. } | TriggerKind::Unsupported => {
+            TriggerKind::Github { .. } => {
+                let node = first_trigger(&wf.workflow).ok_or("트리거가 없어요.")?;
+                self.github_sample(node).await?
+            }
+            TriggerKind::Unsupported => {
                 return Err("이 트리거는 지금 실행할 수 없어요.".into());
             }
         };
@@ -1390,6 +1402,10 @@ impl Supervisor {
         let trigger = match trigger {
             TestTrigger::File(sample) => self.file_trigger(&wf, &sample)?,
             TestTrigger::Output(output) => output,
+            TestTrigger::Github => {
+                let node = first_trigger(&wf).ok_or("트리거가 없어요.")?;
+                self.github_sample(node).await?
+            }
         };
         // 되돌리기는 실행 줄(`run_one`)이 한다 — 이 future가 버려져도 끝까지 간다.
         let run_id = self.queue(workflow_id, trigger, Some(wf.clone())).await?;

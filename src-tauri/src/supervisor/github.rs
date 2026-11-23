@@ -5,16 +5,21 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use ieum_engine::Node;
 use ieum_engine::schedule::SCHEDULE_ZONE;
 use ieum_local::github::watch::{
     PAGE, PrFilter, WatchEntry, WatchKind, baseline_issues, baseline_prs, diff_issues, diff_prs,
+    pick_issue_sample, pick_pr_sample,
 };
-use ieum_local::github::{Resp, Secret};
+use ieum_local::github::{Resp, Secret, is_path_name};
 use serde_json::{Map, Value};
 
 use super::{Job, JobSource, Pushed, Supervisor, enabled_github, github_hash, lock, trigger_sig};
 
 const NEED_CONNECT: &str = "GitHub 연결이 필요해요.";
+
+/// 요청이 GitHub에 닿지 못했을 때(연결 실패·시간 초과) 샘플 요청에 보일 문구.
+const UNREACHABLE: &str = "GitHub에 닿지 못했어요. 잠시 뒤 다시 해 주세요.";
 
 /// (소문자 owner, 소문자 repo, 종류) — 같은 저장소를 보는 워크플로우가 여럿이어도 요청은 하나.
 pub(super) type RepoKey = (String, String, WatchKind);
@@ -211,6 +216,43 @@ impl Supervisor {
             got.insert(key.clone(), Got::List(items, latest));
         }
         self.github_commit(&targets, &got, now);
+    }
+
+    /// 테스트·지금 실행용 샘플 — 그 저장소의 최신 실제 항목(PR은 멤버가 연 것만)으로 트리거 출력을 만든다.
+    /// 요청·오류 문구는 확인 루프와 같은 길(`github_get`)을 탄다 — 본문·토큰은 문구에 싣지 않는다.
+    pub(super) async fn github_sample(&self, node: &Node) -> Result<Map<String, Value>, String> {
+        let text = |k: &str| node.config.get(k).and_then(Value::as_str).unwrap_or("");
+        let (owner, repo) = (text("owner"), text("repo"));
+        let usable = |s: &str| !s.is_empty() && !s.contains("{{") && is_path_name(&Value::from(s));
+        if !usable(owner) || !usable(repo) {
+            return Err("저장소를 먼저 골라 주세요.".into());
+        }
+        let (owner, repo) = (owner.to_lowercase(), repo.to_lowercase());
+        let issue = node.event == "github.new_issue";
+        let path = format!(
+            "/repos/{owner}/{repo}/{}",
+            if issue { "issues" } else { "pulls" }
+        );
+        let mut token =
+            (self.0.deps.github_watch.token(false).await).map_err(|_| NEED_CONNECT.to_string())?;
+        let query = list_query("all", "created", 20);
+        let r = match self
+            .github_get(&mut token, &mut false, &path, &query, None)
+            .await
+        {
+            Fetched::Ok(r) => r,
+            Fetched::Error(m) => return Err(m.into()),
+            Fetched::Stop(m) => return Err(m),
+            Fetched::Skip => return Err(UNREACHABLE.into()),
+        };
+        let list = r.body.as_array().map_or(&[][..], Vec::as_slice);
+        if issue {
+            pick_issue_sample(list).ok_or_else(|| "이 저장소에 이슈가 없어요.".into())
+        } else {
+            let exclude_drafts = PrFilter::from_config(&node.config).exclude_drafts;
+            pick_pr_sample(list, exclude_drafts)
+                .ok_or_else(|| "이 저장소에 고를 수 있는 PR이 없어요(멤버가 연 PR만).".into())
+        }
     }
 
     /// GET 하나. 401이면 이번 확인에서 한 번만 전체 연결 확인을 다시 하고 새 토큰으로 다시 요청한다.

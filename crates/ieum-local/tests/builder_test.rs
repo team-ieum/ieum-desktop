@@ -461,3 +461,15 @@ async fn node_test_schedule_no_folder() {
         }
     }
 }
+
+#[tokio::test]
+async fn github_trigger_is_github_test_trigger() {
+    for event in ["github.new_issue", "github.new_pull_request"] {
+        let h = MemHost::with(W, non_folder_wf(event, json!({"owner": "o", "repo": "r"})));
+        let b = Builder::new(h.clone()).unwrap();
+        h.push_test_run(Ok(ok_run()));
+        let r = run(&b, test_op("a")).await;
+        assert!(r.ok, "{event}: {r:?}");
+        assert_eq!(h.tested().remove(0).1, TestTrigger::Github, "{event}");
+    }
+}
