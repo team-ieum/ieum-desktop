@@ -1011,3 +1011,93 @@ async fn github_moved_and_gone_show_error() {
         assert_eq!(err, msg, "샘플 {status}");
     }
 }
+
+/// PR 트리거의 감독 루프 전체: 기준점(열린 목록 + 전체 최신 1건) → `Seen::Pr` 저장 → 다음 확인의 새 PR·새 커밋 실행.
+#[tokio::test(flavor = "multi_thread")]
+async fn github_pr_poll_end_to_end() {
+    let env = env().await;
+    let at = |p: &mut Value, t: DateTime<Utc>| {
+        p["created_at"] = json!(t.to_rfc3339());
+        p["updated_at"] = json!(t.to_rfc3339());
+    };
+    // 열린 PR은 3·2, 전체 최신은 닫힌 5 — 기준점은 5.
+    let (mut p3, mut p2) = (pr(3, "MEMBER", false), pr(2, "OWNER", false));
+    at(&mut p3, env.now() - mins(30));
+    at(&mut p2, env.now() - mins(40));
+    env.gh.lock().unwrap().pulls = vec![p3.clone(), p2.clone()];
+    let id = env.add(pr_wf(json!({"owner": "o", "repo": "r"})));
+    let gh = env.gh.clone();
+    let mut closed = pr(5, "MEMBER", false);
+    closed["state"] = json!("closed");
+    // 첫 요청(열린 목록)을 보낸 뒤 두 번째 요청(전체 최신 1건)은 닫힌 5를 준다.
+    env.gh.lock().unwrap().hook = Some(Box::new(move || gh.lock().unwrap().pulls = vec![closed]));
+    env.sup.github_tick_for_test().await;
+    let paths: Vec<String> = env.requests().iter().map(|r| r.path.clone()).collect();
+    assert_eq!(
+        paths,
+        [
+            "/repos/o/r/pulls?state=open&sort=updated&direction=desc&per_page=100",
+            "/repos/o/r/pulls?state=all&sort=created&direction=desc&per_page=1"
+        ]
+    );
+    let entry = env.state(&id).expect("상태 없음");
+    let Seen::Pr {
+        pr_max,
+        open,
+        open_complete,
+    } = &entry.seen
+    else {
+        panic!("PR 상태가 아님: {:?}", entry.seen);
+    };
+    assert_eq!(*pr_max, 5);
+    assert_eq!(open.keys().copied().collect::<Vec<_>>(), [2, 3]);
+    assert!(*open_complete);
+    assert_eq!(env.runs(&id), 0);
+    // 저장본을 다시 쓴다 — 다음 확인은 파일에서 읽은 상태로 판정한다(감독은 확인마다 저장소를 읽는다).
+    env.store
+        .set_github_watch(&id, &env.state(&id).unwrap())
+        .unwrap();
+
+    // 1분 뒤: 새 PR 6이 열리고 3에 새 커밋.
+    env.advance(mins(1));
+    let mut p6 = pr(6, "COLLABORATOR", false);
+    at(&mut p6, env.now() - chrono::Duration::seconds(20));
+    p3["head"]["sha"] = json!("def");
+    p3["updated_at"] = json!((env.now() - chrono::Duration::seconds(10)).to_rfc3339());
+    env.gh.lock().unwrap().pulls = vec![p3, p6, p2];
+    env.clear();
+    env.sup.github_tick_for_test().await;
+    assert_eq!(
+        env.requests().len(),
+        1,
+        "기준점이 있는데 전체 최신을 다시 받았다"
+    );
+    assert!(wait_until(WAIT, || env.runs(&id) == 2).await);
+    let mut got: Vec<(u64, String)> = env
+        .store
+        .list_runs(Some(&id))
+        .unwrap()
+        .iter()
+        .map(|s| {
+            assert_eq!(s.trigger, Some(RunTrigger::Github));
+            let run = env.store.get_run(&s.run_id).unwrap();
+            let out = run.run.nodes["t"].output.clone().unwrap();
+            (
+                out["prNumber"].as_u64().unwrap(),
+                out["action"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    got.sort();
+    assert_eq!(got, [(3, "synchronize".into()), (6, "opened".into())]);
+    let Seen::Pr { pr_max, open, .. } = env.state(&id).unwrap().seen else {
+        panic!("PR 상태가 아님");
+    };
+    assert_eq!(pr_max, 6);
+    assert_eq!(open[&3].head_sha, "def");
+
+    // 같은 목록이면 더 돌지 않는다.
+    env.sup.github_tick_for_test().await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(env.runs(&id), 2);
+}
