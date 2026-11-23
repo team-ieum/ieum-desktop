@@ -82,3 +82,10 @@ test("web_card_menu_opens_in_browser", async () => {
   await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "이음 클라우드에서 열기" })));
   expect(open).toHaveBeenCalledWith("aaaaaaaa-0000-4000-8000-000000000001");
 });
+
+test("github_trigger_card_is_app_event_with_repo", () => {
+  const c = sched("github.new_issue", { owner: "o", repo: "r" });
+  expect(c.trigger).toBe("event");
+  expect(c.triggerDetail).toBe("o/r");
+  expect(sched("github.new_pull_request", { owner: "o" }).triggerDetail).toBeUndefined();
+});

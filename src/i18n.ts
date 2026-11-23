@@ -67,6 +67,7 @@ const ko = {
   "dashboard.trigger.manual": "수동",
   "dashboard.trigger.test": "테스트",
   "dashboard.trigger.schedule": "스케줄",
+  "dashboard.trigger.github": "GitHub",
   "dashboard.trigger.webhook": "웹훅",
 
   "auth.login": "로그인",
@@ -1410,6 +1411,7 @@ const en: Record<Key, string> = {
   "dashboard.trigger.manual": "Manual",
   "dashboard.trigger.test": "Test",
   "dashboard.trigger.schedule": "Schedule",
+  "dashboard.trigger.github": "GitHub",
   "dashboard.trigger.webhook": "Webhook",
 
   "auth.login": "Log in",

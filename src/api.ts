@@ -117,8 +117,8 @@ export interface StoredRun {
   /** 스케줄 실행의 차례(Asia/Seoul "YYYY-MM-DDTHH:MM:SS"). */
   scheduledFor?: string | null;
 }
-/** 폴더 감시·수동·스케줄. 옛 기록은 없음. */
-export type RunTrigger = "watch" | "manual" | "test" | "schedule";
+/** 폴더 감시·수동·스케줄·GitHub. 옛 기록은 없음. */
+export type RunTrigger = "watch" | "manual" | "test" | "schedule" | "github";
 export interface RunSummary {
   runId: string;
   workflowId: string;

@@ -72,8 +72,8 @@ export function githubLine(n: WfNode, nodes: WfNode[]): HttpLine {
   };
 }
 
-/** 파일 없이 바로 도는 트리거(스케줄·수동). 그 밖(폴더)은 파일을 고른다. */
-export const runsWithoutFile = (nodes: WfNode[]) => nodes.some((n) => n.event.startsWith("schedule.") || n.event === "manual.run");
+/** 파일 없이 바로 도는 트리거(스케줄·수동·GitHub). 그 밖(폴더)은 파일을 고른다. */
+export const runsWithoutFile = (nodes: WfNode[]) => nodes.some((n) => n.event.startsWith("schedule.") || n.event.startsWith("github.new_") || n.event === "manual.run");
 
 /**
  * 한 번 실행(폴더 트리거는 파일을 골라서) — 편집기 툴바와 실행 보기가 같이 쓴다.

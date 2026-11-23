@@ -2,7 +2,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { api, type WfNode } from "../api";
-import { useTestRun } from "./useTestRun";
+import { runsWithoutFile, useTestRun } from "./useTestRun";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -26,4 +26,9 @@ test("folder_run_picks_file", async () => {
   await act(() => result.current.run());
   expect(pick).toHaveBeenCalledWith(false);
   expect(runNow).toHaveBeenCalledWith("w1", "/tmp/a.txt");
+});
+
+test("github_triggers_run_without_file", () => {
+  expect(runsWithoutFile([trig("github.new_issue")])).toBe(true);
+  expect(runsWithoutFile([trig("github.new_pull_request")])).toBe(true);
 });
