@@ -31,7 +31,8 @@ pub struct PrSeen {
 
 /// 마지막 확인에서 본 것. 상태 항목이 없으면 "기준점 없음" — 빈 저장소도 `*_max: 0`인 항목을 둔다.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+// 내부 태그(`tag`)는 쓰지 않는다 — 버퍼링 때문에 `open`의 숫자 키(JSON 글자 키)를 되읽지 못한다.
+#[serde(rename_all = "snake_case")]
 pub enum Seen {
     /// 이슈·PR은 번호를 함께 쓰므로 PR 번호까지 포함한 최댓값.
     Issue { issue_max: u64 },
