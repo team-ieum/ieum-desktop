@@ -16,6 +16,7 @@ use ieum_engine::{NodeCtx, NodeError, NodeRunner};
 use serde_json::{Map, Value};
 
 pub use api::{GithubApi, Resp};
+pub use input::is_path_name;
 pub use options::{OptionItem, OptionList, options};
 
 /// 저장소에 쓰는 노드 — 빌더 테스트 전에 사람이 확인한다.
@@ -86,6 +87,11 @@ impl GithubRunner {
     pub fn with_created(mut self, created: Arc<watch::CreatedIssues>) -> Self {
         self.created = created;
         self
+    }
+
+    /// 감독의 확인 루프·샘플 읽기가 같은 주소(테스트는 가짜 서버)로 요청하게.
+    pub fn api(&self) -> &GithubApi {
+        &self.api
     }
 }
 

@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use super::api::input_error;
 
 /// URL 경로 조각(owner·repo). `/`·`..`·공백이 들어가면 다른 GitHub API 경로로 샌다.
-pub(crate) fn is_path_name(v: &Value) -> bool {
+pub fn is_path_name(v: &Value) -> bool {
     v.as_str().is_some_and(|s| {
         !s.is_empty()
             && s.bytes()

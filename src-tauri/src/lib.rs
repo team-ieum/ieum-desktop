@@ -172,11 +172,12 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 "watch-status",
                 json!({"workflowId": workflow_id, "ok": ok, "message": message}),
             ),
-            AppEvent::QueueDropped { workflow_id, path } => {
-                eprintln!("[ieum] 실행 줄이 넘쳐 버렸어요: 워크플로우 {workflow_id}, 파일 {path}");
+            AppEvent::QueueDropped { workflow_id, label } => {
+                eprintln!("[ieum] 실행 줄이 넘쳐 버렸어요: 워크플로우 {workflow_id}, {label}");
+                // 화면 계약은 그대로 `path` 키 — GitHub는 `owner/repo #번호`가 들어간다.
                 handle.emit(
                     "queue-dropped",
-                    json!({"workflowId": workflow_id, "path": path}),
+                    json!({"workflowId": workflow_id, "path": label}),
                 )
             }
             AppEvent::RunNotice(n) => {

@@ -11,14 +11,15 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use github_support::no_github;
+use github_support::{no_github, no_watch};
 use ieum_desktop_lib::store::{RunTrigger, Sample, SampleStatus, Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{
-    AppEvent, Deps, NodeTestStatus, Supervisor, rewrite_undone_paths,
+    AppEvent, Deps, GITHUB_POLL, NodeTestStatus, Supervisor, rewrite_undone_paths,
 };
 use ieum_engine::Workflow;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, AiUsage, ChunkFn};
 use ieum_local::builder::TestTrigger;
+use ieum_local::github::watch::CreatedIssues;
 use ieum_local::{FileOp, FileOpKind, WatchTiming};
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -86,6 +87,9 @@ fn env_with(ai: FakeAi) -> Env {
         trash_dir: root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("cli:claude", ai.clone())),
         github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),

@@ -9,14 +9,15 @@ use std::time::Duration;
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::{ScopedKeys, copy_legacy_keys, delete_legacy_keys};
 use ieum_local::ai::{AiRunner, KeyStore};
+use ieum_local::github::watch::CreatedIssues;
 use ieum_local::github::{GithubApi, GithubRunner};
 
 use crate::account::{AccountId, account_key, account_root, claim_legacy};
 use crate::credentials::AccountCredentials;
-use crate::github::GhToken;
+use crate::github::{CachedGhToken, GhToken};
 use crate::key_limits::LimitGate;
 use crate::store::Store;
-use crate::supervisor::{Deps, Emit, Supervisor};
+use crate::supervisor::{Deps, Emit, GITHUB_POLL, Supervisor};
 use crate::web::validate_server_url;
 
 pub const NOT_SIGNED_IN: &str = "NOT_SIGNED_IN";
@@ -130,6 +131,8 @@ impl Active {
         }
         let first_open = !slot.opened.contains(&key);
         let store = Store::new(account_root(&b.app_data, &key));
+        // GitHub 노드가 만든 이슈와 새 이슈 트리거가 같은 기억을 본다.
+        let created = Arc::new(CreatedIssues::open(store.created_issues_path()));
         let started = Supervisor::start_with(
             Deps {
                 store: store.clone(),
@@ -144,13 +147,22 @@ impl Active {
                             now: chrono::Local::now,
                         })),
                 ),
-                github: Arc::new(GithubRunner::new(
-                    GithubApi::new(),
-                    Arc::new(GhToken {
-                        app_data: b.app_data.clone(),
-                        account_dir: account_root(&b.app_data, &key),
-                    }),
+                github: Arc::new(
+                    GithubRunner::new(
+                        GithubApi::new(),
+                        Arc::new(GhToken {
+                            app_data: b.app_data.clone(),
+                            account_dir: account_root(&b.app_data, &key),
+                        }),
+                    )
+                    .with_created(created.clone()),
+                ),
+                github_watch: Arc::new(CachedGhToken::for_account(
+                    b.app_data.clone(),
+                    account_root(&b.app_data, &key),
                 )),
+                github_created: created,
+                github_poll: GITHUB_POLL,
                 emit: b.emit.clone(),
                 timing: b.timing,
                 recheck: b.recheck,

@@ -10,14 +10,15 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use github_support::no_github;
+use github_support::{no_github, no_watch};
 use ieum_desktop_lib::store::{RunTrigger, Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{
-    AppEvent, Deps, NoticeKind, QUEUE_CAP, RunNotice, Supervisor, WatchState,
+    AppEvent, Deps, GITHUB_POLL, NoticeKind, QUEUE_CAP, RunNotice, Supervisor, WatchState,
 };
 use ieum_engine::{ExecEvent, NodeStatus, RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, AiUsage, ChunkFn};
+use ieum_local::github::watch::CreatedIssues;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
@@ -95,6 +96,9 @@ fn env_full(ai: FakeAi, recheck: Duration, repeat_window: Duration) -> Env {
         trash_dir: root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", ai.clone())),
         github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),
@@ -617,6 +621,9 @@ fn restart(env: &Env) -> Supervisor {
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty()),
         github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(|_| {}),
         timing: WatchTiming::default(),
         recheck: Duration::from_secs(30),
@@ -703,6 +710,9 @@ async fn run_finished_emitted_after_final_save() {
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", env.ai.clone())),
         github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| {
             if let AppEvent::Exec {
                 event: ExecEvent::RunFinished { .. },
@@ -947,6 +957,9 @@ async fn unfinished_test_run_undone_on_next_start() {
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty()),
         github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming::default(),
         recheck: Duration::from_secs(30),
@@ -1223,6 +1236,9 @@ async fn restart_no_duplicate() {
             trash_dir: env.root.join("trash"),
             ai: Arc::new(AiRunner::empty().with_provider("fake", env.ai.clone())),
             github: no_github(),
+            github_watch: no_watch(),
+            github_created: Arc::new(CreatedIssues::in_memory()),
+            github_poll: GITHUB_POLL,
             emit: Arc::new(|_| {}),
             timing: WatchTiming::default(),
             recheck: Duration::from_secs(30),

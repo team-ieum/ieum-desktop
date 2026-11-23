@@ -12,16 +12,17 @@ use std::task::Poll;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use github_support::no_github;
+use github_support::{no_github, no_watch};
 use ieum_desktop_lib::builder_host::{AppHost, PickFolder, no_pick};
 use ieum_desktop_lib::credentials::AccountCredentials;
 use ieum_desktop_lib::store::{RunSummary, RunTrigger, Store, StoredWorkflow};
-use ieum_desktop_lib::supervisor::{AppEvent, Deps, Supervisor, WatchState};
+use ieum_desktop_lib::supervisor::{AppEvent, Deps, GITHUB_POLL, Supervisor, WatchState};
 use ieum_engine::{ExecEvent, RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::KeyError;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn, KeyStore};
 use ieum_local::builder::{Builder, Code, Host, Op, SaveError, TestStatus, TestTrigger};
+use ieum_local::github::watch::CreatedIssues;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -103,6 +104,9 @@ fn env_with_providers(providers: &[&str]) -> Env {
         trash_dir: root.join("trash"),
         ai: Arc::new(ai.with_resolver(Arc::new(creds.clone()))),
         github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| {
             if let Some(f) = hook.lock().unwrap().as_mut() {
                 f(&e);
