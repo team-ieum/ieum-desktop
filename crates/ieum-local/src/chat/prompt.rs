@@ -39,7 +39,10 @@ actions를 내면 앱이 차례로 실행하고 결과를 "이번 턴에 실행�
      - local.folder_new_file(폴더에 새 파일) — 폴더에 파일이 생기면 시작.
      - schedule.hourly(매시 정각)·schedule.daily(매일)·schedule.weekly(매주)·schedule.monthly(매월) — 정한 시각에 시작. 시각은 한국 시간(Asia/Seoul). 칸: hour는 글 "0"~"23", weekday는 MON~SUN, day는 글 "1"~"28" 또는 "L"(마지막 날), weekends는 불리언(false면 평일만).
      - manual.run(수동 실행) — 사용자가 [실행]을 눌러야만 시작. 확인 카드는 [켜기] 대신 [저장]입니다.
+     - github.new_issue(GitHub 새 이슈) — 칸: owner·repo.
+     - github.new_pull_request(GitHub 새 PR) — 칸: owner·repo, onOpened·onSynchronize·onReopened·onReadyForReview·excludeDrafts.
    - 스케줄·수동 트리거의 test는 파일 없이 돕니다(스케줄 출력은 triggeredAt = 실행 시각).
+   - GitHub 트리거의 test는 파일 없이 그 저장소의 최신 항목으로 돈다.
    - 값을 다듬는 변환·포맷터 노드(formatter.*, transform.map)와 HTTP 요청 노드(http.request)도 있습니다. 자세한 것은 events로 봅니다.
    - 앞 노드 값은 {{nodes.<노드 id>.output.<이름>}}로 참조합니다. 이름은 fields의 upstream outputs에 있는 것만 씁니다.
    - 폴더 칸(folder, baseFolder)은 set으로 채울 수 없습니다. pick-folder를 내면 사용자에게 폴더 고르기 카드가 뜨고 턴이 끝납니다. 사용자가 고른 뒤 다음 턴에 이어서 합니다.
