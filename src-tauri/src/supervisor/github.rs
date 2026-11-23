@@ -220,9 +220,12 @@ impl Supervisor {
                         got.insert(key.clone(), Got::Error(msg));
                         continue;
                     }
+                    // 배열이 아니면 기준점을 0으로 잡지 않는다 — 닫힌 PR이 다시 열릴 때 opened로 오판하지 않게.
                     Fetched::Ok(r) if r.status == 200 => {
-                        let first = r.body.as_array().and_then(|a| a.first());
-                        latest = Some(first.and_then(|v| v["number"].as_u64()).unwrap_or(0));
+                        if let Value::Array(a) = &r.body {
+                            latest =
+                                Some(a.first().and_then(|v| v["number"].as_u64()).unwrap_or(0));
+                        }
                     }
                     // 기준점은 다음 확인에서.
                     _ => {}
@@ -243,11 +246,12 @@ impl Supervisor {
             return Err("저장소를 먼저 골라 주세요.".into());
         }
         let (owner, repo) = (owner.to_lowercase(), repo.to_lowercase());
-        let issue = node.event == "github.new_issue";
-        let path = format!(
-            "/repos/{owner}/{repo}/{}",
-            if issue { "issues" } else { "pulls" }
-        );
+        let (issue, segment) = match node.event.as_str() {
+            "github.new_issue" => (true, "issues"),
+            "github.new_pull_request" => (false, "pulls"),
+            e => return Err(format!("GitHub 트리거가 아니에요: {e}")),
+        };
+        let path = format!("/repos/{owner}/{repo}/{segment}");
         let mut token = match self.0.deps.github_watch.token(false).await {
             Ok(t) => t,
             Err(e) if unreachable(&e) => return Err(UNREACHABLE.into()),
@@ -315,7 +319,7 @@ impl Supervisor {
         }
         // 사용자의 다른 gh 작업 몫을 남긴다 — 남은 한도가 10% 아래면 풀릴 때까지 쉰다.
         if let (Some(remaining), Some(limit)) = (r.remaining, r.limit)
-            && remaining * 10 < limit
+            && remaining.saturating_mul(10) < limit
         {
             // 사용자가 직접 누른 샘플은 쉬지 않고 아래에서 상태대로 판정한다 — 쉬는 것은 폴러만.
             if polling {
@@ -412,12 +416,12 @@ impl Supervisor {
         }
     }
 
+    /// 알림은 잠금을 놓은 뒤 — 받는 쪽이 `list_workflows`처럼 `github_errors`를 다시 잡아도 막히지 않게.
     fn github_error(&self, id: &str, msg: &str) {
-        let mut errors = lock(&self.0.github_errors);
-        if errors.get(id).map(String::as_str) != Some(msg) {
+        let old = lock(&self.0.github_errors).insert(id.to_string(), msg.to_string());
+        if old.as_deref() != Some(msg) {
             self.emit_status(id, false, msg.to_string());
         }
-        errors.insert(id.to_string(), msg.to_string());
     }
 
     /// 커밋과 같은 확인을 거친다 — 확인 도중 끄거나 지우거나 멈췄으면 오류를 남기지도 알리지도 않는다.

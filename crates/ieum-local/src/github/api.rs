@@ -150,7 +150,7 @@ impl GithubApi {
             Some(secs) => std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .ok()
-                .map(|d| d.as_secs() as i64 + secs),
+                .map(|d| (d.as_secs() as i64).saturating_add(secs.max(0))),
             None => num(h, "x-ratelimit-reset"),
         };
         let mut buf = Vec::new();

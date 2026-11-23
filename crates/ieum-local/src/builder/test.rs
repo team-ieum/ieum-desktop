@@ -109,7 +109,7 @@ impl Builder {
                 SystemTime::now().into(),
             )),
             "manual.run" => TestTrigger::Output(Map::new()),
-            e if e.starts_with("github.new_") => TestTrigger::Github,
+            e if ieum_engine::GITHUB_TRIGGERS.contains(&e) => TestTrigger::Github,
             _ => {
                 let folder = trigger
                     .config

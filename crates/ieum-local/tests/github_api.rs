@@ -212,3 +212,29 @@ async fn get_if_without_etag_omits_header() {
     assert_eq!(r.remaining, None);
     assert_eq!(r.etag, None);
 }
+
+/// `retry-after`가 음수면 지금으로, 너무 크면 넘치지 않고 끝값으로.
+#[tokio::test]
+async fn get_if_retry_after_clamped() {
+    for (retry, check) in [
+        (
+            "-100",
+            (|r: i64, now: i64| r >= now && r <= now + 5) as fn(i64, i64) -> bool,
+        ),
+        ("9223372036854775807", |r, _| r == i64::MAX),
+    ] {
+        let (l, base) = bind().await;
+        let header = format!("retry-after: {retry}\r\n");
+        serve(l, move |_| resp(429, &header, b""));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let r = GithubApi::with_base(&base)
+            .get_if("t0k", "/x", &[], None)
+            .await
+            .unwrap();
+        let reset = r.reset_at.unwrap();
+        assert!(check(reset, now), "{retry}: {reset}");
+    }
+}

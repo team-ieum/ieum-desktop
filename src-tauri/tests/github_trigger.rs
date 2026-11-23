@@ -784,13 +784,9 @@ async fn github_builder_test_uses_latest_issue() {
     let id = e.add(wf.clone());
     let r = e.sup.run_test(&id, wf, TestTrigger::Github).await.unwrap();
     assert_eq!(r.nodes["t"].output.as_ref().unwrap()["issueNumber"], 9);
-    assert!(
-        e.store
-            .list_runs(Some(&id))
-            .unwrap()
-            .iter()
-            .all(|r| r.trigger == Some(RunTrigger::Test))
-    );
+    let runs = e.store.list_runs(Some(&id)).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].trigger, Some(RunTrigger::Test));
 }
 
 /// 남은 한도가 10% 아래여도 사용자가 직접 누른 샘플은 받은 응답을 쓴다(폴러만 쉰다).
