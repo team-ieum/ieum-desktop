@@ -168,3 +168,47 @@ async fn timeout_is_unreachable() {
         .unwrap();
     assert_eq!(e.code.unwrap(), "GITHUB_UNREACHABLE");
 }
+
+#[tokio::test]
+async fn get_if_sends_etag_and_reads_headers() {
+    let (l, base) = bind().await;
+    let log = serve(l, |r| {
+        assert_eq!(r.header("if-none-match").as_deref(), Some("\"abc\""));
+        resp(
+            304,
+            "etag: \"abc\"\r\nx-ratelimit-remaining: 4999\r\nx-ratelimit-limit: 5000\r\nx-ratelimit-reset: 1800000000\r\n",
+            b"",
+        )
+    });
+    let r = GithubApi::with_base(&base)
+        .get_if("t0k", "/x", &[], Some("\"abc\""))
+        .await
+        .unwrap();
+    assert_eq!(
+        log.lock().unwrap()[0].header("if-none-match").unwrap(),
+        "\"abc\""
+    );
+    assert_eq!(r.status, 304);
+    assert_eq!(r.body, serde_json::Value::Null);
+    assert_eq!(r.etag.as_deref(), Some("\"abc\""));
+    assert_eq!(r.remaining, Some(4999));
+    assert_eq!(r.limit, Some(5000));
+    assert_eq!(r.reset_at, Some(1800000000));
+}
+
+#[tokio::test]
+async fn get_if_without_etag_omits_header() {
+    let (l, base) = bind().await;
+    let log = serve(l, |_| {
+        resp(200, "x-ratelimit-remaining: zz\r\n", b"{\"a\":1}")
+    });
+    let r = GithubApi::with_base(&base)
+        .get_if("t0k", "/x", &[], None)
+        .await
+        .unwrap();
+    assert!(log.lock().unwrap()[0].header("if-none-match").is_none());
+    assert_eq!(r.status, 200);
+    assert_eq!(r.body, json!({"a": 1}));
+    assert_eq!(r.remaining, None);
+    assert_eq!(r.etag, None);
+}

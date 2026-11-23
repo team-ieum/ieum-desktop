@@ -44,6 +44,15 @@ pub struct Resp {
     pub rate_limited: bool,
     /// 요청이 GET(조회)이었다 — 403 문구가 읽기·쓰기로 갈린다.
     pub read: bool,
+    pub etag: Option<String>,
+    /// 한도가 풀리는 유닉스 초 — `retry-after`가 있으면 지금+그 초, 없으면 `x-ratelimit-reset`.
+    pub reset_at: Option<i64>,
+    pub remaining: Option<u64>,
+    pub limit: Option<u64>,
+}
+
+fn num<T: std::str::FromStr>(h: &reqwest::header::HeaderMap, name: &str) -> Option<T> {
+    h.get(name)?.to_str().ok()?.trim().parse().ok()
 }
 
 impl Default for GithubApi {
@@ -80,6 +89,29 @@ impl GithubApi {
         query: &[(&str, String)],
         body: Option<&Value>,
     ) -> Result<Resp, NodeError> {
+        self.send(token, method, path, query, body, None).await
+    }
+
+    /// 조회(GET). `etag`가 있으면 `If-None-Match`로 보내고, 바뀐 게 없으면 304(`body`는 `Null`).
+    pub async fn get_if(
+        &self,
+        token: &str,
+        path: &str,
+        query: &[(&str, String)],
+        etag: Option<&str>,
+    ) -> Result<Resp, NodeError> {
+        self.send(token, Method::GET, path, query, None, etag).await
+    }
+
+    async fn send(
+        &self,
+        token: &str,
+        method: Method,
+        path: &str,
+        query: &[(&str, String)],
+        body: Option<&Value>,
+        etag: Option<&str>,
+    ) -> Result<Resp, NodeError> {
         let read = method == Method::GET;
         let mut url = Url::parse(&format!("{}{path}", self.base)).map_err(|_| unreachable())?;
         if !query.is_empty() {
@@ -98,6 +130,9 @@ impl GithubApi {
             .header(ACCEPT, "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
             .header(USER_AGENT, "ieum-desktop");
+        if let Some(e) = etag {
+            req = req.header("If-None-Match", e);
+        }
         if let Some(b) = body {
             req = req.json(b);
         }
@@ -106,6 +141,18 @@ impl GithubApi {
         let h = res.headers();
         let rate_limited = h.get("retry-after").is_some()
             || h.get("x-ratelimit-remaining").is_some_and(|v| v == "0");
+        let etag = h
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let (remaining, limit) = (num(h, "x-ratelimit-remaining"), num(h, "x-ratelimit-limit"));
+        let reset_at = match num::<i64>(h, "retry-after") {
+            Some(secs) => std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs() as i64 + secs),
+            None => num(h, "x-ratelimit-reset"),
+        };
         let mut buf = Vec::new();
         while let Some(chunk) = res.chunk().await.map_err(|_| unreachable())? {
             if buf.len() + chunk.len() > self.max_bytes {
@@ -119,6 +166,10 @@ impl GithubApi {
             body,
             rate_limited,
             read,
+            etag,
+            reset_at,
+            remaining,
+            limit,
         })
     }
 }
