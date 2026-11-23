@@ -348,3 +348,67 @@ pub fn config_hash(event: &str, config: &Map<String, Value>) -> String {
         .expect("id·event·config만 있는 노드는 항상 읽힌다");
     crate::builder::node_hash(&node)
 }
+
+/// 자기 발화 기억 기간 — 이 앱이 만든 이슈를 새 이슈 트리거가 건너뛰는 시간.
+const OWN_TTL: Duration = Duration::hours(24);
+
+type OwnEntry = (String, u64, DateTime<Utc>);
+
+/// 이 앱의 GitHub 노드가 만든 이슈 번호 기억(24시간). "새 이슈 → 이슈 만들기"가 자기 이슈로 끝없이 돌지 않게 한다.
+pub struct CreatedIssues {
+    path: Option<std::path::PathBuf>,
+    list: std::sync::Mutex<Vec<OwnEntry>>,
+}
+
+fn key(owner: &str, repo: &str) -> String {
+    format!("{}/{}", owner.to_lowercase(), repo.to_lowercase())
+}
+
+impl CreatedIssues {
+    pub fn in_memory() -> Self {
+        CreatedIssues {
+            path: None,
+            list: Default::default(),
+        }
+    }
+
+    /// 없거나 깨진 파일은 빈 목록으로 시작한다.
+    pub fn open(path: std::path::PathBuf) -> Self {
+        let list = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        CreatedIssues {
+            path: Some(path),
+            list: std::sync::Mutex::new(list),
+        }
+    }
+
+    /// 이미 GitHub에 만든 뒤이므로 파일 쓰기가 실패해도 노드를 실패시키지 않고 로그만 남긴다.
+    pub fn record(&self, owner: &str, repo: &str, number: u64, at: DateTime<Utc>) {
+        let mut list = self.list.lock().unwrap_or_else(|e| e.into_inner());
+        list.retain(|(_, _, t)| at - *t < OWN_TTL);
+        list.push((key(owner, repo), number, at));
+        let Some(path) = &self.path else { return };
+        if let Err(e) = write_atomic(path, &*list) {
+            eprintln!("[ieum] 만든 이슈 기억을 저장하지 못했어요: {e}");
+        }
+    }
+
+    pub fn contains(&self, owner: &str, repo: &str, number: u64, now: DateTime<Utc>) -> bool {
+        let k = key(owner, repo);
+        let list = self.list.lock().unwrap_or_else(|e| e.into_inner());
+        list.iter()
+            .any(|(r, n, t)| *r == k && *n == number && now - *t < OWN_TTL)
+    }
+}
+
+/// 임시 파일에 쓰고 rename — 쓰다 죽어도 이전 파일이 남는다.
+fn write_atomic(path: &std::path::Path, value: &impl Serialize) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&tmp, serde_json::to_vec(value)?)?;
+    std::fs::rename(&tmp, path)
+}

@@ -391,3 +391,29 @@ fn config_hash_stable() {
         config_hash("github.new_issue", a.as_object().unwrap())
     );
 }
+
+#[test]
+fn created_issues_case_insensitive() {
+    let c = CreatedIssues::in_memory();
+    c.record("MyOrg", "Repo", 5, now());
+    assert!(c.contains("myorg", "repo", 5, now()));
+    assert!(!c.contains("myorg", "repo", 6, now()));
+}
+
+#[test]
+fn created_issues_expire_after_24h() {
+    let c = CreatedIssues::in_memory();
+    c.record("o", "r", 5, now());
+    assert!(c.contains("o", "r", 5, now() + Duration::hours(23)));
+    assert!(!c.contains("o", "r", 5, now() + Duration::hours(25)));
+}
+
+#[test]
+fn created_issues_survive_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sub").join("created.json");
+    CreatedIssues::open(path.clone()).record("o", "r", 5, now());
+    assert!(CreatedIssues::open(path.clone()).contains("o", "r", 5, now()));
+    std::fs::write(&path, "깨짐").unwrap();
+    assert!(!CreatedIssues::open(path).contains("o", "r", 5, now()));
+}

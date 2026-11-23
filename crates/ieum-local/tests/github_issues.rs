@@ -723,3 +723,30 @@ async fn find_or_create_title_numeric_value_matches() {
     assert_eq!(out["created"], json!(false));
     assert_eq!(log.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn create_issue_records_created_number() {
+    use ieum_local::github::watch::CreatedIssues;
+    let (base, _log) = server(201, json!({"number": 42, "html_url": "u", "title": "T"})).await;
+    let created = Arc::new(CreatedIssues::in_memory());
+    let runner = GithubRunner::new(GithubApi::with_base(&base), Arc::new(FixedToken("t0k")))
+        .with_created(created.clone());
+    let node: Node =
+        serde_json::from_value(json!({"id": "n", "event": "github.create_issue"})).unwrap();
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let cancel = CancellationToken::new();
+    runner
+        .run(NodeCtx {
+            node: &node,
+            config: json!({"owner": "O", "repo": "R", "title": "T"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            outputs: &Default::default(),
+            events: &tx,
+            cancel: &cancel,
+        })
+        .await
+        .unwrap();
+    assert!(created.contains("o", "r", 42, chrono::Utc::now()));
+}

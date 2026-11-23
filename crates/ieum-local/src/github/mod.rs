@@ -42,11 +42,22 @@ pub trait GithubToken: Send + Sync {
 pub struct GithubRunner {
     api: GithubApi,
     token: Arc<dyn GithubToken>,
+    created: Arc<watch::CreatedIssues>,
 }
 
 impl GithubRunner {
     pub fn new(api: GithubApi, token: Arc<dyn GithubToken>) -> Self {
-        GithubRunner { api, token }
+        GithubRunner {
+            api,
+            token,
+            created: Arc::new(watch::CreatedIssues::in_memory()),
+        }
+    }
+
+    /// 만든 이슈를 파일로 기억하는 저장소를 쓴다(새 이슈 트리거와 공유).
+    pub fn with_created(mut self, created: Arc<watch::CreatedIssues>) -> Self {
+        self.created = created;
+        self
     }
 }
 
@@ -56,9 +67,11 @@ impl NodeRunner for GithubRunner {
         let (api, token, c) = (&self.api, self.token.as_ref(), &ctx.config);
         let work = async {
             match ctx.node.event.as_str() {
-                "github.create_issue" => issues::create_issue(api, token, c).await,
+                "github.create_issue" => issues::create_issue(api, token, &self.created, c).await,
                 "github.update_issue" => issues::update_issue(api, token, c).await,
-                "github.find_or_create_issue" => issues::find_or_create_issue(api, token, c).await,
+                "github.find_or_create_issue" => {
+                    issues::find_or_create_issue(api, token, &self.created, c).await
+                }
                 "github.find_issue" => issues::find_issue(api, token, c).await,
                 "github.list_issues" => issues::list_issues(api, token, c).await,
                 "github.add_labels" => issues::add_labels(api, token, c).await,
