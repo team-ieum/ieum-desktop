@@ -891,3 +891,40 @@ async fn github_sample_requires_repo() {
     }
     assert!(e.requests().is_empty());
 }
+
+/// 연결 확인이 잠시 GitHub에 닿지 못하면(`GITHUB_UNREACHABLE`) 연결 해제로 보이지 않는다 — 확인은 조용히
+/// 건너뛰고, 샘플은 "닿지 못했어요"를 보인다.
+#[tokio::test(flavor = "multi_thread")]
+async fn github_token_unreachable_is_not_disconnect() {
+    let env = env().await;
+    env.set_issues(&[(3, mins(3))]);
+    let id = env.add(issue_wf("o", "r"));
+    env.sup.github_tick_for_test().await;
+
+    // 확인 시작 때의 토큰 읽기가 닿지 못함.
+    *env.watch.unreachable.lock().unwrap() = true;
+    env.clear();
+    env.sup.github_tick_for_test().await;
+    assert!(env.requests().is_empty());
+    assert_eq!(env.entry(&id), (WatchState::Watching, None));
+
+    // [지금 실행]의 샘플.
+    let err = env.sup.run_now(&id, None).await.unwrap_err();
+    assert_eq!(err, "GitHub에 닿지 못했어요. 잠시 뒤 다시 해 주세요.");
+
+    // 401 뒤 연결을 다시 확인하는데 닿지 못함 — 이번 확인만 건너뛴다.
+    *env.watch.unreachable.lock().unwrap() = false;
+    env.gh.lock().unwrap().bad_token = Some("t".into());
+    let watch = env.watch.clone();
+    env.gh.lock().unwrap().hook = Some(Box::new(move || {
+        *watch.unreachable.lock().unwrap() = true;
+    }));
+    env.clear();
+    env.sup.github_tick_for_test().await;
+    assert_eq!(*env.watch.calls.lock().unwrap(), [false, true]);
+    assert_eq!(env.entry(&id), (WatchState::Watching, None));
+    let failed = env.events.lock().unwrap().iter().any(
+        |e| matches!(e, AppEvent::WatchStatus { workflow_id, ok: false, .. } if *workflow_id == id),
+    );
+    assert!(!failed, "일시 실패를 오류로 알렸다");
+}

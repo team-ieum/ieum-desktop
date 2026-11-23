@@ -39,12 +39,20 @@ pub struct FakeWatch {
     pub token: Mutex<Option<String>>,
     pub forced: Mutex<Option<String>>,
     pub calls: Mutex<Vec<bool>>,
+    /// 켜면 force와 상관없이 `GITHUB_UNREACHABLE`(잠시 닿지 못함).
+    pub unreachable: Mutex<bool>,
 }
 
 #[async_trait]
 impl WatchToken for FakeWatch {
     async fn token(&self, force: bool) -> Result<Secret, NodeError> {
         self.calls.lock().unwrap().push(force);
+        if *self.unreachable.lock().unwrap() {
+            return Err(NodeError {
+                message: "GitHub에 닿지 못했어요. 잠시 뒤 다시 실행해 주세요.".into(),
+                code: Some("GITHUB_UNREACHABLE".into()),
+            });
+        }
         let t = if force { &self.forced } else { &self.token };
         t.lock()
             .unwrap()
@@ -60,6 +68,7 @@ pub fn fake_watch(token: &str) -> Arc<FakeWatch> {
         token: Mutex::new(Some(token.into())),
         forced: Mutex::new(Some(token.into())),
         calls: Mutex::default(),
+        unreachable: Mutex::default(),
     })
 }
 
@@ -69,6 +78,7 @@ pub fn no_watch() -> Arc<dyn WatchToken> {
         token: Mutex::default(),
         forced: Mutex::default(),
         calls: Mutex::default(),
+        unreachable: Mutex::default(),
     })
 }
 

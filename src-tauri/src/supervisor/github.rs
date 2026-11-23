@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use ieum_engine::Node;
 use ieum_engine::schedule::SCHEDULE_ZONE;
+use ieum_engine::{Node, NodeError};
 use ieum_local::github::watch::{
     PAGE, PrFilter, WatchEntry, WatchKind, baseline_issues, baseline_prs, diff_issues, diff_prs,
     pick_issue_sample, pick_pr_sample,
@@ -20,6 +20,11 @@ const NEED_CONNECT: &str = "GitHub 연결이 필요해요.";
 
 /// 요청이 GitHub에 닿지 못했을 때(연결 실패·시간 초과) 샘플 요청에 보일 문구.
 const UNREACHABLE: &str = "GitHub에 닿지 못했어요. 잠시 뒤 다시 해 주세요.";
+
+/// 연결은 그대로인데 gh·GitHub에 잠시 닿지 못한 토큰 오류.
+fn unreachable(e: &NodeError) -> bool {
+    e.code.as_deref() == Some("GITHUB_UNREACHABLE")
+}
 
 /// (소문자 owner, 소문자 repo, 종류) — 같은 저장소를 보는 워크플로우가 여럿이어도 요청은 하나.
 pub(super) type RepoKey = (String, String, WatchKind);
@@ -136,8 +141,11 @@ impl Supervisor {
         if targets.is_empty() {
             return;
         }
-        let Ok(mut token) = self.0.deps.github_watch.token(false).await else {
-            return self.github_fail_all(&targets, NEED_CONNECT);
+        let mut token = match self.0.deps.github_watch.token(false).await {
+            Ok(t) => t,
+            // 잠시 닿지 못함(잠자기 해제 직후 등) — 연결 해제가 아니니 오류 없이 다음 확인에서 다시.
+            Err(e) if unreachable(&e) => return,
+            Err(_) => return self.github_fail_all(&targets, NEED_CONNECT),
         };
         let state = self.github_state();
         let needs_baseline = |k: &RepoKey| {
@@ -240,8 +248,11 @@ impl Supervisor {
             "/repos/{owner}/{repo}/{}",
             if issue { "issues" } else { "pulls" }
         );
-        let mut token =
-            (self.0.deps.github_watch.token(false).await).map_err(|_| NEED_CONNECT.to_string())?;
+        let mut token = match self.0.deps.github_watch.token(false).await {
+            Ok(t) => t,
+            Err(e) if unreachable(&e) => return Err(UNREACHABLE.into()),
+            Err(_) => return Err(NEED_CONNECT.into()),
+        };
         let query = list_query("all", "created", 20);
         let r = match self
             .github_get(&mut token, &mut false, &path, &query, None, false)
@@ -285,6 +296,7 @@ impl Supervisor {
             }
             match self.0.deps.github_watch.token(true).await {
                 Ok(t) => *token = t,
+                Err(e) if unreachable(&e) => return Fetched::Skip,
                 Err(_) => return Fetched::Stop(NEED_CONNECT.into()),
             }
         };
