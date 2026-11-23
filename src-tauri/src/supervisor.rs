@@ -257,8 +257,7 @@ fn enabled_github(wf: &StoredWorkflow) -> Option<(WatchKind, String, String)> {
     let TriggerKind::Github { event, owner, repo } = trigger_kind(wf) else {
         return None;
     };
-    let usable = |s: &str| !s.contains("{{") && is_path_name(&Value::from(s));
-    if !wf.enabled || !usable(&owner) || !usable(&repo) {
+    if !wf.enabled || github_repo_error(&owner, &repo).is_some() {
         return None;
     }
     let kind = if event == "github.new_issue" {
@@ -267,6 +266,18 @@ fn enabled_github(wf: &StoredWorkflow) -> Option<(WatchKind, String, String)> {
         WatchKind::Pr
     };
     Some((kind, owner, repo))
+}
+
+/// owner·repo를 요청 경로에 못 쓰면 목록 카드에 보일 문구 — 비었거나 참조식이면 고르기 안내, 아니면 형식 안내.
+fn github_repo_error(owner: &str, repo: &str) -> Option<&'static str> {
+    let unpicked = |s: &str| s.is_empty() || s.contains("{{");
+    if unpicked(owner) || unpicked(repo) {
+        Some("저장소를 먼저 골라 주세요.")
+    } else if !is_path_name(&Value::from(owner)) || !is_path_name(&Value::from(repo)) {
+        Some("소유자·저장소 이름이 올바르지 않아요.")
+    } else {
+        None
+    }
 }
 
 /// 켜진 GitHub 트리거의 지금 `config_hash`.
@@ -630,11 +641,16 @@ impl Supervisor {
                     Some(Ok(next)) => (watch, next_run) = (WatchState::Watching, Some(next)),
                     Some(Err(e)) => (watch, watch_message) = (WatchState::WatchError, Some(e)),
                 }
-                if enabled_github(&workflow).is_some() {
-                    (watch, watch_message) = match github_errors.get(&workflow.id) {
-                        Some(e) => (WatchState::WatchError, Some(e.clone())),
-                        None => (WatchState::Watching, None),
-                    };
+                if let TriggerKind::Github { owner, repo, .. } = trigger_kind(&workflow)
+                    && workflow.enabled
+                {
+                    // 저장소를 못 쓰면 확인을 건너뛰므로 "켜짐"으로 보이지 않게 여기서 오류로.
+                    let repo_error = github_repo_error(&owner, &repo).map(String::from);
+                    (watch, watch_message) =
+                        match repo_error.or_else(|| github_errors.get(&workflow.id).cloned()) {
+                            Some(e) => (WatchState::WatchError, Some(e)),
+                            None => (WatchState::Watching, None),
+                        };
                 }
                 WorkflowEntry {
                     workflow,

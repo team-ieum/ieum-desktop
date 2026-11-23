@@ -928,3 +928,38 @@ async fn github_token_unreachable_is_not_disconnect() {
     );
     assert!(!failed, "일시 실패를 오류로 알렸다");
 }
+
+/// 켜진 GitHub 트리거의 저장소를 못 쓰면 "켜짐"이 아니라 오류로 보인다(확인은 건너뛴다).
+#[tokio::test(flavor = "multi_thread")]
+async fn github_unusable_repo_shows_watch_error() {
+    let env = env().await;
+    let pick = Some("저장소를 먼저 골라 주세요.".to_string());
+    let bad = Some("소유자·저장소 이름이 올바르지 않아요.".to_string());
+    for (owner, repo, msg) in [
+        ("", "r", &pick),
+        ("o", "", &pick),
+        ("{{nodes.x.output.a}}", "r", &pick),
+        ("o", "org/repo", &bad),
+        ("o w", "r", &bad),
+    ] {
+        let id = env.add(issue_wf(owner, repo));
+        assert_eq!(
+            env.entry(&id),
+            (WatchState::WatchError, msg.clone()),
+            "{owner}/{repo}"
+        );
+        let id = env.add(pr_wf(json!({"owner": owner, "repo": repo})));
+        assert_eq!(
+            env.entry(&id).0,
+            WatchState::WatchError,
+            "PR {owner}/{repo}"
+        );
+    }
+    // 꺼져 있으면 오류가 아니다.
+    let mut wf = env.store.get_workflow(&env.add(issue_wf("", ""))).unwrap();
+    wf.enabled = false;
+    let id = env.store.save_workflow(wf).unwrap().id;
+    assert_eq!(env.entry(&id), (WatchState::Off, None));
+    env.sup.github_tick_for_test().await;
+    assert!(env.requests().is_empty());
+}
