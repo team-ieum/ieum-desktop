@@ -806,6 +806,20 @@ async fn github_sample_ignores_reserve() {
     assert_eq!(r.output.as_ref().unwrap()["issueNumber"], 9);
 }
 
+/// 한도 예방 구간이어도 샘플의 404는 "없음"이 아니라 오류 문구로 보인다.
+#[tokio::test]
+async fn github_sample_reserve_keeps_error_status() {
+    let e = env().await;
+    e.gh.lock().unwrap().status = Some((
+        404,
+        "x-ratelimit-remaining: 400\r\nx-ratelimit-limit: 5000\r\n".into(),
+    ));
+    let wf = issue_wf("o", "r");
+    let id = e.add(wf.clone());
+    let err = e.sup.test_node(&id, wf, "t", None).await.unwrap_err();
+    assert_eq!(err, "저장소를 찾을 수 없어요.");
+}
+
 /// 저장소가 비면 노드 검증이 먼저 막는다(`Invalid`) — 요청도 가지 않는다.
 #[tokio::test]
 async fn github_node_test_empty_repo_is_invalid() {

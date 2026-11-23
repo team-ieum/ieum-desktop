@@ -302,14 +302,13 @@ impl Supervisor {
             && remaining * 10 < limit
         {
             *lock(&self.0.github_pause) = Some(until);
-            // 사용자가 직접 누른 샘플은 이미 받은 응답을 버리지 않는다 — 쉬는 것은 폴러만.
-            if !polling {
-                return Fetched::Ok(r);
+            // 사용자가 직접 누른 샘플은 쉬지 않고 아래에서 상태대로 판정한다 — 쉬는 것은 폴러만.
+            if polling {
+                return Fetched::Stop(format!(
+                    "GitHub 요청 여유가 적어 {}에 다시 확인해요",
+                    hhmm(until)
+                ));
             }
-            return Fetched::Stop(format!(
-                "GitHub 요청 여유가 적어 {}에 다시 확인해요",
-                hhmm(until)
-            ));
         }
         match r.status {
             200 | 304 => Fetched::Ok(r),
