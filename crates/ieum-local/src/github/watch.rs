@@ -139,9 +139,12 @@ fn max_number(list: &[Value]) -> u64 {
     list.iter().map(number).max().unwrap_or(0)
 }
 
-/// 시각순(오래된 것부터)으로 정렬한 실행 목록.
+/// 시각순(오래된 것부터)으로 정렬한 실행 목록. GitHub 시각은 초 단위라 같은 초면 번호순.
 fn oldest_first(mut runs: Vec<(DateTime<Utc>, Map<String, Value>)>) -> Vec<Map<String, Value>> {
-    runs.sort_by_key(|(t, _)| *t);
+    runs.sort_by_key(|(t, m)| {
+        let n = m.get("issueNumber").or_else(|| m.get("prNumber"));
+        (*t, n.and_then(Value::as_u64))
+    });
     runs.into_iter().map(|(_, m)| m).collect()
 }
 
@@ -173,10 +176,15 @@ pub fn pr_output(v: &Value, action: &str) -> Map<String, Value> {
     let repo = &v["base"]["repo"];
     let owner = repo["owner"]["login"].as_str().unwrap_or("");
     let name = repo["name"].as_str().unwrap_or("");
+    let full = if owner.is_empty() && name.is_empty() {
+        String::new()
+    } else {
+        format!("{owner}/{name}")
+    };
     let out = json!({
         "owner": owner,
         "repoName": name,
-        "repo": format!("{owner}/{name}"),
+        "repo": full,
         "prNumber": v["number"],
         "title": v["title"],
         "body": text(&v["body"]),

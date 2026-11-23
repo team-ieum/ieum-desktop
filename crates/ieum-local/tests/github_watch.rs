@@ -138,6 +138,23 @@ fn issue_runs_oldest_first() {
     assert_eq!(nums, [json!(8), json!(9)]);
 }
 
+/// GitHub 시각은 초 단위 — 같은 초에 열린 항목은 번호순으로 돈다(응답은 최신 먼저).
+#[test]
+fn same_second_runs_lower_number_first() {
+    let t = now() - Duration::minutes(1);
+    let seen = Seen::Issue { issue_max: 7 };
+    let list = [issue(10, t), issue(9, t), issue(8, t)];
+    let (runs, _) = diff_issues(&seen, &list, now(), &|_| false);
+    let nums: Vec<_> = runs.iter().map(|r| r["issueNumber"].clone()).collect();
+    assert_eq!(nums, [json!(8), json!(9), json!(10)]);
+
+    let seen = pr_seen(7, &[], true);
+    let list = [pr(10, "a", false, t, t), pr(9, "b", false, t, t)];
+    let (runs, _) = diff_prs(&seen, &list, &all_on(), now() - Duration::minutes(2), now());
+    let nums: Vec<_> = runs.iter().map(|r| r["prNumber"].clone()).collect();
+    assert_eq!(nums, [json!(9), json!(10)]);
+}
+
 #[test]
 fn issue_output_shape() {
     let mut v = issue(8, now());
@@ -375,6 +392,14 @@ fn pr_output_shape() {
     assert_eq!(out["headBranch"], "feat");
     assert_eq!(out["headSha"], "abc");
     assert_eq!(out["createdAt"], "2026-11-23T12:00:00Z");
+}
+
+/// `base.repo`가 없으면 `repo`는 "/"가 아니라 빈 글.
+#[test]
+fn pr_output_without_base_repo() {
+    let mut v = pr(11, "abc", false, now(), now());
+    v["base"] = json!({"ref": "main"});
+    assert_eq!(pr_output(&v, "opened")["repo"], "");
 }
 
 #[test]
