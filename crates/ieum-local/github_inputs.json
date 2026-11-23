@@ -19,5 +19,12 @@
   "github.find_or_create_pull_request": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "head", "required": true}, {"key": "base", "required": true}, {"key": "title", "required": true}, {"key": "body", "default": ""}, {"key": "draft", "type": "boolean", "default": false}, {"key": "maintainer_can_modify", "type": "boolean", "default": true}],
   "github.get_pr_files": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "pull_number", "required": true}, {"key": "include_paths", "default": ""}, {"key": "exclude_paths", "default": "*.lock, package-lock.json, yarn.lock, pnpm-lock.yaml, dist/**, build/**, *.min.js, *.map"}, {"key": "max_files", "type": "integer", "default": 50}, {"key": "max_diff_chars", "type": "integer", "default": 60000}],
   "github.get_pr_reviews": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "pull_number", "required": true}, {"key": "include_comments", "type": "boolean", "default": true}, {"key": "states", "default": ""}, {"key": "author_type", "default": "all"}],
-  "github.submit_pr_review": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "pull_number", "required": true}, {"key": "author", "desktop": {"default": "me", "choices": [{"id": "me", "name": "내 GitHub 계정"}]}}, {"key": "event", "default": "COMMENT"}, {"key": "body", "default": ""}, {"key": "comments", "default": ""}, {"key": "commit_id", "default": ""}]
+  "github.submit_pr_review": [{"key": "owner", "required": true}, {"key": "repo", "required": true}, {"key": "pull_number", "required": true}, {"key": "author", "desktop": {"default": "me", "choices": [{"id": "me", "name": "내 GitHub 계정"}]}}, {"key": "event", "default": "COMMENT"}, {"key": "body", "default": ""}, {"key": "comments", "default": ""}, {"key": "commit_id", "default": ""}],
+  "github.new_issue": [{"key": "owner", "required": true, "ref": false, "title": "소유자", "description": "저장소를 가진 계정 또는 조직", "optionsSource": "github.owners"}, {"key": "repo", "required": true, "ref": false, "title": "저장소", "description": "새 이슈를 지켜볼 저장소", "optionsSource": "github.repos", "optionsInputs": ["owner"]}],
+  "github.new_pull_request": [{"key": "owner", "required": true, "ref": false, "title": "소유자", "description": "저장소를 가진 계정 또는 조직", "optionsSource": "github.owners"}, {"key": "repo", "required": true, "ref": false, "title": "저장소", "description": "새 PR을 지켜볼 저장소", "optionsSource": "github.repos", "optionsInputs": ["owner"]},
+  {"key": "onOpened"},
+  {"key": "onSynchronize"},
+  {"key": "onReopened"},
+  {"key": "onReadyForReview"},
+  {"key": "excludeDrafts"}]
 }

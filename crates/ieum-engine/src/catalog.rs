@@ -29,6 +29,9 @@ pub const GITHUB_EVENTS: [&str; 21] = [
     "github.submit_pr_review",
 ];
 
+/// 데스크톱이 직접 확인하는(폴링) GitHub 트리거. 칸은 소유자·저장소로 바꿔 싣는다.
+pub const GITHUB_TRIGGERS: [&str; 2] = ["github.new_issue", "github.new_pull_request"];
+
 const GITHUB_INPUTS: &str = include_str!("../../ieum-local/github_inputs.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,7 +132,7 @@ struct RawEvent {
     #[serde(default)]
     outputs_from: Option<String>,
     #[serde(default)]
-    input_fields: Vec<InputField>,
+    input_fields: Vec<Value>,
     /// 카탈로그의 칸 설명(제목·선택지 등). 필수·기본값은 없어 데스크톱 표와 합친다.
     #[serde(default)]
     fields: Option<Map<String, Value>>,
@@ -316,6 +319,7 @@ impl Catalog {
             "get_pr_reviews",
             "submit_pr_review"
         );
+        github!("new_issue", "new_pull_request");
         Self::parse(sources, &github_table(GITHUB_INPUTS)?)
     }
 
@@ -354,10 +358,25 @@ impl Catalog {
                     .get_or_insert_with(BTreeSet::new)
                     .insert("output".to_string());
             }
-            let input_fields = if raw.input_fields.is_empty() {
-                merge_fields(path, inputs.get(event), raw.fields.as_ref())?
+            // 표에 항목이 있으면 표가 이긴다 — 트리거의 `inputFields`는 칸 정보 출처로만 쓴다.
+            let input_fields = if let Some(rows) = inputs.get(event) {
+                let from_input: Map<String, Value> = raw
+                    .input_fields
+                    .iter()
+                    .filter_map(|f| Some((f.get("key")?.as_str()?.to_string(), f.clone())))
+                    .collect();
+                let fields = raw.fields.as_ref().unwrap_or(&from_input);
+                merge_fields(path, Some(rows), Some(fields))?
             } else {
                 raw.input_fields
+                    .into_iter()
+                    .map(|f| {
+                        serde_json::from_value(f).map_err(|source| CatalogError::Json {
+                            path: path.clone(),
+                            source,
+                        })
+                    })
+                    .collect::<Result<_, _>>()?
             };
             events.insert(
                 event.clone(),
@@ -403,7 +422,7 @@ impl Catalog {
                 &mut files,
             )?;
         }
-        for event in GITHUB_EVENTS {
+        for event in GITHUB_EVENTS.into_iter().chain(GITHUB_TRIGGERS) {
             let name = event.trim_start_matches("github.");
             files.push((
                 event.to_string(),

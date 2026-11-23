@@ -63,6 +63,18 @@ test("palette_groups_formatters_by_kind", () => {
   expect(titles.slice(-6)).toEqual(["변환", "글", "숫자", "날짜", "목록", "HTTP"]);
 });
 
+test("palette_puts_github_triggers_only_in_trigger_group", () => {
+  render(<Palette onAdd={() => {}} />);
+  const has = (title: string) => {
+    fireEvent.click(toggle(title));
+    const names = within(screen.getByRole("region", { name: new RegExp(`^${title}`) })).getAllByRole("button");
+    fireEvent.click(toggle(title));
+    return names.map((b) => b.textContent);
+  };
+  expect(has("시작 조건").some((n) => n?.includes("GitHub"))).toBe(true);
+  expect(has("GitHub").some((n) => n?.includes("새 GitHub"))).toBe(false);
+});
+
 test("palette_keeps_open_groups_after_remount", () => {
   const { unmount } = render(<Palette onAdd={() => {}} />);
   fireEvent.click(toggle("날짜"));

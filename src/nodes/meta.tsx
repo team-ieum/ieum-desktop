@@ -54,7 +54,7 @@ export function nodeMeta(event: string, type: string | undefined): NodeMeta {
       label: t(`editor.kind.${k}`),
       color,
       tint,
-      icon: isLocal(event) ? <NodeIcon event={event} size={20} /> : <Icon size={20} aria-hidden="true" />,
+      icon: isLocal(event) || event.startsWith("github.") ? <NodeIcon event={event} size={20} /> : <Icon size={20} aria-hidden="true" />,
     };
   }
   if (isLocal(event))

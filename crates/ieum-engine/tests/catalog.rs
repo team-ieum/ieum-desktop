@@ -1,14 +1,14 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use ieum_engine::{Catalog, CatalogError, GITHUB_EVENTS, NodeType, Workflow};
+use ieum_engine::{Catalog, CatalogError, GITHUB_EVENTS, GITHUB_TRIGGERS, NodeType, Workflow};
 use serde_json::{Value, json};
 
 #[test]
 fn stage1_catalog_has_thirty_events() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = Catalog::stage1(&root).unwrap();
-    assert_eq!(catalog.events().len(), 57);
+    assert_eq!(catalog.events().len(), 59);
     for event in [
         "branch.if",
         "local.folder_new_file",
@@ -50,8 +50,9 @@ fn embedded_catalog_matches_disk() {
         }
     }
     events.extend(GITHUB_EVENTS.map(String::from));
-    assert_eq!(events.len(), 57);
-    assert_eq!(disk.events().len(), 57);
+    events.extend(GITHUB_TRIGGERS.map(String::from));
+    assert_eq!(events.len(), 59);
+    assert_eq!(disk.events().len(), 59);
     for event in &events {
         let (d, e) = (disk.get(event).unwrap(), embedded.get(event));
         let e = e.unwrap_or_else(|| panic!("{event} 내장 안 됨"));
@@ -62,7 +63,7 @@ fn embedded_catalog_matches_disk() {
 #[test]
 fn embedded_has_builtin_24() {
     let c = Catalog::embedded().unwrap();
-    assert_eq!(c.events().len(), 57);
+    assert_eq!(c.events().len(), 59);
     assert_eq!(
         c.get("transform.map").unwrap().node_type,
         NodeType::Transform
@@ -195,10 +196,12 @@ fn workflow_roundtrip_keeps_unknown_keys() {
 fn events_listed_trigger_first_with_titles() {
     let c = Catalog::embedded().unwrap();
     let ids: Vec<&str> = c.events().iter().map(|e| e.event.as_str()).collect();
-    assert_eq!(ids.len(), 57);
+    assert_eq!(ids.len(), 59);
     assert_eq!(
-        ids[..7],
+        ids[..9],
         [
+            "github.new_issue",
+            "github.new_pull_request",
             "local.folder_new_file",
             "manual.run",
             "schedule.daily",
@@ -208,9 +211,9 @@ fn events_listed_trigger_first_with_titles() {
             "schedule.weekly",
         ]
     );
-    assert!(ids[7..].is_sorted(), "{ids:?}");
+    assert!(ids[9..].is_sorted(), "{ids:?}");
     assert_eq!(
-        ids[7..14],
+        ids[9..16],
         [
             "branch.if",
             "formatter.date_add",
@@ -222,7 +225,7 @@ fn events_listed_trigger_first_with_titles() {
         ]
     );
     assert_eq!(
-        ids[50..],
+        ids[52..],
         [
             "github.update_pull_request",
             "http.request",
@@ -233,7 +236,10 @@ fn events_listed_trigger_first_with_titles() {
             "transform.map",
         ]
     );
-    assert_eq!(c.events()[0].title, "폴더에 새 파일");
+    assert_eq!(
+        c.get("local.folder_new_file").unwrap().title,
+        "폴더에 새 파일"
+    );
     assert_eq!(
         c.get("local.file_trash").unwrap().description,
         "파일을 휴지통으로 옮겨요. 영구 삭제하지 않아요."
@@ -311,25 +317,73 @@ fn github_table_keys_match_catalog_fields() {
         &std::fs::read_to_string(root.join("crates/ieum-local/github_inputs.json")).unwrap(),
     )
     .unwrap();
-    assert_eq!(table.keys().collect::<Vec<_>>().len(), 21);
+    assert_eq!(table.keys().collect::<Vec<_>>().len(), 23);
     for (event, rows) in &table {
         let file = root.join(format!(
             "catalog/events/github/{}.json",
             event.trim_start_matches("github.")
         ));
         let raw: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
-        let catalog: BTreeSet<&str> = raw["fields"]
-            .as_object()
-            .unwrap()
-            .keys()
-            .map(String::as_str)
-            .collect();
+        // 트리거는 `fields` 대신 `inputFields`(배열)를 쓰고, owner·repo는 데스크톱이 더한 칸이다.
+        let mut catalog: BTreeSet<&str> = match raw.get("fields") {
+            Some(f) => f.as_object().unwrap().keys().map(String::as_str).collect(),
+            None => raw["inputFields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["key"].as_str().unwrap())
+                .collect(),
+        };
         let mine: BTreeSet<&str> = rows
             .as_array()
             .unwrap()
             .iter()
             .map(|r| r["key"].as_str().unwrap())
             .collect();
-        assert_eq!(mine, catalog, "{event}");
+        if raw.get("fields").is_none() {
+            catalog.extend(["owner", "repo"]);
+        }
+        assert!(mine.is_subset(&catalog), "{event}");
+        if raw.get("fields").is_some() {
+            assert_eq!(mine, catalog, "{event}");
+        }
+    }
+}
+
+#[test]
+fn github_triggers_use_owner_repo_fields() {
+    let c = Catalog::embedded().unwrap();
+    let keys = |e: &str| -> Vec<String> {
+        c.get(e)
+            .unwrap()
+            .input_fields
+            .iter()
+            .map(|f| f.key.clone())
+            .collect()
+    };
+    for e in GITHUB_TRIGGERS {
+        assert_eq!(c.get(e).unwrap().node_type, NodeType::Trigger, "{e}");
+        assert!(!GITHUB_EVENTS.contains(&e), "{e}");
+    }
+    let issue = &c.get("github.new_issue").unwrap().input_fields;
+    assert_eq!(keys("github.new_issue"), ["owner", "repo"]);
+    assert!(issue.iter().all(|f| f.required));
+    assert_eq!(issue[0].title.as_deref(), Some("소유자"));
+    assert_eq!(issue[1].title.as_deref(), Some("저장소"));
+    assert_eq!(
+        keys("github.new_pull_request"),
+        [
+            "owner",
+            "repo",
+            "onOpened",
+            "onSynchronize",
+            "onReopened",
+            "onReadyForReview",
+            "excludeDrafts"
+        ]
+    );
+    for f in &c.get("github.new_pull_request").unwrap().input_fields[2..] {
+        assert_eq!(f.kind.as_deref(), Some("boolean"), "{}", f.key);
+        assert_eq!(f.default, Some(json!(true)), "{}", f.key);
     }
 }

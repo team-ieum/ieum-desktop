@@ -1,9 +1,9 @@
 import { expect, test } from "vitest";
 import type { WfNode } from "../api";
-import { DEFS, mergeGithubFields, newBranchKey, newNode, nextPosition, outputKeys } from "./defs";
+import { DEFS, PALETTE, mergeGithubFields, newBranchKey, newNode, nextPosition, outputKeys } from "./defs";
 
 test("defs_has_57_and_transform_map_outputs_follow_mappings", () => {
-  expect(Object.keys(DEFS).length).toBe(57);
+  expect(Object.keys(DEFS).length).toBe(59);
   expect(DEFS["github.submit_pr_review"].inputFields.find((f) => f.key === "author")?.choices?.map((c) => c.id)).toEqual(["me"]);
   expect(DEFS["github.get_pr_files"].inputFields.find((f) => f.key === "max_files")?.type).toBe("integer");
   const map = (config: Record<string, unknown>): WfNode => ({ id: "t", event: "transform.map", type: "TRANSFORM", config });
@@ -52,4 +52,19 @@ test("merge_github_fields_desktop_last", () => {
   expect(out[0].default).toBe("me");
   expect(out[0].choices?.length).toBe(1);
   expect("desktop" in out[0]).toBe(false);
+});
+
+test("github_triggers_use_owner_repo_fields", () => {
+  for (const e of ["github.new_issue", "github.new_pull_request"]) {
+    expect(DEFS[e].node_type).toBe("TRIGGER");
+    expect(PALETTE).toContain(e);
+  }
+  const f = DEFS["github.new_issue"].inputFields;
+  expect(f.map((x) => x.key)).toEqual(["owner", "repo"]);
+  expect(f[0].optionsSource).toBe("github.owners");
+  expect(f[1].optionsSource).toBe("github.repos");
+  expect(f[1].optionsInputs).toEqual(["owner"]);
+  expect(DEFS["github.new_pull_request"].inputFields.map((x) => x.key)).toEqual([
+    "owner", "repo", "onOpened", "onSynchronize", "onReopened", "onReadyForReview", "excludeDrafts",
+  ]);
 });
