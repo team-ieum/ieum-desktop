@@ -780,6 +780,15 @@ test("notify_toggles_save_settings", async () => {
   expect(set).toHaveBeenCalledWith(expect.objectContaining({ notifyWatchEnd: false, notifyManualStart: true }));
 });
 
+test("experiment_toggles_save_settings", async () => {
+  const set = vi.spyOn(api, "setSettings").mockResolvedValue();
+  await renderShell("general");
+  await act(async () => fireEvent.click(screen.getByRole("switch", { name: "채팅 설계서(A2UI)" })));
+  expect(set).toHaveBeenCalledWith(expect.objectContaining({ chatBlueprint: true }));
+  await act(async () => fireEvent.click(screen.getByRole("switch", { name: "실측 기록 남기기" })));
+  expect(set).toHaveBeenCalledWith(expect.objectContaining({ chatMetrics: true }));
+});
+
 test("autostart_toggle_lives_only_here", async () => {
   await renderShell("general");
   const general = document.getElementById("settings-general")!;
