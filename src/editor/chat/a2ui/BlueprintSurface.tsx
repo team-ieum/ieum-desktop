@@ -1,7 +1,7 @@
 import { A2uiSurface, createComponentImplementation, type ReactCatalogComponent } from "@a2ui/react";
-import { Catalog, MessageProcessor } from "@a2ui/web_core";
+import { Catalog, MessageProcessor, type SurfaceModel } from "@a2ui/web_core";
 import { CommonSchemas } from "@a2ui/web_core/v1_0";
-import { useEffect, useMemo } from "react";
+import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import type { Blueprint } from "../../../api";
 import { BlueprintView, ChipSelectView } from "./views";
@@ -55,25 +55,28 @@ const CATALOG = new Catalog<ReactCatalogComponent>(CATALOG_ID, "1.0", [Blueprint
 
 /** 설계서 카드 — A2UI v1.0 렌더러는 이 파일에만 들인다. 버전·상태가 바뀌면 표면을 새로 만든다. */
 export default function BlueprintSurface({ blueprint, onData }: BlueprintSurfaceProps) {
-  const { version, status, components, dataModel } = blueprint;
-  const processor = useMemo(() => {
-    void version;
-    void status;
+  const { version, status } = blueprint;
+  const [surface, setSurface] = useState<SurfaceModel<ReactCatalogComponent>>();
+  const latest = useRef(blueprint);
+  latest.current = blueprint;
+  const onDataRef = useRef(onData);
+  onDataRef.current = onData;
+  // 만들기·구독·dispose를 한 effect 수명으로 묶는다 — StrictMode의 cleanup→재실행에도 짝이 맞는다.
+  useEffect(() => {
+    const { components, dataModel } = latest.current;
     const p = new MessageProcessor<ReactCatalogComponent>([CATALOG]);
     p.processMessagesWithErrors([
       { version: "1.0", createSurface: { surfaceId: SURFACE_ID, catalogId: CATALOG_ID, components, dataModel } },
     ]);
-    return p;
-    // 같은 버전·상태에서는 부모가 새 객체를 줘도 다시 만들지 않는다.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const s = p.getSurface(SURFACE_ID);
+    // DataModel이 제자리에서 바뀌므로 복사본을 넘긴다.
+    const sub = s?.dataModel.subscribe("/", () => onDataRef.current(structuredClone(s.dataModel.get("/")) as Record<string, unknown>));
+    setSurface(s);
+    return () => {
+      sub?.unsubscribe();
+      p.dispose();
+      setSurface(undefined);
+    };
   }, [version, status]);
-  useEffect(() => () => processor.dispose(), [processor]);
-  useEffect(() => {
-    const dm = processor.getSurface(SURFACE_ID)?.dataModel;
-    if (!dm) return;
-    const sub = dm.subscribe("/", () => onData(dm.get("/") as Record<string, unknown>));
-    return () => sub.unsubscribe();
-  }, [processor, onData]);
-  const surface = processor.getSurface(SURFACE_ID);
   return surface ? <A2uiSurface surface={surface} /> : <></>;
 }
