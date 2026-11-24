@@ -53,6 +53,8 @@ export function localCard(w: WorkflowEntry): CardData {
   const nodes = w.workflow.nodes;
   const watch = nodes.find((n) => n.event === FOLDER_TRIGGER);
   const schedule = nodes.find((n) => n.event.startsWith("schedule."));
+  const github = nodes.find((n) => n.event.startsWith("github.new_"));
+  const repo = [github?.config.owner, github?.config.repo].every((v) => typeof v === "string" && v) ? `${github?.config.owner}/${github?.config.repo}` : undefined;
   // 서비스 = 노드 event 앱(local.ai만 AI로 따로). 분기 같은 흐름 노드는 서비스가 아니다.
   const services = [...new Set(nodes.map((n) => (n.event === "local.ai" ? "ai" : n.event.split(".")[0])))].filter((s) => s === "local" || s === "ai");
   return {
@@ -62,10 +64,12 @@ export function localCard(w: WorkflowEntry): CardData {
     status: localOn(w) ? (w.watch === "watch_error" ? "error" : "active") : "paused",
     services,
     nodeCount: nodes.length,
-    trigger: watch ? "watch" : schedule ? "schedule" : "manual",
+    trigger: watch ? "watch" : schedule ? "schedule" : github ? "event" : "manual",
     triggerDetail: schedule
       ? scheduleSummary(schedule)
-      : typeof watch?.config.folder === "string" && watch.config.folder
+      : github
+        ? repo
+        : typeof watch?.config.folder === "string" && watch.config.folder
         ? watch.config.folder
         : undefined,
     nextRun: w.nextRun ? nextLabel(w.nextRun) : undefined,

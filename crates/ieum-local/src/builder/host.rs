@@ -41,6 +41,8 @@ pub enum TestTrigger {
     File(PathBuf),
     /// 스케줄·수동 — 트리거 출력 그대로.
     Output(serde_json::Map<String, serde_json::Value>),
+    /// GitHub 트리거 — 출력은 감독이 그 저장소의 최신 실제 항목에서 읽는다.
+    Github,
 }
 
 #[derive(Debug, Clone)]

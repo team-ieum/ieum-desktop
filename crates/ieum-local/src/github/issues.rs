@@ -10,6 +10,7 @@ use super::api::{GithubApi, input_error};
 use super::input::{
     csv, dropped, is_login, is_path_name, issue_fields, issue_no, same_title, text, to_int,
 };
+use super::watch::CreatedIssues;
 
 const MAX_COMMENT_BODY: usize = 65536;
 const SEARCH_BY: [&str; 6] = ["number", "label", "assignee", "author", "title", "body"];
@@ -49,6 +50,7 @@ pub(super) fn object(v: Value) -> Map<String, Value> {
 async fn post_issue(
     api: &GithubApi,
     token: &dyn GithubToken,
+    created: &CreatedIssues,
     c: &Map<String, Value>,
     repo: &str,
     fields: &Map<String, Value>,
@@ -59,25 +61,33 @@ async fn post_issue(
     }
     payload.extend(fields.clone());
     let t = token.token().await?;
-    api.call(
-        &t,
-        Method::POST,
-        &format!("{repo}/issues"),
-        &[],
-        Some(&Value::Object(payload)),
-    )
-    .await?
-    .expect(201)
+    let issue = api
+        .call(
+            &t,
+            Method::POST,
+            &format!("{repo}/issues"),
+            &[],
+            Some(&Value::Object(payload)),
+        )
+        .await?
+        .expect(201)?;
+    // 새 이슈 트리거가 자기 이슈로 다시 돌지 않게 기억한다. 이미 만든 뒤라 실패시키지 않는다.
+    if let Some(n) = issue["number"].as_u64() {
+        let (o, r) = (text(get(c, "owner")), text(get(c, "repo")));
+        created.record(&o, &r, n, chrono::Utc::now());
+    }
+    Ok(issue)
 }
 
 pub(crate) async fn create_issue(
     api: &GithubApi,
     token: &dyn GithubToken,
+    created: &CreatedIssues,
     c: &Map<String, Value>,
 ) -> Result<Map<String, Value>, NodeError> {
     let repo = repo_path(c)?;
     let fields = issue_fields(get(c, "labels"), get(c, "assignees"), get(c, "milestone"))?;
-    let issue = post_issue(api, token, c, &repo, &fields).await?;
+    let issue = post_issue(api, token, created, c, &repo, &fields).await?;
     Ok(object(json!({
         "number": issue["number"],
         "url": issue["html_url"],
@@ -449,6 +459,7 @@ pub(crate) async fn list_issues(
 pub(crate) async fn find_or_create_issue(
     api: &GithubApi,
     token: &dyn GithubToken,
+    created: &CreatedIssues,
     c: &Map<String, Value>,
 ) -> Result<Map<String, Value>, NodeError> {
     let repo = repo_path(c)?;
@@ -474,7 +485,7 @@ pub(crate) async fn find_or_create_issue(
             "title": i["title"], "state": i["state"], "warnings": [],
         })));
     }
-    let issue = post_issue(api, token, c, &repo, &fields).await?;
+    let issue = post_issue(api, token, created, c, &repo, &fields).await?;
     Ok(object(json!({
         "created": true,
         "number": issue["number"],

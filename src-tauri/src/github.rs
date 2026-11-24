@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use ieum_engine::NodeError;
 use ieum_local::ai::{sh_quote, shell_output, shell_run};
-use ieum_local::github::{GithubApi, GithubToken, OptionList, options};
+use ieum_local::github::{GithubApi, GithubToken, OptionList, Secret, WatchToken, options};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -425,6 +425,81 @@ impl GithubToken for GhToken {
         })
         .await
         .map_err(|_| not_connected("gh에서 GitHub 토큰을 읽지 못했어요."))?
+    }
+}
+
+/// 전체 연결 확인(`gh auth status` + API)을 다시 하는 간격.
+pub const TOKEN_RECHECK: Duration = Duration::from_secs(600);
+
+type CachedSecret = (String, Secret, Instant);
+
+/// 폴링용 토큰: 10분 동안 캐시하되, 연결 기록(`github.json`)은 매 호출 읽어 [연결 해제]를 바로 안다.
+pub struct CachedGhToken {
+    inner: Arc<dyn GithubToken>,
+    record: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    cache: Mutex<Option<CachedSecret>>,
+}
+
+impl CachedGhToken {
+    pub fn new(
+        inner: Arc<dyn GithubToken>,
+        record: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+        now: Arc<dyn Fn() -> Instant + Send + Sync>,
+    ) -> Self {
+        CachedGhToken {
+            inner,
+            record,
+            now,
+            cache: Mutex::new(None),
+        }
+    }
+
+    pub fn for_account(app_data: PathBuf, account_dir: PathBuf) -> Self {
+        let dir = account_dir.clone();
+        Self::new(
+            Arc::new(GhToken {
+                app_data,
+                account_dir,
+            }),
+            Arc::new(move || read_record(&dir)),
+            Arc::new(Instant::now),
+        )
+    }
+
+    fn cache(&self) -> std::sync::MutexGuard<'_, Option<CachedSecret>> {
+        self.cache.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+#[async_trait::async_trait]
+impl WatchToken for CachedGhToken {
+    async fn token(&self, force: bool) -> Result<Secret, NodeError> {
+        let Some(login) = (self.record)() else {
+            *self.cache() = None;
+            return Err(not_connected(
+                "GitHub 연결이 필요해요. 설정 > 연동에서 연결해 주세요.",
+            ));
+        };
+        let now = (self.now)();
+        if !force
+            && let Some((cached, secret, at)) = &*self.cache()
+            && *cached == login
+            && now.saturating_duration_since(*at) < TOKEN_RECHECK
+        {
+            return Ok(secret.clone());
+        }
+        match self.inner.token().await {
+            Ok(t) => {
+                let secret = Secret::new(t);
+                *self.cache() = Some((login, secret.clone(), now));
+                Ok(secret)
+            }
+            Err(e) => {
+                *self.cache() = None;
+                Err(e)
+            }
+        }
     }
 }
 

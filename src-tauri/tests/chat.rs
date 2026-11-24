@@ -9,12 +9,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use github_support::no_github;
+use github_support::{no_github, no_watch};
 use ieum_desktop_lib::builder_host::{AppHost, no_pick};
 use ieum_desktop_lib::chat::{CHAT_BUSY, CHAT_EMPTY, CHAT_MODEL_REQUIRED, send};
 use ieum_desktop_lib::credentials::AccountCredentials;
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
-use ieum_desktop_lib::supervisor::{AppEvent, Deps, Supervisor};
+use ieum_desktop_lib::supervisor::{AppEvent, Deps, GITHUB_POLL, Supervisor};
 use ieum_engine::Workflow;
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::KeyError;
@@ -23,6 +23,7 @@ use ieum_local::ai::{
 };
 use ieum_local::builder::{AiDefault, Builder, Role};
 use ieum_local::chat::{Limits, Stage};
+use ieum_local::github::watch::CreatedIssues;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -136,6 +137,9 @@ fn env(script: Arc<Script>) -> Env {
         trash_dir: root.join("trash"),
         ai: Arc::new(ai.with_resolver(Arc::new(creds.clone()))),
         github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),

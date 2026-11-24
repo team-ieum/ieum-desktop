@@ -8,11 +8,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use ieum_desktop_lib::github::{
-    GIT_PROTOCOL_ARG, GhAccount, GhAuth, GhFound, GithubJobView, GithubJobs, GithubStatus,
-    InstallRoute, JobGuard, JobKind, LOGIN_CMD_ARGS, MIN_GH, checksum_for, choose_route,
-    clear_record, derive_status, disconnect, fetch, gh_auth, install_from_zip, parse_auth_status,
-    parse_device_code, parse_gh_version, pick_gh, read_record, ready_login, release_assets,
-    run_login, token_cmd, token_login, write_record,
+    CachedGhToken, GIT_PROTOCOL_ARG, GhAccount, GhAuth, GhFound, GithubJobView, GithubJobs,
+    GithubStatus, InstallRoute, JobGuard, JobKind, LOGIN_CMD_ARGS, MIN_GH, TOKEN_RECHECK,
+    checksum_for, choose_route, clear_record, derive_status, disconnect, fetch, gh_auth,
+    install_from_zip, parse_auth_status, parse_device_code, parse_gh_version, pick_gh, read_record,
+    ready_login, release_assets, run_login, token_cmd, token_login, write_record,
 };
 
 fn no_cancel() -> AtomicBool {
@@ -813,4 +813,130 @@ fn token_cmd_user_only_without_env_token() {
         token_cmd(gh, "hodoon", true),
         "'/x/gh' auth token --hostname github.com"
     );
+}
+
+// ---- 폴링 토큰 캐시 ----
+
+use ieum_engine::NodeError;
+use ieum_local::github::{GithubToken, Secret, WatchToken};
+use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+
+struct FakeInner {
+    calls: AtomicUsize,
+    fail: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl GithubToken for FakeInner {
+    async fn token(&self) -> Result<String, NodeError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail.load(Ordering::SeqCst) {
+            return Err(NodeError {
+                message: "실패".into(),
+                code: Some("GITHUB_UNREACHABLE".into()),
+            });
+        }
+        Ok("tok".into())
+    }
+}
+
+struct Rig {
+    inner: Arc<FakeInner>,
+    login: Arc<Mutex<Option<String>>>,
+    clock: Arc<Mutex<Instant>>,
+    cached: CachedGhToken,
+}
+
+fn rig() -> Rig {
+    let inner = Arc::new(FakeInner {
+        calls: AtomicUsize::new(0),
+        fail: AtomicBool::new(false),
+    });
+    let login = Arc::new(Mutex::new(Some("octo".to_string())));
+    let clock = Arc::new(Mutex::new(Instant::now()));
+    let (l, c) = (login.clone(), clock.clone());
+    let cached = CachedGhToken::new(
+        inner.clone(),
+        Arc::new(move || l.lock().unwrap().clone()),
+        Arc::new(move || *c.lock().unwrap()),
+    );
+    Rig {
+        inner,
+        login,
+        clock,
+        cached,
+    }
+}
+
+fn calls(r: &Rig) -> usize {
+    r.inner.calls.load(Ordering::SeqCst)
+}
+
+#[tokio::test]
+async fn cached_token_reuses_within_10min() {
+    let r = rig();
+    assert_eq!(r.cached.token(false).await.unwrap().expose(), "tok");
+    *r.clock.lock().unwrap() += TOKEN_RECHECK - Duration::from_secs(1);
+    r.cached.token(false).await.unwrap();
+    assert_eq!(calls(&r), 1);
+}
+
+#[tokio::test]
+async fn cached_token_rechecks_after_10min() {
+    let r = rig();
+    r.cached.token(false).await.unwrap();
+    *r.clock.lock().unwrap() += TOKEN_RECHECK;
+    r.cached.token(false).await.unwrap();
+    assert_eq!(calls(&r), 2);
+}
+
+#[tokio::test]
+async fn cached_token_force_rechecks() {
+    let r = rig();
+    r.cached.token(false).await.unwrap();
+    r.cached.token(true).await.unwrap();
+    assert_eq!(calls(&r), 2);
+}
+
+#[tokio::test]
+async fn cached_token_drops_on_disconnect() {
+    let r = rig();
+    r.cached.token(false).await.unwrap();
+    *r.login.lock().unwrap() = None;
+    let e = r.cached.token(false).await.unwrap_err();
+    assert_eq!(e.code.as_deref(), Some("GITHUB_NOT_CONNECTED"));
+    assert_eq!(calls(&r), 1);
+    // 다시 연결하면 캐시 없이 새로 확인한다.
+    *r.login.lock().unwrap() = Some("octo".into());
+    r.cached.token(false).await.unwrap();
+    assert_eq!(calls(&r), 2);
+}
+
+#[tokio::test]
+async fn cached_token_login_change_rechecks() {
+    let r = rig();
+    r.cached.token(false).await.unwrap();
+    *r.login.lock().unwrap() = Some("other".into());
+    r.cached.token(false).await.unwrap();
+    assert_eq!(calls(&r), 2);
+}
+
+#[tokio::test]
+async fn cached_token_failure_not_cached() {
+    let r = rig();
+    r.inner.fail.store(true, Ordering::SeqCst);
+    assert!(r.cached.token(false).await.is_err());
+    assert!(r.cached.token(false).await.is_err());
+    assert_eq!(calls(&r), 2);
+    r.inner.fail.store(false, Ordering::SeqCst);
+    r.cached.token(false).await.unwrap();
+    assert_eq!(calls(&r), 3);
+}
+
+#[test]
+fn secret_debug_hides_value() {
+    let s = Secret::new("ghp_supersecret");
+    assert!(!format!("{:?}", s).contains("ghp_supersecret"));
+    assert_eq!(s.expose(), "ghp_supersecret");
 }

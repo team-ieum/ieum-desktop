@@ -21,3 +21,7 @@ test("schedule_trigger_named_in_filter", () => {
   expect(triggerOptions(rows)).toEqual(["스케줄", "폴더 감시"]);
   expect(filterRows(rows, { ...NO_FILTERS, trigger: "스케줄" }).map((r) => r.id)).toEqual(["a"]);
 });
+
+test("github_trigger_named_github", () => {
+  expect(triggerOptions([localRow(run("a", "github"), "x")])).toEqual(["GitHub"]);
+});

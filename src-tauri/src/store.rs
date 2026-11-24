@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use ieum_engine::{RunResult, RunStatus, Workflow};
 use ieum_local::ai::AiUsage;
 use ieum_local::builder::{ChatFile, UsageEntry};
+use ieum_local::github::watch::WatchEntry;
 use ieum_local::{FileOp, UndoReport};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -133,6 +134,8 @@ pub enum RunTrigger {
     Test,
     /// 알림·집계는 `Watch`와 같게.
     Schedule,
+    /// GitHub 새 이슈·새 PR 트리거. 알림·집계는 `Watch`와 같게.
+    Github,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -225,6 +228,7 @@ fn check_id(id: &str) -> Result<(), String> {
 static CHAT_LOCK: Mutex<()> = Mutex::new(());
 /// `schedule.json` 읽기-고치기-쓰기를 차례로.
 static SCHEDULE_LOCK: Mutex<()> = Mutex::new(());
+static GITHUB_WATCH_LOCK: Mutex<()> = Mutex::new(());
 /// `key-limits.json` 읽기-고치기-쓰기를 차례로.
 static KEY_LIMITS_LOCK: Mutex<()> = Mutex::new(());
 /// `samples/<id>.json` 읽기-덮기-쓰기와 삭제를 차례로.
@@ -567,6 +571,40 @@ impl Store {
         Ok(read_json(&path)
             .inspect_err(|e| eprintln!("[ieum] 스케줄 기록을 읽지 못해 새로 시작해요: {e}"))
             .unwrap_or_default())
+    }
+
+    /// 워크플로우별 GitHub 트리거 상태(`github_watch.json`). 없거나 깨졌으면 빈 맵 —
+    /// 기준점이 없으면 다음 확인이 처음 켠 것처럼 새로 시작한다.
+    pub fn get_github_watch(&self) -> Result<HashMap<String, WatchEntry>, String> {
+        let path = self.root.join("github_watch.json");
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        Ok(read_json(&path)
+            .inspect_err(|e| eprintln!("[ieum] GitHub 트리거 상태를 읽지 못해 새로 시작해요: {e}"))
+            .unwrap_or_default())
+    }
+
+    pub fn set_github_watch(&self, workflow_id: &str, e: &WatchEntry) -> Result<(), String> {
+        let _g = GITHUB_WATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all = self.get_github_watch()?;
+        all.insert(workflow_id.to_string(), e.clone());
+        write_atomic(&self.root.join("github_watch.json"), &all)
+    }
+
+    /// 지운 워크플로우의 상태를 뺀다. 없으면 그대로.
+    pub fn remove_github_watch(&self, workflow_id: &str) -> Result<(), String> {
+        let _g = GITHUB_WATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all = self.get_github_watch()?;
+        if all.remove(workflow_id).is_none() {
+            return Ok(());
+        }
+        write_atomic(&self.root.join("github_watch.json"), &all)
+    }
+
+    /// 이 앱이 만든 이슈 번호 기억 파일 경로(`CreatedIssues::open`에 넘긴다).
+    pub fn created_issues_path(&self) -> PathBuf {
+        self.root.join("github_created.json")
     }
 
     /// 키별 월 한도 파일. 없거나 깨졌으면 빈 값(깨졌을 땐 로그만).

@@ -22,6 +22,8 @@ import textStripHtml from "../../catalog/events/formatter/text_strip_html.json";
 import textTrim from "../../catalog/events/formatter/text_trim.json";
 import textTruncate from "../../catalog/events/formatter/text_truncate.json";
 import textUrlEncode from "../../catalog/events/formatter/text_url_encode.json";
+import githubNewIssue from "../../catalog/events/github/new_issue.json";
+import githubNewPullRequest from "../../catalog/events/github/new_pull_request.json";
 import githubCreateIssue from "../../catalog/events/github/create_issue.json";
 import githubUpdateIssue from "../../catalog/events/github/update_issue.json";
 import githubFindIssue from "../../catalog/events/github/find_issue.json";
@@ -91,9 +93,10 @@ export function mergeGithubFields(rows: (Partial<Field> & { desktop?: Partial<Fi
 }
 
 /** 카탈로그 github 정의에 입력 표(`github_inputs.json`)를 합친다. */
-function githubDef(event: string, d: { fields: Record<string, Partial<Field>> }) {
+function githubDef(event: string, d: { fields?: Record<string, Partial<Field>>; inputFields?: Field[] }) {
   const table = (githubInputs as Record<string, (Partial<Field> & { desktop?: Partial<Field> })[]>)[event];
-  return { ...d, inputFields: mergeGithubFields(table, d.fields) };
+  const fields = d.fields ?? Object.fromEntries((d.inputFields ?? []).map((f) => [f.key, f]));
+  return { ...d, inputFields: mergeGithubFields(table, fields) };
 }
 
 const raw: [string, unknown][] = [
@@ -104,6 +107,8 @@ const raw: [string, unknown][] = [
   ["schedule.monthly", scheduleMonthly],
   ["schedule.every", scheduleEvery],
   ["manual.run", manualRun],
+  ["github.new_issue", githubDef("github.new_issue", githubNewIssue)],
+  ["github.new_pull_request", githubDef("github.new_pull_request", githubNewPullRequest)],
   ["local.ai", localAi],
   ["local.file_move", fileMove],
   ["local.file_rename", fileRename],

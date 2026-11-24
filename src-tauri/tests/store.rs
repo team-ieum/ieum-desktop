@@ -2,8 +2,11 @@
 
 use std::fs;
 
-use ieum_desktop_lib::store::{Language, Settings, Store, StoredWorkflow};
+use std::collections::BTreeMap;
+
+use ieum_desktop_lib::store::{Language, RunTrigger, Settings, Store, StoredWorkflow};
 use ieum_engine::Workflow;
+use ieum_local::github::watch::{PrSeen, Seen, WatchEntry};
 use serde_json::json;
 
 fn workflow() -> Workflow {
@@ -343,4 +346,74 @@ fn clip_http_bodies_keeps_surrogate_pairs() {
     );
     assert!(!run.nodes["s"].output_clipped);
     assert_eq!(run.nodes["f"].output.as_ref().unwrap()["body"], json!(big));
+}
+
+fn watch_entries() -> (WatchEntry, WatchEntry) {
+    let at = chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+        .unwrap()
+        .to_utc();
+    let issue = WatchEntry {
+        owner: "o".into(),
+        repo: "r".into(),
+        config_hash: "h1".into(),
+        last_checked_at: at,
+        seen: Seen::Issue { issue_max: 7 },
+    };
+    let pr = WatchEntry {
+        config_hash: "h2".into(),
+        seen: Seen::Pr {
+            pr_max: 9,
+            open: BTreeMap::from([(
+                9,
+                PrSeen {
+                    head_sha: "abc".into(),
+                    draft: true,
+                },
+            )]),
+            open_complete: true,
+        },
+        ..issue.clone()
+    };
+    (issue, pr)
+}
+
+#[test]
+fn github_watch_roundtrip_and_remove() {
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    assert!(store.get_github_watch().unwrap().is_empty());
+    let (issue, pr) = watch_entries();
+    store.set_github_watch("a", &issue).unwrap();
+    store.set_github_watch("b", &pr).unwrap();
+    let got = store.get_github_watch().unwrap();
+    assert_eq!(got.get("a"), Some(&issue));
+    assert_eq!(got.get("b"), Some(&pr));
+    store.remove_github_watch("a").unwrap();
+    store.remove_github_watch("없음").unwrap();
+    let got = store.get_github_watch().unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got.get("b"), Some(&pr));
+    assert_eq!(
+        store.created_issues_path(),
+        t.path().join("github_created.json")
+    );
+}
+
+#[test]
+fn github_watch_corrupt_is_empty() {
+    let t = tempfile::tempdir().unwrap();
+    let store = Store::new(t.path().to_path_buf());
+    fs::write(t.path().join("github_watch.json"), "{깨짐").unwrap();
+    assert!(store.get_github_watch().unwrap().is_empty());
+    let (issue, _) = watch_entries();
+    store.set_github_watch("a", &issue).unwrap();
+    assert_eq!(store.get_github_watch().unwrap().len(), 1);
+}
+
+#[test]
+fn run_trigger_github_serializes() {
+    assert_eq!(
+        serde_json::to_string(&RunTrigger::Github).unwrap(),
+        "\"github\""
+    );
 }

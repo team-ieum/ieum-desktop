@@ -1,5 +1,8 @@
 //! 실행 감독: 켜진 폴더 트리거 워크플로우마다 감시 하나, 워크플로우별 실행 줄(한 번에 하나), 실행 기록·되돌리기.
 //! Tauri 없이 돈다 — 저장소·휴지통·AI 러너·이벤트 송신을 `Deps`로 주입한다.
+//! GitHub 트리거 확인 루프는 `supervisor/github.rs`.
+
+mod github;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fs;
@@ -13,13 +16,14 @@ use ieum_engine::schedule::{
     Decision, GRACE, Schedule, decide, schedule_cron, schedule_output, to_quartz, triggered_at,
 };
 use ieum_engine::{
-    BuiltinRunners, Catalog, ExecEvent, GITHUB_EVENTS, Node, NodeRecord, NodeRunner, NodeStatus,
-    Outputs, RunResult, RunStatus, Runners, ValidationError, Workflow, node_errors,
-    referenced_node_ids, run_node, run_workflow, validate,
+    BuiltinRunners, Catalog, ExecEvent, GITHUB_EVENTS, GITHUB_TRIGGERS, Node, NodeRecord,
+    NodeRunner, NodeStatus, Outputs, RunResult, RunStatus, Runners, ValidationError, Workflow,
+    node_errors, referenced_node_ids, run_node, run_workflow, validate,
 };
 use ieum_local::ai::AiRunner;
 use ieum_local::builder::{HttpLine, TestRun, TestTrigger};
-use ieum_local::github::GithubRunner;
+use ieum_local::github::watch::{CreatedIssues, WatchEntry, WatchKind, config_hash};
+use ieum_local::github::{GithubRunner, WatchToken, is_path_name};
 use ieum_local::{
     AllowedRoots, FileMoveRunner, FileOp, FileRenameRunner, FileTrashRunner, FolderWatcher,
     HttpRunner, Journal, NewFile, RecentWrites, UndoReport, WatchTiming, roots_for_workflow, undo,
@@ -28,7 +32,7 @@ use ieum_local::{
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::http_confirm::HttpConfirmGate;
@@ -39,6 +43,8 @@ use crate::store::{
 
 /// 워크플로우 하나의 대기 실행 상한. 넘으면 가장 오래된 것부터 버린다.
 pub const QUEUE_CAP: usize = 100;
+/// GitHub 트리거 확인 간격(운영값, `Deps.github_poll`).
+pub const GITHUB_POLL: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone)]
 pub enum AppEvent {
@@ -53,8 +59,9 @@ pub enum AppEvent {
         ok: bool,
         message: String,
     },
-    /// 화면 이벤트 `queue-dropped` — 줄이 넘쳐 버린 실행(트리거 파일 경로).
-    QueueDropped { workflow_id: String, path: String },
+    /// 화면 이벤트 `queue-dropped` — 줄이 넘쳐 버린 실행. `label`은 폴더면 트리거 파일 경로,
+    /// GitHub면 `owner/repo #번호`.
+    QueueDropped { workflow_id: String, label: String },
     /// 시스템 알림 재료(화면 이벤트 아님) — 실행 시작·끝.
     RunNotice(RunNotice),
     /// 화면 이벤트 `workflow-changed` — 채팅 빌더가 저장본을 고쳤다.
@@ -120,6 +127,12 @@ pub struct Deps {
     pub ai: Arc<AiRunner>,
     /// GitHub 이슈 노드 7개가 함께 쓰는 러너(운영 = gh에서 토큰을 읽는 `GhToken`).
     pub github: Arc<GithubRunner>,
+    /// GitHub 트리거 확인 루프의 토큰(운영 = 10분 캐시하는 `CachedGhToken`).
+    pub github_watch: Arc<dyn WatchToken>,
+    /// 이 앱이 만든 이슈 기억 — `github` 러너와 같은 것을 넣는다(새 이슈 트리거가 자기 이슈를 거른다).
+    pub github_created: Arc<CreatedIssues>,
+    /// GitHub 트리거 확인 간격(운영 `GITHUB_POLL`).
+    pub github_poll: Duration,
     pub emit: Emit,
     pub timing: WatchTiming,
     /// 감시 폴더 재확인·스케줄 확인 간격(운영 30초).
@@ -131,9 +144,9 @@ pub struct Deps {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WatchState {
-    /// 꺼졌거나 폴더·스케줄 트리거가 아님
+    /// 꺼졌거나 폴더·스케줄·GitHub 트리거가 아님
     Off,
-    /// 폴더 감시 중이거나 스케줄이 켜져 있음
+    /// 폴더 감시 중이거나 스케줄·GitHub 트리거가 켜져 있음
     Watching,
     WatchError,
 }
@@ -159,6 +172,12 @@ pub enum TriggerKind {
         quartz: Result<String, String>,
     },
     Manual,
+    /// `github.new_issue`·`github.new_pull_request` — 칸의 owner·repo(빈 글일 수 있음).
+    Github {
+        event: String,
+        owner: String,
+        repo: String,
+    },
     Unsupported,
 }
 
@@ -176,6 +195,17 @@ pub fn trigger_kind(wf: &StoredWorkflow) -> TriggerKind {
             TriggerKind::Folder(PathBuf::from(folder.unwrap_or("")))
         }
         "manual.run" => TriggerKind::Manual,
+        e if GITHUB_TRIGGERS.contains(&e) => {
+            let text = |k: &str| {
+                let v = node.config.get(k).and_then(Value::as_str);
+                v.unwrap_or("").to_string()
+            };
+            TriggerKind::Github {
+                event: e.to_string(),
+                owner: text("owner"),
+                repo: text("repo"),
+            }
+        }
         e if e.starts_with("schedule.") => TriggerKind::Schedule {
             event: e.to_string(),
             quartz: schedule_cron(e, &node.config)
@@ -207,6 +237,54 @@ fn enabled_schedule(wf: &StoredWorkflow) -> Option<Result<Schedule, String>> {
             .and_then(|q| Schedule::parse(&q).map_err(|e| e.0))
             .map_err(|e| format!("스케줄을 계산하지 못했어요: {e}")),
     )
+}
+
+fn first_trigger(wf: &Workflow) -> Option<&ieum_engine::Node> {
+    wf.nodes.iter().find(|n| {
+        n.r#type
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("TRIGGER"))
+    })
+}
+
+fn is_github(wf: &StoredWorkflow) -> bool {
+    matches!(trigger_kind(wf), TriggerKind::Github { .. })
+}
+
+/// 켜진 GitHub 트리거의 (종류, owner, repo). 꺼짐·비었음·참조식(`{{`)·경로에 못 쓰는 이름이면 None —
+/// 요청 경로에 그대로 들어가므로 노드와 같은 검사(`is_path_name`)를 거친다.
+fn enabled_github(wf: &StoredWorkflow) -> Option<(WatchKind, String, String)> {
+    let TriggerKind::Github { event, owner, repo } = trigger_kind(wf) else {
+        return None;
+    };
+    if !wf.enabled || github_repo_error(&owner, &repo).is_some() {
+        return None;
+    }
+    let kind = if event == "github.new_issue" {
+        WatchKind::Issue
+    } else {
+        WatchKind::Pr
+    };
+    Some((kind, owner, repo))
+}
+
+/// owner·repo를 요청 경로에 못 쓰면 목록 카드에 보일 문구 — 비었거나 참조식이면 고르기 안내, 아니면 형식 안내.
+fn github_repo_error(owner: &str, repo: &str) -> Option<&'static str> {
+    let unpicked = |s: &str| s.is_empty() || s.contains("{{");
+    if unpicked(owner) || unpicked(repo) {
+        Some("저장소를 먼저 골라 주세요.")
+    } else if !is_path_name(&Value::from(owner)) || !is_path_name(&Value::from(repo)) {
+        Some("소유자·저장소 이름이 올바르지 않아요.")
+    } else {
+        None
+    }
+}
+
+/// 켜진 GitHub 트리거의 지금 `config_hash`.
+fn github_hash(wf: &StoredWorkflow) -> Option<String> {
+    enabled_github(wf)?;
+    let (event, config) = trigger_sig(wf)?;
+    Some(config_hash(&event, &config))
 }
 
 /// `now` 다음 차례(Asia/Seoul 로컬 글). 다음 차례가 없으면(지난 연도만) 계산 못 함.
@@ -245,6 +323,8 @@ enum JobSource {
     Watch(PathBuf),
     /// 스케줄 차례.
     Schedule { slot: DateTime<Utc> },
+    /// GitHub 확인 루프가 찾은 새 항목 — 넣을 때의 트리거 `config_hash`.
+    Github { config_hash: String },
     /// 지금 실행(`run_now`).
     Manual,
     /// 채팅 빌더의 노드 테스트 — 저장본 대신 돌릴 그래프(대상까지 자른 것).
@@ -386,6 +466,18 @@ struct Inner {
     tick_lock: Mutex<()>,
     /// 저장소(`schedule.json`)에 쓰지 못한 차례(워크플로우 id → 차례). 저장소 값보다 앞선다.
     slots: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// GitHub 확인 루프를 바로 깨운다(기준점 없는 트리거가 생김). 루프가 `Inner`를 붙잡지 않게 따로 `Arc`.
+    github_wake: Arc<Notify>,
+    /// 워크플로우별 GitHub 상태 세대 — 초기화마다 +1. 확인 도중 껐다 켠 워크플로우의 결과를 버린다.
+    github_gen: Mutex<HashMap<String, u64>>,
+    /// (소문자 owner, 소문자 repo, 종류) → (ETag, 마지막 목록). 304면 이 목록을 다시 쓴다.
+    github_cache: Mutex<HashMap<github::RepoKey, (String, Vec<Value>)>>,
+    /// GitHub 트리거 오류(워크플로우 id → 화면 문구).
+    github_errors: Mutex<HashMap<String, String>>,
+    /// 한도 때문에 이 시각까지 확인을 쉰다.
+    github_pause: Mutex<Option<DateTime<Utc>>>,
+    /// `github_watch.json`에 쓰지 못한 상태. 저장소 값보다 앞선다 — 같은 항목이 매분 다시 돌지 않게.
+    github_unsaved: Mutex<HashMap<String, WatchEntry>>,
 }
 
 #[derive(Clone)]
@@ -430,6 +522,12 @@ impl Supervisor {
             schedule_errors: Mutex::default(),
             tick_lock: Mutex::default(),
             slots: Mutex::default(),
+            github_wake: Arc::default(),
+            github_gen: Mutex::default(),
+            github_cache: Mutex::default(),
+            github_errors: Mutex::default(),
+            github_pause: Mutex::default(),
+            github_unsaved: Mutex::default(),
         }));
         // 감시(`sync`)보다 먼저 — 되돌려진 파일이 새 파일로 잡히지 않는다.
         if close_unfinished {
@@ -453,6 +551,7 @@ impl Supervisor {
                 }
             }
         });
+        sup.spawn_github_loop();
         Ok(sup)
     }
 
@@ -527,6 +626,7 @@ impl Supervisor {
     pub fn list_workflows(&self) -> Result<Vec<WorkflowEntry>, String> {
         let list = self.store().list_workflows()?;
         let now = (self.0.deps.now)();
+        let github_errors = lock(&self.0.github_errors).clone();
         let watches = lock(&self.0.watches);
         Ok(list
             .into_iter()
@@ -540,6 +640,17 @@ impl Supervisor {
                     None => {}
                     Some(Ok(next)) => (watch, next_run) = (WatchState::Watching, Some(next)),
                     Some(Err(e)) => (watch, watch_message) = (WatchState::WatchError, Some(e)),
+                }
+                if let TriggerKind::Github { owner, repo, .. } = trigger_kind(&workflow)
+                    && workflow.enabled
+                {
+                    // 저장소를 못 쓰면 확인을 건너뛰므로 "켜짐"으로 보이지 않게 여기서 오류로.
+                    let repo_error = github_repo_error(&owner, &repo).map(String::from);
+                    (watch, watch_message) =
+                        match repo_error.or_else(|| github_errors.get(&workflow.id).cloned()) {
+                            Some(e) => (WatchState::WatchError, Some(e)),
+                            None => (WatchState::Watching, None),
+                        };
                 }
                 WorkflowEntry {
                     workflow,
@@ -587,10 +698,21 @@ impl Supervisor {
             let _one = lock(&self.0.tick_lock);
             let saved = self.store().save_workflow(wf)?;
             // 꺼짐→켜짐, 트리거 칸이 바뀜 = 지난 차례를 놓친 것으로 치지 않고 지금부터.
-            let restart =
-                before.is_none_or(|b| !b.enabled || trigger_sig(&b) != trigger_sig(&saved));
+            let restart = before
+                .as_ref()
+                .is_none_or(|b| !b.enabled || trigger_sig(b) != trigger_sig(&saved));
             if restart && enabled_schedule(&saved).is_some() {
                 self.set_slot(&saved.id, (self.0.deps.now)());
+            }
+            // GitHub는 켜짐→꺼짐도 — 꺼져 있던 동안의 항목이 다시 켤 때 돌지 않게 기준점부터.
+            let turned_off = before.as_ref().is_some_and(|b| b.enabled) && !saved.enabled;
+            if (restart || turned_off)
+                && (before.as_ref().is_some_and(is_github) || is_github(&saved))
+            {
+                self.github_reset(&saved.id);
+                if enabled_github(&saved).is_some() {
+                    self.0.github_wake.notify_one();
+                }
             }
             saved
         };
@@ -653,6 +775,7 @@ impl Supervisor {
             if let Err(e) = self.store().remove_schedule_slot(id) {
                 eprintln!("[ieum] 스케줄 기록을 지우지 못했어요: {e}");
             }
+            self.github_reset(id);
         }
         self.sync();
         Ok(())
@@ -934,9 +1057,9 @@ impl Supervisor {
         self.push_locked(&mut lanes, workflow_id, job)
     }
 
-    fn push(&self, workflow_id: &str, job: Job) {
+    fn push(&self, workflow_id: &str, job: Job) -> Pushed {
         let mut lanes = lock(&self.0.lanes);
-        self.push_locked(&mut lanes, workflow_id, job);
+        self.push_locked(&mut lanes, workflow_id, job)
     }
 
     fn push_locked(
@@ -957,10 +1080,27 @@ impl Supervisor {
             let Some(old) = lane.jobs.pop_front() else {
                 break;
             };
-            let path = old.trigger.get("path").and_then(Value::as_str);
+            let text = |k: &str| {
+                old.trigger
+                    .get(k)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+            };
+            let label = match &old.source {
+                JobSource::Github { .. } => {
+                    let t = &old.trigger;
+                    let n = t.get("issueNumber").or_else(|| t.get("prNumber"));
+                    format!(
+                        "{} #{}",
+                        text("repo"),
+                        n.and_then(Value::as_u64).unwrap_or(0)
+                    )
+                }
+                _ => text("path").to_string(),
+            };
             (self.0.deps.emit)(AppEvent::QueueDropped {
                 workflow_id: workflow_id.to_string(),
-                path: path.unwrap_or_default().to_string(),
+                label,
             });
             if let Some(reply) = old.reply {
                 let _ = reply.send(Err("실행 줄이 넘쳐 취소됐어요.".into()));
@@ -1068,6 +1208,7 @@ impl Supervisor {
             JobSource::Watch(_) => (RunTrigger::Watch, None),
             JobSource::Manual => (RunTrigger::Manual, None),
             JobSource::Schedule { slot } => (RunTrigger::Schedule, Some(triggered_at(*slot))),
+            JobSource::Github { .. } => (RunTrigger::Github, None),
         };
         match source {
             // 노드 테스트는 저장본 대신 대상까지 자른 그래프를 돌린다.
@@ -1080,6 +1221,11 @@ impl Supervisor {
             }
             JobSource::Schedule { .. } if enabled_schedule(&wf).is_none() => {
                 return Err("꺼졌거나 스케줄이 아니게 되어 차례를 버렸어요.".into());
+            }
+            JobSource::Github { config_hash }
+                if github_hash(&wf).as_ref() != Some(&config_hash) =>
+            {
+                return Err("꺼졌거나 트리거가 바뀌어 늦게 온 GitHub 항목을 버렸어요.".into());
             }
             _ => {}
         }
@@ -1231,7 +1377,13 @@ impl Supervisor {
                 schedule_output(&event, &config, (self.0.deps.now)())
             }
             TriggerKind::Manual => Map::new(),
-            TriggerKind::Unsupported => return Err("이 트리거는 지금 실행할 수 없어요.".into()),
+            TriggerKind::Github { .. } => {
+                let node = first_trigger(&wf.workflow).ok_or("트리거가 없어요.")?;
+                self.github_sample(node).await?
+            }
+            TriggerKind::Unsupported => {
+                return Err("이 트리거는 지금 실행할 수 없어요.".into());
+            }
         };
         self.queue(workflow_id, trigger, None).await
     }
@@ -1266,6 +1418,10 @@ impl Supervisor {
         let trigger = match trigger {
             TestTrigger::File(sample) => self.file_trigger(&wf, &sample)?,
             TestTrigger::Output(output) => output,
+            TestTrigger::Github => {
+                let node = first_trigger(&wf).ok_or("트리거가 없어요.")?;
+                self.github_sample(node).await?
+            }
         };
         // 되돌리기는 실행 줄(`run_one`)이 한다 — 이 future가 버려져도 끝까지 간다.
         let run_id = self.queue(workflow_id, trigger, Some(wf.clone())).await?;
@@ -1391,6 +1547,7 @@ impl Supervisor {
                 e if e.starts_with("schedule.") => {
                     schedule_output(e, &node.config, (self.0.deps.now)())
                 }
+                e if GITHUB_TRIGGERS.contains(&e) => self.github_sample(node).await?,
                 _ => return Err("이 트리거는 테스트할 수 없어요.".into()),
             };
             let tested_at = now();

@@ -20,7 +20,10 @@ pub const GUIDE: &str = r#"IEUM 워크플로우 만들기 안내
   - local.folder_new_file(폴더에 새 파일) — 폴더에 파일이 생기면 시작.
   - schedule.hourly(매시 정각)·schedule.daily(매일)·schedule.weekly(매주)·schedule.monthly(매월) — 정한 시각에 시작. 시각은 한국 시간(Asia/Seoul). 칸: hour는 글 "0"~"23", weekday는 MON~SUN, day는 글 "1"~"28" 또는 "L"(마지막 날), weekends는 불리언(false면 평일만).
   - manual.run(수동 실행) — 사용자가 [실행]을 눌러야만 시작. 확인 카드는 [켜기] 대신 [저장]이다.
+  - github.new_issue(GitHub 새 이슈) — 칸: owner·repo.
+  - github.new_pull_request(GitHub 새 PR) — 칸: owner·repo, onOpened·onSynchronize·onReopened·onReadyForReview·excludeDrafts.
 - 스케줄·수동 트리거의 test는 파일 없이 돈다(스케줄 출력은 triggeredAt = 실행 시각).
+- GitHub 트리거의 test는 파일 없이 그 저장소의 최신 항목으로 돈다.
 - 값을 다듬는 변환·포맷터 노드(formatter.*, transform.map)와 HTTP 요청 노드(http.request)도 있다. 자세한 것은 events로 본다.
 - GitHub 노드(github.*)는 설정 > 연동에서 GitHub를 연결해야 돈다. 연결이 없으면 GITHUB_NOT_CONNECTED가 난다 — 사용자에게 연결해 달라고 한다.
 - 앞 노드 결과는 {{nodes.<id>.output.<이름>}} 으로 넣는다. 이름은 fields가 알려 준 것만 쓴다.
