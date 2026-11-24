@@ -4,7 +4,8 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { api, type WfNode, type WorkflowEntry } from "../api";
 import { nodeTitle } from "../editor/Canvas";
 import { AUTOSAVE_MS } from "../editor/sync";
-import { setLang } from "../i18n";
+import { CATEGORIES, categoryEvents } from "../editor/paletteGroups";
+import { setLang, t } from "../i18n";
 import { PALETTE } from "../nodes/defs";
 import { emptyLive, useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
@@ -51,12 +52,11 @@ const open = () => act(async () => render(<Editor id={null} onBack={() => {}} on
 const palette = () => screen.queryByRole("dialog", { name: "노드 추가" });
 const addNode = async (event: string) => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
-  // 팔레트 묶음은 접혀 있으므로 먼저 모두 편다.
-  for (const g of within(palette()!).getAllByRole("button").filter((b) => b.getAttribute("aria-expanded") === "false")) {
-    await act(async () => fireEvent.click(g));
-  }
-  const nodes = within(palette()!).getAllByRole("button", { name: new RegExp(`^${nodeTitle(event)}`) });
-  await act(async () => fireEvent.click(nodes.find((b) => !b.hasAttribute("aria-expanded"))!));
+  // event가 든 카테고리를 누른다 — 노드 1개 카테고리는 바로 추가되고, 아니면 옆 창에서 그 줄을 누른다.
+  const c = CATEGORIES.find((c) => categoryEvents(c).includes(event))!;
+  await act(async () => fireEvent.click(within(palette()!).getByRole("button", { name: t(`palette.cat.${c.id}`) })));
+  if (categoryEvents(c).length === 1) return;
+  await act(async () => fireEvent.click(palette()!.querySelector(`[data-event="${event}"]`)!));
 };
 
 test("editor_palette_opens_from_plus_button", async () => {

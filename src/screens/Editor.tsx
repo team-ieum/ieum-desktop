@@ -135,6 +135,7 @@ function PaletteButton({ onAdd }: { onAdd: (event: string) => void }) {
           className="absolute left-14 top-1/2 max-h-[min(40rem,80vh)] w-64 -translate-y-1/2 overflow-y-auto rounded-2xl border border-neutral-200 bg-white p-4 shadow-[0_14px_40px_rgba(43,72,86,0.18)]"
         >
           <Palette
+            hasTrigger={false}
             onAdd={(e) => {
               onAdd(e);
               setOpen(false);
