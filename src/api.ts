@@ -479,7 +479,6 @@ export interface ChatAi {
   effort: string | null;
 }
 export type ChatStage = { id: string; stage: "designing" | "testing" };
-/** GitHub 칸 목록 한 항목(소유자·저장소·브랜치·마일스톤). */
 export interface BlueprintSlot {
   event: string;
   field: string;
@@ -497,6 +496,7 @@ export interface Blueprint {
   buildAttempts: number;
 }
 
+/** GitHub 칸 목록 한 항목(소유자·저장소·브랜치·마일스톤). */
 export interface OptionItem {
   id: string;
   name: string;

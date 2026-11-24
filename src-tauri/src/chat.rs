@@ -102,10 +102,10 @@ fn record(path: &Path, lines: &[Value]) {
     }
 }
 
-/// 만들기를 기다리는 설계서 — 제출됐고 아직 오류 없이 끝난 만들기 턴이 없다.
+/// 만들기를 기다리는 설계서 — 제출됐고 아직 오류 없이 끝난 만들기 턴이 없다. 검증을 못 넘은 저장본은 없는 것으로 본다.
 fn building(b: &mut Option<Blueprint>) -> Option<&mut Blueprint> {
     b.as_mut()
-        .filter(|b| b.status == BlueprintStatus::Submitted && b.build_pending)
+        .filter(|b| b.status == BlueprintStatus::Submitted && b.build_pending && validate_stored(b))
 }
 
 /// 설계서 없는 한 턴(`send_with`의 기본 옵션).
@@ -172,10 +172,12 @@ pub async fn send_with(
     } else {
         "classic"
     };
+    // 실측 사건도 화면에 보이는(검증을 넘은) 설계서에서만.
     let before = chat
         .state
         .blueprint
         .as_ref()
+        .filter(|b| validate_stored(b))
         .map(|b| (b.status, b.build_pending));
     // 저장 파일은 믿지 않는다 — 검증을 못 넘은 설계서는 프롬프트에 싣지 않는다.
     let summary = chat
@@ -196,7 +198,7 @@ pub async fn send_with(
         if opts.blueprint
             && let Some(b) = building(&mut c.state.blueprint)
         {
-            b.build_attempts += 1;
+            b.build_attempts = b.build_attempts.saturating_add(1);
             attempt = Some(b.build_attempts);
         }
     })?;

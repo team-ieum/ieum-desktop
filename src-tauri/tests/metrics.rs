@@ -456,3 +456,50 @@ async fn submit_records_event_when_metrics_on() {
     );
     assert!(!fs::read_to_string(&path).unwrap().contains("/h/in"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tampered_blueprint_counts_no_attempt_and_records_no_events() {
+    let script = Arc::new(Script(Mutex::default()));
+    let env = env(script.clone());
+    let id = save_with_blueprint(&env);
+    let path = env.root.join("data/metrics/chat.jsonl");
+    // 고아 컴포넌트를 더한 변조본 — `validate_stored`를 못 넘어 화면·프롬프트에는 없는 설계서다.
+    let lost =
+        json!({"id": "lost", "component": "TextInput", "label": "고아", "value": {"@path": "/x"}});
+    for (status, pending) in [
+        (BlueprintStatus::Submitted, true),
+        (BlueprintStatus::Submitted, false),
+        (BlueprintStatus::Active, false),
+    ] {
+        env.store
+            .update_chat(&id, |c| {
+                let b = c.state.blueprint.as_mut().unwrap();
+                b.status = status;
+                b.build_pending = pending;
+                if b.components.len() == 3 {
+                    b.components.push(lost.clone());
+                }
+            })
+            .unwrap();
+        script.push(ans("네", json!([])));
+        send_with(
+            &env.sup,
+            &builder(&env),
+            &id,
+            "만들어 줘",
+            ai(),
+            Limits::default(),
+            &|_| {},
+            ChatOpts {
+                blueprint: true,
+                metrics: Some(path.clone()),
+                ..ChatOpts::default()
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let b = env.store.get_chat(&id).unwrap().state.blueprint.unwrap();
+    assert_eq!(b.build_attempts, 0);
+    assert_eq!(events(&read_lines(&path)), Vec::<&str>::new());
+}
