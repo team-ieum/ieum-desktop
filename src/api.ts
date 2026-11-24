@@ -475,6 +475,23 @@ export interface ChatAi {
 }
 export type ChatStage = { id: string; stage: "designing" | "testing" };
 /** GitHub 칸 목록 한 항목(소유자·저장소·브랜치·마일스톤). */
+export interface BlueprintSlot {
+  event: string;
+  field: string;
+  path: string | null;
+  pickedVersion: number | null;
+  boundNode: string | null;
+}
+export interface Blueprint {
+  status: "active" | "submitted" | "cancelled";
+  version: number;
+  components: Record<string, unknown>[];
+  dataModel: Record<string, unknown>;
+  slots: Record<string, BlueprintSlot>;
+  buildPending: boolean;
+  buildAttempts: number;
+}
+
 export interface OptionItem {
   id: string;
   name: string;
