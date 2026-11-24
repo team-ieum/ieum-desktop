@@ -1,3 +1,4 @@
+mod blueprint;
 mod core;
 mod edit;
 mod fields;
@@ -11,6 +12,7 @@ mod test;
 mod wire;
 
 pub use self::core::*;
+pub use blueprint::*;
 pub use edit::{AI_LOCKED_FIELDS, FOLDER_FIELDS};
 pub use guide::GUIDE;
 pub use host::*;

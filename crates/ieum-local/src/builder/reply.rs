@@ -52,6 +52,12 @@ pub enum Code {
     GithubInvalid,
     GithubStatus,
     GithubTooLarge,
+    UiInvalid,
+    UiNoSurface,
+    SlotUnknown,
+    SlotEmpty,
+    SlotMismatch,
+    BlueprintNotSubmitted,
 }
 
 impl Code {
@@ -131,6 +137,14 @@ impl Code {
             }
             GithubStatus => "GitHub가 요청을 거절함. field가 상태 코드",
             GithubTooLarge => "GitHub 응답이 허용 크기를 넘음",
+            UiInvalid => "설계서 메시지가 규칙에 맞지 않음. rule·at을 보고 고쳐 다시 낼 것",
+            UiNoSurface => "고칠 설계서가 없음. createSurface로 새로 띄울 것",
+            SlotUnknown => "설계서에 그 이름의 앱 전용 칸이 없음",
+            SlotEmpty => "앱 전용 칸이 비어 있음(사용자가 아직 고르지 않았거나 이미 씀)",
+            SlotMismatch => "앱 전용 칸의 대상(노드 종류·칸)이 이 노드와 다름",
+            BlueprintNotSubmitted => {
+                "제출된 설계서가 없음. 사용자가 [이대로 만들기]를 누른 뒤에만 쓸 수 있음"
+            }
         }
     }
 
@@ -148,6 +162,12 @@ impl Code {
             Stale | UserEditing | NodeNotFound | EventUnknown | TriggerRule | FieldUnknown
             | FieldLocked | NotFolderField | PickCancelled | FolderNotAllowed | EdgeInvalid
             | SaveRejected | Invalid | SampleNotAllowed | NotReady | TestDeclined => 2,
+            UiInvalid
+            | UiNoSurface
+            | SlotUnknown
+            | SlotEmpty
+            | SlotMismatch
+            | BlueprintNotSubmitted => 2,
         }
     }
 }

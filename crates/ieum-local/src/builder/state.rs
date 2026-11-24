@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
 use ieum_engine::{Node, Workflow};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use super::HttpLine;
+use super::{Blueprint, HttpLine};
 use crate::ai::AiUsage;
 
 /// `accounts/<계정>/chats/<workflowId>.json`. `state`는 두 입구(터미널·채팅 패널)가 공유한다.
@@ -50,6 +50,18 @@ pub struct ChatState {
     pub baseline: Option<BTreeMap<String, String>>,
     pub tests: BTreeMap<String, TestEntry>,
     pub pending_finish: Option<PendingFinish>,
+    /// 마지막 설계서 하나. 깨진 값은 버린다 — 칸 하나 때문에 채팅 파일 전체를 못 읽지 않게.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub blueprint: Option<Blueprint>,
+}
+
+/// 값으로 받은 뒤 설계서로 바꾸고, 안 되면 None.
+fn lenient<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Blueprint>, D::Error> {
+    Ok(serde_json::from_value(Value::deserialize(d)?).ok())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
