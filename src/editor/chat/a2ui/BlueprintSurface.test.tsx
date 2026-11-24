@@ -261,3 +261,13 @@ it("number_or_mixed_chip_values_render_without_throwing", async () => {
   expect(await screen.findByRole("button", { name: "가게", pressed: true })).toBeTruthy();
   expect(screen.getByRole("button", { name: "날짜", pressed: false })).toBeTruthy();
 });
+
+it("changed_turns_off_when_on_drops_early", () => {
+  vi.useFakeTimers();
+  const { rerender } = render(<Changed on>칸</Changed>);
+  act(() => vi.advanceTimersByTime(500));
+  rerender(<Changed on={false}>칸</Changed>);
+  act(() => vi.advanceTimersByTime(5000));
+  expect(screen.getByText("칸").className).not.toContain("bg-amber-50");
+  vi.useRealTimers();
+});

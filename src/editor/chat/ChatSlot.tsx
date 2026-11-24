@@ -244,10 +244,11 @@ export function ChatSlot({
   const reread = () => api.getChat(workflowId).then((c) => c.state.blueprint ?? null, () => undefined);
   const showBp = (before: Blueprint | null, next: Blueprint | null | undefined, moved = false) => {
     if (next === undefined) return;
-    // 판·상태가 바뀌면 래퍼가 표면을 저장본으로 새로 만든다 — 카드에서 고친 값을 버리고 강조도 새로 정한다.
-    // 같은 판이면 표면이 그대로라 강조를 건드리지 않는다(켜진 강조를 2초 안에 끄면 남아 버린다).
+    // 판·상태가 바뀌면 래퍼가 표면을 저장본으로 새로 만든다 — 카드에서 고친 값·고쳤는지를 버리고 강조도 새로 정한다.
+    // 같은 판이면 표면이 그대로라 강조를 건드리지 않는다(켜진 강조를 2초 안에 끄면 일찍 꺼진다).
     if (next?.version !== before?.version || next?.status !== before?.status) {
       dataRef.current = null;
+      touchedRef.current = false;
       setChanged(moved && before && next ? changedIds(before, next) : []);
     }
     setBp(next);
@@ -264,15 +265,14 @@ export function ChatSlot({
     // 떠 있던·만들던 설계서는 턴이 어떻게 끝나든 다시 읽는다 — 만들기 완료·우회 취소는 카드 없이 온다.
     const sync = before?.status === "active" || (before?.status === "submitted" && before.buildPending);
     const carry = before?.status === "active" && modeOn && !opts?.noBlueprint;
+    const sent = carry ? (dataRef.current ?? before.dataModel) : null;
     const sendAi = { provider: choice.provider, credential: choice.credential || null, model: model.trim() || null, effort: aiEffort || null };
     try {
-      const turn =
-        carry
-          ? await api.chatSend(workflowId, said, sendAi, { data: dataRef.current ?? before.dataModel, touched: touchedRef.current })
-          : await api.chatSend(workflowId, said, sendAi);
+      const turn = sent ? await api.chatSend(workflowId, said, sendAi, { data: sent, touched: touchedRef.current }) : await api.chatSend(workflowId, said, sendAi);
       if (carry) touchedRef.current = false;
       const moved = turn.cards.some((c) => c.kind === "blueprint");
-      if (moved || sync) showBp(before, await reread(), moved);
+      // 강조는 보낸 데이터와 비교한다 — 사람이 카드에서 고친 칸을 AI가 바꾼 것으로 보이지 않게.
+      if (moved || sync) showBp(before && sent ? { ...before, dataModel: sent } : before, await reread(), moved);
       setItems((now) => [
         // AI가 고친 설계서는 맨 아래로 — 옛 자리에는 한 줄만 남긴다.
         ...(moved ? now.flatMap((i): Item[] => (i.kind !== "blueprint" ? [i] : before ? [{ kind: "blueprintStub", title: titleOf(before) }] : [])) : now),
@@ -306,7 +306,11 @@ export function ChatSlot({
       const r = await api.chatSubmitBlueprint(workflowId, bp.version, data);
       ok = r.ok;
       if (ok) showBp(bp, await reread());
-      else addError(r.message || t("chat.error.failed"));
+      else {
+        addError(r.message || t("chat.error.failed"));
+        // 그사이 판이 바뀌었거나 취소됐다 — 지금 판을 다시 그려 같은 거절이 반복되지 않게.
+        if (r.code === "STALE") showBp(bp, await reread());
+      }
     } catch (e) {
       addError(failText(e));
     } finally {
@@ -319,8 +323,14 @@ export function ChatSlot({
     setBpBusy(true);
     try {
       const r = await api.chatPickSlot(workflowId, slot, bp.version);
-      if (r.ok) showBp(bp, await reread());
-      else if (r.code !== "PICK_CANCELLED") addError(r.message || t("chat.error.failed"));
+      if (r.ok) {
+        showBp(bp, await reread());
+        // 폴더 칸을 고른 것도 카드를 만진 것이다(실측 blueprint_ignored).
+        touchedRef.current = true;
+      } else if (r.code !== "PICK_CANCELLED") {
+        addError(r.message || t("chat.error.failed"));
+        if (r.code === "STALE") showBp(bp, await reread());
+      }
     } catch (e) {
       addError(failText(e));
     } finally {

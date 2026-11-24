@@ -52,7 +52,10 @@ export function BlueprintView({
 export function Changed({ on, children }: { on: boolean; children: ReactNode }) {
   const [hot, setHot] = useState(on);
   useEffect(() => {
-    if (!on) return;
+    if (!on) {
+      setHot(false);
+      return;
+    }
     setHot(true);
     const id = setTimeout(() => setHot(false), 2000);
     return () => clearTimeout(id);

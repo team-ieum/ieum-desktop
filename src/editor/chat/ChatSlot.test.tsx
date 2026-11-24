@@ -605,3 +605,65 @@ test("broken_blueprint_becomes_one_line_and_chat_lives_on", async () => {
   expect(screen.getByText("고쳤어요")).toBeTruthy();
   expect((await screen.findByTestId("surface")).textContent).toContain("v2");
 });
+
+test("touched_resets_when_a_new_blueprint_version_arrives", async () => {
+  await mode(true);
+  const v2 = BP({ version: 2 });
+  vi.mocked(api.getChat)
+    .mockResolvedValueOnce(chatWith(BP()))
+    .mockResolvedValueOnce(chatWith(BP({ status: "submitted", buildPending: true })))
+    .mockResolvedValue(chatWith(v2));
+  vi.spyOn(api, "chatSubmitBlueprint").mockResolvedValue({ ok: true });
+  send.mockResolvedValueOnce({ say: "새로 띄웠어요", cards: [{ kind: "blueprint", version: 2 }], error: null });
+  await open();
+  await click("고침");
+  await click("제출"); // 고친 카드를 글 없이 [이대로 만들기]로 냈다
+  expect(send).toHaveBeenLastCalledWith("w1", "설계서대로 만들어 주세요.", AI);
+  await type("하나");
+  await enter();
+  expect(send).toHaveBeenLastCalledWith("w1", "하나", AI, { data: v2.dataModel, touched: false });
+});
+
+test("picking_a_slot_counts_as_touching_the_card", async () => {
+  await mode(true);
+  vi.mocked(api.getChat).mockResolvedValue(chatWith(BP()));
+  vi.spyOn(api, "chatPickSlot").mockResolvedValue({ ok: true, data: { path: "/Users/me/in" } });
+  await open();
+  await click("칸");
+  await type("하나");
+  await enter();
+  expect(send).toHaveBeenLastCalledWith("w1", "하나", AI, { data: BP().dataModel, touched: true });
+});
+
+test("stale_pick_or_submit_rereads_the_blueprint", async () => {
+  await mode(true);
+  vi.mocked(api.getChat)
+    .mockResolvedValueOnce(chatWith(BP()))
+    .mockResolvedValueOnce(chatWith(BP({ version: 2 })))
+    .mockResolvedValue(chatWith(BP({ version: 2, status: "cancelled" })));
+  const stale = { ok: false, code: "STALE", message: "워크플로우가 방금 바뀌었음" };
+  vi.spyOn(api, "chatPickSlot").mockResolvedValue(stale);
+  vi.spyOn(api, "chatSubmitBlueprint").mockResolvedValue(stale);
+  await open();
+  await click("칸");
+  expect(screen.getByRole("alert").textContent).toBe(stale.message);
+  expect(screen.getByTestId("surface").textContent).toContain("v2 active");
+  await click("제출");
+  expect(screen.getAllByRole("alert")).toHaveLength(2);
+  expect(screen.getByTestId("surface").textContent).toContain("v2 cancelled locked");
+  expect(send).not.toHaveBeenCalled();
+});
+
+test("fields_the_user_edited_are_not_highlighted_as_ai_changes", async () => {
+  await mode(true);
+  const v1 = BP();
+  const pdf = { id: "pdf", component: "Checkbox", label: "PDF만", value: { "@path": "/pdf" } };
+  const v2 = BP({ version: 2, components: [{ ...v1.components[0], children: ["name", "pdf"] }, v1.components[1], pdf], dataModel: { ...DATA, pdf: true } });
+  vi.mocked(api.getChat).mockResolvedValueOnce(chatWith(v1)).mockResolvedValue(chatWith(v2));
+  send.mockResolvedValueOnce({ say: "더했어요", cards: [{ kind: "blueprint", version: 2 }], error: null });
+  await open();
+  await click("고침"); // 이름 칸은 사람이 고쳤다
+  await type("PDF만 고르는 칸도 넣어 줘");
+  await enter();
+  expect(screen.getByTestId("surface").textContent).toContain("changed:root,pdf");
+});
