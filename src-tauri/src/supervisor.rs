@@ -1577,8 +1577,11 @@ impl Supervisor {
                 .find(|n| n.id == id)
                 .map(|n| n.event.as_str());
             match samples.get(&id) {
+                // event가 없는 쪽끼리(None == None) 같다고 보지 않는다.
                 Some(s)
-                    if s.status == SampleStatus::Succeeded && s.node["event"].as_str() == event =>
+                    if s.status == SampleStatus::Succeeded
+                        && event.is_some()
+                        && s.node["event"].as_str() == event =>
                 {
                     outputs.insert(id, s.output.clone().unwrap_or_default());
                 }
