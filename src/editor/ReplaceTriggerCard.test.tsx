@@ -27,9 +27,12 @@ test("card_escape_cancels_without_bubbling", () => {
   const onAnswer = vi.fn();
   const outside = vi.fn();
   document.addEventListener("keydown", outside);
-  card({ onAnswer });
-  fireEvent.keyDown(screen.getByRole("button", { name: "취소" }), { key: "Escape" });
-  document.removeEventListener("keydown", outside);
+  try {
+    card({ onAnswer });
+    fireEvent.keyDown(screen.getByRole("button", { name: "취소" }), { key: "Escape" });
+  } finally {
+    document.removeEventListener("keydown", outside);
+  }
   expect(onAnswer).toHaveBeenCalledWith(false);
   expect(outside).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "바꾸기" }));
@@ -41,4 +44,9 @@ test("card_shows_custom_old_label", () => {
   const title = "시작 조건 '매일 아침 9시'을(를) '수동 실행'(으)로 바꿀까요?";
   expect(screen.getByRole("dialog", { name: title })).toBeTruthy();
   expect(screen.getByRole("heading", { name: title })).toBeTruthy();
+});
+
+test("card_title_keeps_special_patterns_in_old_label", () => {
+  render(<ReplaceTriggerCard oldName="a$&{new}$1b" newName="수동 실행" refs={0} folder={false} turnsOff={false} onAnswer={() => {}} />);
+  expect(screen.getByRole("heading", { name: "시작 조건 'a$&{new}$1b'을(를) '수동 실행'(으)로 바꿀까요?" })).toBeTruthy();
 });

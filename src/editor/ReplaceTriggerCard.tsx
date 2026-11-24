@@ -18,7 +18,8 @@ export function ReplaceTriggerCard({
   turnsOff: boolean;
   onAnswer: (ok: boolean) => void;
 }) {
-  const title = t("replace.title").replace("{old}", oldName).replace("{new}", newName);
+  // 한 번에 함수로 바꾼다 — 사용자가 지은 이름 속 `$&`·`{new}`가 치환 패턴으로 읽히지 않게.
+  const title = t("replace.title").replace(/\{(old|new)\}/g, (_, k) => (k === "old" ? oldName : newName));
   return (
     <div
       role="dialog"
