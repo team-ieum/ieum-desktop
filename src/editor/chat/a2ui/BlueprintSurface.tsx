@@ -53,6 +53,10 @@ const useInputOff = () => {
 };
 
 const Options = z.array(z.object({ value: z.string(), label: z.string() }));
+// 렌더러는 바인딩 값의 타입을 바꾸지 않고 Rust도 값 타입은 보지 않는다 — LLM이 낸 엉뚱한 타입이 저장본에 남아도
+// 카드가 죽지 않게 입력마다 제 타입으로 읽는다. 글자 하나는 그것 하나를 고른 것으로 본다.
+const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : typeof v === "string" ? [v] : []);
+const str = (v: unknown) => (typeof v === "string" ? v : "");
 
 // 구현 객체는 모듈에서 한 번만 — 다시 만들면 태그 이름이 -2, -3으로 늘어난다.
 // prop은 Rust 검증 표(`builder/blueprint.rs` COMPONENTS)와 같다. 선택 prop은 multiple·hint·step.event뿐.
@@ -90,7 +94,7 @@ const ChipSelectImpl = createComponentImplementation(
       label={props.label}
       options={props.options}
       multiple={props.multiple}
-      value={props.value ?? []}
+      value={strings(props.value)}
       disabled={useInputOff()}
       onChange={(v) => props.setValue(v)}
     />
@@ -100,19 +104,19 @@ const ChipSelectImpl = createComponentImplementation(
 const SelectImpl = createComponentImplementation(
   { name: "Select", schema: z.object({ label: z.string(), options: Options, value: CommonSchemas.DynamicString }) },
   ({ props }) => (
-    <SelectView label={props.label} options={props.options} value={props.value ?? ""} disabled={useInputOff()} onChange={(v) => props.setValue(v)} />
+    <SelectView label={props.label} options={props.options} value={str(props.value)} disabled={useInputOff()} onChange={(v) => props.setValue(v)} />
   ),
 );
 
 const CheckboxImpl = createComponentImplementation(
   { name: "Checkbox", schema: z.object({ label: z.string(), value: CommonSchemas.DynamicBoolean }) },
-  ({ props }) => <CheckboxView label={props.label} value={props.value ?? false} disabled={useInputOff()} onChange={(v) => props.setValue(v)} />,
+  ({ props }) => <CheckboxView label={props.label} value={props.value === true} disabled={useInputOff()} onChange={(v) => props.setValue(v)} />,
 );
 
 const TextInputImpl = createComponentImplementation(
   { name: "TextInput", schema: z.object({ label: z.string(), value: CommonSchemas.DynamicString, hint: z.string().optional() }) },
   ({ props }) => (
-    <TextInputView label={props.label} hint={props.hint} value={props.value ?? ""} disabled={useInputOff()} onChange={(v) => props.setValue(v)} />
+    <TextInputView label={props.label} hint={props.hint} value={str(props.value)} disabled={useInputOff()} onChange={(v) => props.setValue(v)} />
   ),
 );
 

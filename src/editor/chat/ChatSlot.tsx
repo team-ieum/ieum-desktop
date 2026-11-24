@@ -1,5 +1,5 @@
-import { ArrowDown, ArrowUp, Gauge, Sparkles } from "lucide-react";
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, CircleAlert, Gauge, Sparkles } from "lucide-react";
+import { Component, lazy, type ReactNode, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, type Blueprint, type ChatCard } from "../../api";
 import { ProviderLogo } from "../../assets/providers";
 import { type Key, t } from "../../i18n";
@@ -63,6 +63,23 @@ function savedAi(): Ai {
 }
 
 const Face = () => <ProviderLogo id="ieum" size={28} />;
+
+/** 설계서 카드가 그리다 죽어도(저장본에 남은 이상한 값 등) 채팅은 산다 — 그 자리만 한 줄로 바꾼다. */
+class BlueprintGuard extends Component<{ children: ReactNode }, { broken: boolean }> {
+  state = { broken: false };
+  static getDerivedStateFromError() {
+    return { broken: true };
+  }
+  render() {
+    if (!this.state.broken) return this.props.children;
+    return (
+      <p className="flex items-center gap-1.5 typo-caption1_medium text-neutral-500">
+        <CircleAlert size={13} className="shrink-0" aria-hidden="true" />
+        {t("chat.blueprint.broken")}
+      </p>
+    );
+  }
+}
 
 /** 응답을 기다리는 동안 — 웹 이음과 같은 세 점 + 단계 글. */
 function Typing({ stage }: { stage: "designing" | "testing" | null }) {
@@ -333,22 +350,24 @@ export function ChatSlot({
           ) : item.kind === "blueprint" ? (
             bp && (
               <div key={i} className="pl-9">
-                <Suspense fallback={null}>
-                  <BlueprintSurface
-                    blueprint={bp}
-                    locked={!modeOn || bp.status !== "active"}
-                    busy={busy || bpBusy}
-                    changed={changed}
-                    onSubmit={(data) => void submitBp(data)}
-                    // 토글이 꺼지면 만들기 턴이 아니다 — [이어서 만들기]를 그리지 않는다.
-                    onRetry={modeOn ? sendBuild : undefined}
-                    onPickSlot={(slot) => void pickSlot(slot)}
-                    onData={(data) => {
-                      dataRef.current = data;
-                      touchedRef.current = true;
-                    }}
-                  />
-                </Suspense>
+                <BlueprintGuard>
+                  <Suspense fallback={null}>
+                    <BlueprintSurface
+                      blueprint={bp}
+                      locked={!modeOn || bp.status !== "active"}
+                      busy={busy || bpBusy}
+                      changed={changed}
+                      onSubmit={(data) => void submitBp(data)}
+                      // 토글이 꺼지면 만들기 턴이 아니다 — [이어서 만들기]를 그리지 않는다.
+                      onRetry={modeOn ? sendBuild : undefined}
+                      onPickSlot={(slot) => void pickSlot(slot)}
+                      onData={(data) => {
+                        dataRef.current = data;
+                        touchedRef.current = true;
+                      }}
+                    />
+                  </Suspense>
+                </BlueprintGuard>
               </div>
             )
           ) : item.kind === "blueprintStub" ? (

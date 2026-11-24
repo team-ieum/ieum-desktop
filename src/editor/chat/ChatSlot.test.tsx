@@ -17,6 +17,7 @@ vi.mock("./a2ui/BlueprintSurface", () => {
 });
 const DATA = { name: "날짜_가게_금액.pdf" };
 function Surface(p: BlueprintSurfaceProps) {
+  if (p.blueprint.dataModel.boom) throw new Error("설계서 대역 오류");
   const { version, status, buildPending } = p.blueprint;
   return (
     <div data-testid="surface">
@@ -588,4 +589,19 @@ test("blueprint_slot_and_submit_failures_show_the_reply_message", async () => {
   await click("제출");
   expect(screen.getAllByRole("alert")[1].textContent).toBe("앱 전용 칸을 먼저 골라 주세요");
   expect(send).not.toHaveBeenCalled();
+});
+
+test("broken_blueprint_becomes_one_line_and_chat_lives_on", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.mocked(api.getChat)
+    .mockResolvedValueOnce(chatWith(BP({ dataModel: { boom: true } })))
+    .mockResolvedValue(chatWith(BP({ version: 2 })));
+  send.mockResolvedValueOnce({ say: "고쳤어요", cards: [{ kind: "blueprint", version: 2 }], error: null });
+  await open();
+  expect(await screen.findByText("설계서를 그리지 못했어요")).toBeTruthy();
+  expect(screen.getByText("영수증 정리해 줘")).toBeTruthy(); // 말풍선은 남는다
+  await type("다시 띄워 줘");
+  await enter();
+  expect(screen.getByText("고쳤어요")).toBeTruthy();
+  expect((await screen.findByTestId("surface")).textContent).toContain("v2");
 });

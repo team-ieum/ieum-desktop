@@ -240,3 +240,24 @@ it("changed_highlights_for_two_seconds", () => {
   expect(box.className).not.toContain("bg-amber-50");
   vi.useRealTimers();
 });
+
+// 렌더러는 바인딩 값의 타입을 바꾸지 않는다 — LLM이 낸 엉뚱한 타입이 저장본에 남아도 카드가 죽지 않아야 한다.
+it("mismatched_value_types_render_and_click_without_throwing", async () => {
+  const onData = vi.fn();
+  render(surface({ ...receipt, dataModel: { pick: "date", fmt: ["ymd"], pdf: "yes", name: 5 } }, { onData }));
+  expect(await screen.findByRole("button", { name: "날짜", pressed: true })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "금액", pressed: false })).toBeTruthy();
+  expect((screen.getByRole("combobox", { name: "날짜 형식" }) as HTMLSelectElement).value).toBe("");
+  expect((screen.getByRole("checkbox", { name: "PDF 파일만" }) as HTMLInputElement).checked).toBe(false);
+  expect((screen.getByRole("textbox", { name: "새 이름" }) as HTMLInputElement).value).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: "날짜" }));
+  expect(onData).toHaveBeenLastCalledWith(expect.objectContaining({ pick: [] }));
+});
+
+it("number_or_mixed_chip_values_render_without_throwing", async () => {
+  const { rerender } = render(surface({ ...bp, dataModel: { pick: 123 } }));
+  expect(await screen.findByRole("button", { name: "날짜", pressed: false })).toBeTruthy();
+  rerender(surface({ ...bp, version: 2, dataModel: { pick: [1, "shop", null] } }));
+  expect(await screen.findByRole("button", { name: "가게", pressed: true })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "날짜", pressed: false })).toBeTruthy();
+});
