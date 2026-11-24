@@ -136,6 +136,7 @@ function PaletteButton({ onAdd }: { onAdd: (event: string) => void }) {
         >
           <Palette
             hasTrigger={false}
+            onClose={() => setOpen(false)}
             onAdd={(e) => {
               onAdd(e);
               setOpen(false);
