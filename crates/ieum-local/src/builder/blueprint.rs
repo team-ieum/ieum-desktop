@@ -4,11 +4,13 @@
 //! 슬롯(앱 전용 폴더 칸) 경로는 화면에만 간다 — 요약·에러·`at`에 싣지 않는다.
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{Code, FOLDER_FIELDS, Reply};
+use super::edit;
+use super::{Builder, ChatState, Code, Doc, FOLDER_FIELDS, Reply};
 
 pub const CATALOG_ID: &str = "ieum.chat.blueprint/v1";
 pub const SURFACE_ID: &str = "blueprint";
@@ -332,6 +334,62 @@ pub fn prompt_summary(b: &Blueprint) -> String {
 pub fn clear_slot_paths(b: &mut Blueprint) {
     for s in b.slots.values_mut() {
         s.path = None;
+    }
+}
+
+impl Builder {
+    /// `ui` 동작 — 검증을 통과한 설계서만 저장한다. 워크플로우는 건드리지 않는다.
+    pub(super) fn ui(
+        &self,
+        id: &str,
+        state: &ChatState,
+        messages: &[Value],
+    ) -> Result<Value, Reply> {
+        let current = state.blueprint.as_ref().filter(|b| validate_stored(b));
+        let b = apply_ui(current, messages).map_err(|e| e.reply())?;
+        let version = b.version;
+        self.update_chat(id, |s| s.blueprint = Some(b.clone()))?;
+        Ok(json!({"status": "awaiting_user", "version": version}))
+    }
+
+    /// `bind-folder` 동작 — 제출된 설계서의 슬롯 경로를 노드 폴더 칸에 넣고 슬롯을 다 쓴 것으로 적는다.
+    /// 저장은 다른 변경과 같은 `commit`(끄기·Stale·확인 대기 무효화). 경로는 결과·에러에 싣지 않는다.
+    pub(super) fn bind_folder(
+        &self,
+        id: &str,
+        mut doc: Doc,
+        state: &ChatState,
+        node_id: &str,
+        field: &str,
+        slot: &str,
+    ) -> Result<(), Reply> {
+        let b = state
+            .blueprint
+            .as_ref()
+            .filter(|b| b.status == BlueprintStatus::Submitted && validate_stored(b))
+            .ok_or(Code::BlueprintNotSubmitted)?;
+        let s = b.slots.get(slot).ok_or(Code::SlotUnknown)?;
+        let path = s.path.as_deref().ok_or(Code::SlotEmpty)?;
+        let node = edit::find_mut(&mut doc.workflow, node_id)?;
+        if !edit::is_folder_field(&node.event, field) {
+            return Err(Code::NotFolderField.into());
+        }
+        if s.event != node.event || s.field != field {
+            return Err(Code::SlotMismatch.into());
+        }
+        // 고른 뒤 폴더가 바뀌었을 수 있다. 문구에는 경로가 섞여 있어 버린다.
+        self.host
+            .check_folder(Path::new(path))
+            .map_err(|_| Code::FolderNotAllowed)?;
+        node.config.insert(field.to_string(), path.into());
+        self.commit(id, doc)?;
+        self.update_chat(id, |c| {
+            if let Some(s) = c.blueprint.as_mut().and_then(|b| b.slots.get_mut(slot)) {
+                s.path = None;
+                s.bound_node = Some(node_id.to_string());
+            }
+        })?;
+        Ok(())
     }
 }
 
