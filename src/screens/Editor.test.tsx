@@ -515,3 +515,108 @@ test("last_run_failure_line", async () => {
   const panel2 = await panelOf(r2, "m");
   expect(within(panel2).queryByText(/마지막 실행/)).toBeNull();
 });
+
+// ── 시작 조건 넣기·바꾸기 ──
+const TRIG: WfNode = { id: "t", event: "schedule.daily", type: "TRIGGER", label: "매일 아침 9시", config: { hour: "9", weekends: true }, position: { x: 0, y: 0 } };
+const USES: WfNode = { ...N("a", 320), config: { note: "{{nodes.t.output.triggeredAt}}" } };
+const EDGES = [{ id: "e1", source: "t", target: "a" }];
+const openWithTrigger = (nodes: WfNode[] = [TRIG, USES]) => openSaved({ ...entry(nodes, "v1"), enabled: true, workflow: { nodes, edges: EDGES } });
+const replaceCard = () => screen.queryByRole("dialog", { name: /^시작 조건 '/ });
+const unsavedDot = () => screen.queryByRole("status", { name: "저장 안 된 변경" });
+const saveNow = async () => {
+  const saveSpy = vi.spyOn(api, "saveWorkflow").mockImplementation(async (wf) => ({ ...wf, updatedAt: "v2" }));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "저장" })));
+  return saveSpy.mock.calls[0][0];
+};
+
+test("replacing_trigger_keeps_id_and_edges", async () => {
+  vi.spyOn(api, "githubOptions").mockResolvedValue([] as never);
+  await openWithTrigger();
+  // 시작 조건이 있으면 팔레트의 앱 안 트리거는 접힌다 — hasTrigger가 팔레트까지 간다.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  await act(async () => fireEvent.click(within(palette()!).getByRole("button", { name: "GitHub" })));
+  expect(palette()!.querySelector('[data-event="github.new_issue"]')).toBeNull();
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
+  expect(palette()).toBeNull();
+
+  await addNode("github.new_issue");
+  const card = replaceCard()!;
+  expect(card.textContent).toContain("매일 아침 9시");
+  expect(card.textContent).toContain("새 GitHub 이슈");
+  expect(within(card).getByText("뒤 노드 1개가 이 시작 조건의 결과를 쓰고 있어요. 바꾸면 그 참조가 끊길 수 있어요.")).toBeTruthy();
+  expect(within(card).getByText("바꾸면 워크플로우가 꺼져요. 설정을 확인한 뒤 다시 켜 주세요.")).toBeTruthy();
+  await act(async () => fireEvent.click(within(card).getByRole("button", { name: "바꾸기" })));
+  expect(replaceCard()).toBeNull();
+  expect(screen.getByRole("complementary", { name: "새 GitHub 이슈" })).toBeTruthy();
+  const sent = await saveNow();
+  expect(sent.enabled).toBe(false);
+  expect(sent.workflow.nodes).toHaveLength(2);
+  expect(sent.workflow.nodes[0]).toMatchObject({ id: "t", event: "github.new_issue", label: "새 GitHub 이슈", position: { x: 0, y: 0 } });
+  expect(sent.workflow.edges).toEqual(EDGES);
+});
+
+test("cancel_keeps_workflow", async () => {
+  await openWithTrigger();
+  await addNode("manual.run");
+  await act(async () => fireEvent.click(within(replaceCard()!).getByRole("button", { name: "취소" })));
+  expect(replaceCard()).toBeNull();
+  expect(unsavedDot()).toBeNull();
+});
+
+test("same_trigger_selects_without_card", async () => {
+  await openWithTrigger();
+  await addNode("schedule.daily");
+  expect(replaceCard()).toBeNull();
+  expect(screen.getByRole("complementary", { name: "매일 아침 9시" })).toBeTruthy();
+  expect(unsavedDot()).toBeNull();
+});
+
+test("switch_to_manual_keeps_enabled", async () => {
+  await openWithTrigger();
+  await addNode("manual.run");
+  const card = replaceCard()!;
+  expect(within(card).queryByText("바꾸면 워크플로우가 꺼져요. 설정을 확인한 뒤 다시 켜 주세요.")).toBeNull();
+  await act(async () => fireEvent.click(within(card).getByRole("button", { name: "바꾸기" })));
+  const sent = await saveNow();
+  expect(sent.enabled).toBe(true);
+  expect(sent.workflow.nodes[0]).toMatchObject({ id: "t", event: "manual.run" });
+});
+
+test("two_triggers_just_append", async () => {
+  await openWithTrigger([TRIG, { ...TRIG, id: "u", label: "또 하나" }, USES]);
+  await addNode("manual.run");
+  expect(replaceCard()).toBeNull();
+  const sent = await saveNow();
+  expect(sent.workflow.nodes).toHaveLength(4);
+  expect(sent.workflow.nodes[3].event).toBe("manual.run");
+});
+
+test("first_trigger_goes_to_front", async () => {
+  await openSaved(entry([N("a", 0)], "v1"));
+  await addNode("manual.run");
+  expect(within(screen.getByRole("complementary", { name: "수동 실행" })).getByText(/^1단계/)).toBeTruthy();
+  const sent = await saveNow();
+  expect(sent.workflow.nodes.map((n) => [n.event, n.position])).toEqual([
+    ["manual.run", { x: -320, y: 0 }],
+    ["local.file_trash", { x: 0, y: 0 }],
+  ]);
+});
+
+test("panel_remounts_after_replace", async () => {
+  const r = await openWithTrigger();
+  await panelOf(r, "매일 아침 9시");
+  const before = vi.mocked(api.getSamples).mock.calls.length;
+  await addNode("manual.run");
+  await act(async () => fireEvent.click(within(replaceCard()!).getByRole("button", { name: "바꾸기" })));
+  // 설정·테스트 칸이 새 트리거 기준으로 다시 그려진다(같은 id여도).
+  expect(vi.mocked(api.getSamples).mock.calls.length).toBe(before + 1);
+});
+
+test("slash_ignored_while_replace_card_open", async () => {
+  await openWithTrigger();
+  await addNode("manual.run");
+  expect(replaceCard()).toBeTruthy();
+  await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
+  expect(palette()).toBeNull();
+});

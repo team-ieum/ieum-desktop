@@ -11,7 +11,8 @@ import { Palette } from "../editor/Palette";
 import { RunErrorCard } from "../editor/RunErrorCard";
 import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
 import { Toolbar } from "../editor/Toolbar";
-import { isTrigger } from "../editor/triggerSwap";
+import { ReplaceTriggerCard } from "../editor/ReplaceTriggerCard";
+import { isTrigger, planAdd, prependTrigger, referencingNodes, replaceTrigger } from "../editor/triggerSwap";
 import { useClosing } from "../editor/useClosing";
 import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
@@ -107,7 +108,7 @@ export function NodeHead({ node, step }: { node: WfNode; step?: number }) {
  * 캔버스 왼쪽 가운데 [+] — 누르면 팔레트가 떠 있는 패널로. 바깥 클릭·노드 고르면 닫힌다.
  * Esc는 Palette가 한 단계씩 처리하고 마지막에 onClose — 여기서 document Esc를 따로 받으면 SidePanel까지 같이 닫힌다.
  */
-function PaletteButton({ onAdd, hasTrigger }: { onAdd: (event: string) => void; hasTrigger: boolean }) {
+function PaletteButton({ onAdd, hasTrigger, slashOff }: { onAdd: (event: string) => void; hasTrigger: boolean; slashOff: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -118,8 +119,9 @@ function PaletteButton({ onAdd, hasTrigger }: { onAdd: (event: string) => void; 
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [open]);
-  // `/`로 연다 — 입력 칸·터미널에서 친 /는 글자라 건드리지 않는다.
+  // `/`로 연다 — 입력 칸·터미널에서 친 /는 글자라 건드리지 않는다. 확인 카드가 떠 있으면 그 답이 먼저다.
   useEffect(() => {
+    if (slashOff) return;
     const h = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
       if ((e.target as Element | null)?.closest?.('input, textarea, select, [contenteditable], .xterm')) return;
@@ -130,7 +132,7 @@ function PaletteButton({ onAdd, hasTrigger }: { onAdd: (event: string) => void; 
     };
     document.addEventListener("keydown", h);
     return () => document.removeEventListener("keydown", h);
-  }, []);
+  }, [slashOff]);
   return (
     <div ref={ref} className="absolute left-4 top-1/2 z-40 -translate-y-1/2">
       <button
@@ -211,6 +213,8 @@ export function Editor({
     return () => onIdChange?.("");
   }, [draft.id, onIdChange]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 시작 조건을 다른 트리거로 바꿀지 묻는 중.
+  const [swap, setSwap] = useState<{ old: WfNode; event: string } | null>(null);
   const [techInfo, setTechInfo] = useState(false);
   /** Assistant 패널이 가리는 캔버스 오른쪽 폭(px). */
   const [cover, setCover] = useState(0);
@@ -246,9 +250,31 @@ export function Editor({
   const setNode = (node: WfNode) => setWorkflow({ ...wf, nodes: wf.nodes.map((n) => (n.id === node.id ? node : n)) });
 
   const add = (event: string) => {
+    const plan = planAdd(wf, event);
+    if (plan.kind === "select") return showNode(plan.id);
+    if (plan.kind === "ask") return setSwap({ old: plan.old, event });
+    if (plan.kind === "prepend") {
+      const node = newNode(event, { x: 0, y: 0 }, nodeTitle(event));
+      setWorkflow(prependTrigger(wf, node));
+      return setSelectedId(node.id);
+    }
     const node = newNode(event, nextPosition(wf.nodes), nodeTitle(event));
     setWorkflow({ ...wf, nodes: [...wf.nodes, node] });
     setSelectedId(node.id);
+  };
+
+  const answerSwap = (ok: boolean) => {
+    if (ok && swap) {
+      const { old, event } = swap;
+      // 수동 실행은 켜고 끌 것이 없다 — 그 밖의 트리거는 설정을 확인하기 전까지 돌지 않게 끈다.
+      setDraft((d) => ({
+        ...d,
+        workflow: replaceTrigger(d.workflow, old.id, newNode(event, old.position ?? { x: 0, y: 0 }, nodeTitle(event))),
+        enabled: event === "manual.run" ? d.enabled : false,
+      }));
+      setSelectedId(old.id);
+    }
+    setSwap(null);
   };
 
   const remove = (nodeId: string) => {
@@ -408,7 +434,7 @@ export function Editor({
             focus={focus}
           />
         </div>
-        <PaletteButton onAdd={add} hasTrigger={wf.nodes.some(isTrigger)} />
+        <PaletteButton onAdd={add} hasTrigger={wf.nodes.some(isTrigger)} slashOff={!!swap} />
         <AssistantPanel
           workflowId={draft.id}
           onOpenChange={(open) => void onAssistant(open)}
@@ -425,6 +451,16 @@ export function Editor({
           onOpenIntegrations={onOpenIntegrations}
           onOpenAiSettings={onOpenAiSettings}
         />
+        {swap && (
+          <ReplaceTriggerCard
+            oldName={swap.old.label || nodeTitle(swap.old.event)}
+            newName={nodeTitle(swap.event)}
+            refs={referencingNodes(wf, swap.old.id).length}
+            folder={swap.old.event === "local.folder_new_file" && wf.nodes.some((n) => n.event.startsWith("local.file_"))}
+            turnsOff={draft.enabled && swap.event !== "manual.run"}
+            onAnswer={answerSwap}
+          />
+        )}
         {testRun.ask && <HttpConfirm lines={testRun.ask} skipLabel={t("common.cancel")} onAnswer={testRun.answer} />}
         {selected && (
           <SidePanel
@@ -448,10 +484,10 @@ export function Editor({
             }
           >
             <div className="flex-1 p-5">
-              <ConfigPanel key={selected.id} node={selected} workflow={wf} onChange={setNode} onOpenIntegrations={onOpenIntegrations} />
+              <ConfigPanel key={`${selected.id}:${selected.event}`} node={selected} workflow={wf} onChange={setNode} onOpenIntegrations={onOpenIntegrations} />
             </div>
             <NodeTestSection
-              key={selected.id}
+              key={`${selected.id}:${selected.event}`}
               workflowId={draft.id || null}
               workflow={wf}
               node={selected}

@@ -572,6 +572,11 @@ const ko = {
   "palette.keys.move": "이동",
   "palette.keys.add": "추가",
   "palette.keys.close": "닫기",
+  "replace.title": "시작 조건 '{old}'을(를) '{new}'(으)로 바꿀까요?",
+  "replace.refs": "뒤 노드 {n}개가 이 시작 조건의 결과를 쓰고 있어요. 바꾸면 그 참조가 끊길 수 있어요.",
+  "replace.folder": "파일 노드가 쓸 수 있는 폴더도 함께 바뀌어요.",
+  "replace.off": "바꾸면 워크플로우가 꺼져요. 설정을 확인한 뒤 다시 켜 주세요.",
+  "replace.ok": "바꾸기",
 
   "assistant.open": "IEUM Assistant 열기",
   "assistant.close": "IEUM Assistant 닫기",
@@ -1946,6 +1951,11 @@ const en: Record<Key, string> = {
   "palette.keys.move": "move",
   "palette.keys.add": "add",
   "palette.keys.close": "close",
+  "replace.title": "Replace the start condition '{old}' with '{new}'?",
+  "replace.refs": "{n} later node(s) use this start condition's output. Replacing it may break those references.",
+  "replace.folder": "The folders file nodes can use will change too.",
+  "replace.off": "Replacing it turns the workflow off. Check the settings, then turn it back on.",
+  "replace.ok": "Replace",
 
   "assistant.open": "Open IEUM Assistant",
   "assistant.close": "Close IEUM Assistant",
