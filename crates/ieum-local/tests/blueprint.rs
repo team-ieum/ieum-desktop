@@ -103,6 +103,16 @@ fn create_surface_converts_path_bindings_to_v1() {
 }
 
 #[test]
+fn accepts_optional_version_key() {
+    let mut m = create(comps());
+    m["version"] = json!("1.0");
+    assert_eq!(ok(None, json!([m.clone()])).version, 1);
+    m["version"] = json!("0.9");
+    assert_eq!(rule(None, json!([m])), "message_kind");
+    assert_eq!(rule(None, json!([{"version": "1.0"}])), "message_kind");
+}
+
+#[test]
 fn rejects_types_outside_catalog() {
     let img = json!({"id": "img", "component": "Image", "url": "https://x"});
     assert_eq!(rule(None, plus(img)), "component_type");

@@ -168,8 +168,14 @@ pub fn apply_ui(current: Option<&Blueprint>, messages: &[Value]) -> Result<Bluep
         });
     for (i, m) in messages.iter().enumerate() {
         let at = || Some(format!("messages[{i}]"));
-        let (kind, body) = match m.as_object() {
-            Some(o) if o.len() == 1 => o.iter().next().expect("키 하나"),
+        // A2UI v1.0 문서가 가르치는 봉투 키 — 모델이 습관적으로 붙인다. 값이 "1.0"일 때만 무시한다.
+        let mut keys = m
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(k, v)| !(*k == "version" && *v == "1.0"));
+        let (kind, body) = match (keys.next(), keys.next()) {
+            (Some(entry), None) => entry,
             _ => return Err(fail("message_kind", at())),
         };
         let allowed: &[&str] = match kind.as_str() {
