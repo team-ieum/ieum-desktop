@@ -113,3 +113,4 @@ event가 `(참조식)`이면 특정 노드가 아니라 모든 칸의 참조식 
 | 파일 노드 | 해당 없음 → 파일 노드 테스트는 실행한 뒤 되돌리고, 샘플의 경로를 원래 경로로 바꿔 저장한다 | 없`src-tauri/tests/node_test.rs` `file_node_sample_uses_undone_path` |
 | 실행 기록 | 클라우드는 사용량·한도 때문에 남김 → 데스크톱도 노드 테스트가 `test` 실행 기록을 남긴다(exec-event는 내지 않아 캔버스·실행 목록은 그대로) | 없`src-tauri/tests/node_test.rs` `run_record_keeps_usage` |
 | 검증 | 클라우드는 그래프 전체 검증 → 데스크톱은 노드 단위 검증만으로 테스트한다(그래프 오류는 막지 않음) | 없`crates/ieum-engine/tests/run_node.rs` `node_errors_ignores_graph_errors` |
+| 앞 노드 샘플 | 샘플을 노드 id로만 찾음 → 샘플의 event가 지금 노드와 다르면 없는 것으로 본다(데스크톱 팔레트는 트리거를 같은 id로 바꾼다) | `src-tauri/tests/node_test.rs` `stale_event_sample_counts_as_missing` |

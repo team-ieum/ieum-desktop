@@ -1570,8 +1570,16 @@ impl Supervisor {
         let samples = self.store().get_samples(workflow_id)?;
         let (mut outputs, mut missing) = (Outputs::new(), Vec::new());
         for id in referenced_node_ids(&Value::Object(node.config.clone())) {
+            // 트리거를 같은 id로 바꾸면(팔레트) 옛 트리거 샘플이 남는다 — event가 다르면 없는 것으로. GAPS.md 노드별 테스트
+            let event = wf
+                .nodes
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| n.event.as_str());
             match samples.get(&id) {
-                Some(s) if s.status == SampleStatus::Succeeded => {
+                Some(s)
+                    if s.status == SampleStatus::Succeeded && s.node["event"].as_str() == event =>
+                {
                     outputs.insert(id, s.output.clone().unwrap_or_default());
                 }
                 _ => missing.push(id),

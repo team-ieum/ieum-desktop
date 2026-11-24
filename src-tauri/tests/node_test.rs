@@ -230,6 +230,27 @@ async fn failed_sample_counts_as_missing() {
     assert_eq!(env.ai.calls.load(Ordering::SeqCst), 0);
 }
 
+/// 트리거를 같은 id로 바꾸면 옛 트리거 샘플이 남는다 — event가 다르면 없는 것으로 본다(GAPS.md 노드별 테스트).
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_event_sample_counts_as_missing() {
+    let env = env();
+    let wf = move_wf(&env.dir("in"), &env.dir("out"));
+    let id = save(&env, wf.clone());
+    seed(
+        &env,
+        &id,
+        "t",
+        Sample {
+            node: json!({"event": "schedule.daily", "config": {}}),
+            ..sample(SampleStatus::Succeeded, json!({"path": "/x"}))
+        },
+    );
+    let r = env.sup.test_node(&id, wf, "m", None).await.unwrap();
+    assert_eq!(r.status, NodeTestStatus::Missing, "{r:?}");
+    assert_eq!(r.missing, vec!["t".to_string()]);
+    assert!(!env.store.get_samples(&id).unwrap().contains_key("m"));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn invalid_does_not_overwrite_sample() {
     let env = env();
