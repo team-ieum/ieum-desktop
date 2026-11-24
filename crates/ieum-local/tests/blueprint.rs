@@ -265,6 +265,33 @@ fn validate_stored_rejects_orphans() {
 }
 
 #[test]
+fn validate_stored_rejects_duplicate_ids() {
+    // 변조본: root·자식 id를 다시 쓴 컴포넌트는 고아 정리를 빠져나간다.
+    let extra =
+        json!({"id": "x", "component": "TextInput", "label": "몰래", "value": {"@path": "/x"}});
+    for id in ["root", "name"] {
+        let mut b = base();
+        let mut dup = extra.clone();
+        dup["id"] = json!(id);
+        b.components.push(dup);
+        assert!(!validate_stored(&b), "{id}");
+    }
+    // AppGate를 slots와 맞춰 몰래 더한 경우도.
+    let mut b = base();
+    b.components
+        .push(gate("go", "local.file_move", "baseFolder"));
+    b.slots.insert(
+        "go".into(),
+        Slot {
+            event: "local.file_move".into(),
+            field: "baseFolder".into(),
+            ..Default::default()
+        },
+    );
+    assert!(!validate_stored(&b));
+}
+
+#[test]
 fn create_while_submitted_replaces_with_fresh_active() {
     let mut old = base();
     old.status = BlueprintStatus::Submitted;

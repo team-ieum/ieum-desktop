@@ -342,7 +342,13 @@ fn normalize(comps: &mut Vec<Value>, d: Dialect) -> Result<Vec<Gate>, UiError> {
     if comps.len() > MAX_COMPONENTS {
         return Err(fail("limit", None));
     }
+    // 입력은 id upsert라 중복이 없다. 저장본에 id를 다시 쓴 컴포넌트가 있으면 고아 정리를 빠져나가므로 거부한다.
+    let mut ids = HashSet::new();
     for c in comps.iter_mut() {
+        let id = c["id"].as_str().unwrap_or_default();
+        if !ids.insert(id.to_string()) {
+            return Err(fail("root", Some(id.into())));
+        }
         check_component(c, d)?;
     }
     // 여기부터 모든 원소는 표대로 생긴 객체다.
