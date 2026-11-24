@@ -11,6 +11,8 @@ import { Palette } from "../editor/Palette";
 import { RunErrorCard } from "../editor/RunErrorCard";
 import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
 import { Toolbar } from "../editor/Toolbar";
+import { ReplaceTriggerCard } from "../editor/ReplaceTriggerCard";
+import { isTrigger, planAdd, prependTrigger, referencingNodes, replaceTrigger } from "../editor/triggerSwap";
 import { useClosing } from "../editor/useClosing";
 import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
@@ -102,11 +104,13 @@ export function NodeHead({ node, step }: { node: WfNode; step?: number }) {
   );
 }
 
-/** 캔버스 왼쪽 가운데 [+] — 누르면 팔레트가 떠 있는 패널로. 바깥 클릭·Esc·노드 고르면 닫힌다. */
-function PaletteButton({ onAdd }: { onAdd: (event: string) => void }) {
+/**
+ * 캔버스 왼쪽 가운데 [+] — 누르면 팔레트가 떠 있는 패널로. 바깥 클릭·노드 고르면 닫힌다.
+ * Esc는 Palette가 한 단계씩 처리하고 마지막에 onClose — 여기서 document Esc를 따로 받으면 SidePanel까지 같이 닫힌다.
+ */
+function PaletteButton({ onAdd, hasTrigger, blocked }: { onAdd: (event: string) => void; hasTrigger: boolean; blocked: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  useEscape(() => setOpen(false), open);
   useEffect(() => {
     if (!open) return;
     const h = (e: MouseEvent) => {
@@ -115,26 +119,41 @@ function PaletteButton({ onAdd }: { onAdd: (event: string) => void }) {
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [open]);
+  // `/`로 연다 — 입력 칸·터미널에서 친 /는 글자라 건드리지 않는다. 확인 카드가 떠 있으면(blocked) 그 답이 먼저다.
+  useEffect(() => {
+    if (blocked) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.target as Element | null)?.closest?.('input, textarea, select, [contenteditable], .xterm')) return;
+      e.preventDefault();
+      setOpen(true);
+      // 이미 열려 있으면 검색 칸을 되찾는다 — WKWebView에선 포커스가 body로 빠질 수 있다.
+      ref.current?.querySelector<HTMLInputElement>('[role="combobox"]')?.focus();
+    };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [blocked]);
   return (
-    <div ref={ref} className="absolute left-4 top-1/2 z-10 -translate-y-1/2">
+    <div ref={ref} className="absolute left-4 top-1/2 z-40 -translate-y-1/2">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        // 확인 카드가 떠 있는 동안은 [+]도 막는다 — 팔레트(z-40)가 카드(z-30) 위를 덮지 않게.
+        disabled={blocked}
         aria-label={t("editor.palette")}
-        title={t("editor.palette")}
+        title={t("palette.openTitle")}
         aria-expanded={open}
         aria-haspopup="dialog"
-        className="grid size-11 cursor-pointer place-items-center rounded-full bg-main-deep-blue text-white shadow-[0_8px_20px_rgba(41,83,124,0.3)] transition-opacity hover:opacity-90"
+        className="grid size-11 cursor-pointer place-items-center rounded-full bg-main-deep-blue text-white shadow-[0_8px_20px_rgba(41,83,124,0.3)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Plus size={22} aria-hidden="true" />
       </button>
       {open && (
-        <div
-          role="dialog"
-          aria-label={t("editor.palette")}
-          className="absolute left-14 top-1/2 max-h-[min(40rem,80vh)] w-64 -translate-y-1/2 overflow-y-auto rounded-2xl border border-neutral-200 bg-white p-4 shadow-[0_14px_40px_rgba(43,72,86,0.18)]"
-        >
+        // 스크롤은 목록·옆 창이 각자 한다 — 여기서 overflow를 걸면 옆 창이 잘린다.
+        <div role="dialog" aria-label={t("editor.palette")} className="absolute left-14 top-1/2 flex -translate-y-1/2">
           <Palette
+            hasTrigger={hasTrigger}
+            onClose={() => setOpen(false)}
             onAdd={(e) => {
               onAdd(e);
               setOpen(false);
@@ -196,6 +215,9 @@ export function Editor({
     return () => onIdChange?.("");
   }, [draft.id, onIdChange]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 시작 조건을 다른 트리거로 바꿀지 묻는 중.
+  // 옛 노드는 id로만 들고 그릴 때마다 지금 워크플로우에서 찾는다 — 카드가 떠 있는 동안 지워지거나 바뀔 수 있다.
+  const [swap, setSwap] = useState<{ oldId: string; event: string } | null>(null);
   const [techInfo, setTechInfo] = useState(false);
   /** Assistant 패널이 가리는 캔버스 오른쪽 폭(px). */
   const [cover, setCover] = useState(0);
@@ -229,11 +251,41 @@ export function Editor({
   const general = errors.filter((e) => !e.nodeId || !known.has(e.nodeId));
   const setWorkflow = (workflow: StoredWorkflow["workflow"]) => setDraft((d) => ({ ...d, workflow }));
   const setNode = (node: WfNode) => setWorkflow({ ...wf, nodes: wf.nodes.map((n) => (n.id === node.id ? node : n)) });
+  const swapOld = swap ? wf.nodes.find((n) => n.id === swap.oldId && isTrigger(n) && n.event !== swap.event) : undefined;
+  // 옛 트리거가 지워졌거나(휴지통·빌더 AI) 더는 바꿀 대상이 아니면 묻던 것을 접는다.
+  if (swap && !swapOld) setSwap(null);
 
   const add = (event: string) => {
+    const plan = planAdd(wf, event);
+    if (plan.kind === "select") return showNode(plan.id);
+    if (plan.kind === "ask") return setSwap({ oldId: plan.old.id, event });
+    if (plan.kind === "prepend") {
+      const node = newNode(event, { x: 0, y: 0 }, nodeTitle(event));
+      setWorkflow(prependTrigger(wf, node));
+      return setSelectedId(node.id);
+    }
     const node = newNode(event, nextPosition(wf.nodes), nodeTitle(event));
     setWorkflow({ ...wf, nodes: [...wf.nodes, node] });
     setSelectedId(node.id);
+  };
+
+  const answerSwap = (ok: boolean) => {
+    if (ok && swap && swapOld) {
+      const { oldId, event } = swap;
+      // 수동 실행은 켜고 끌 것이 없다 — 그 밖의 트리거는 설정을 확인하기 전까지 돌지 않게 끈다.
+      // 그사이 옛 트리거가 사라졌으면 아무것도 바꾸지 않는다(켜짐만 꺼지는 일이 없게).
+      setDraft((d) =>
+        d.workflow.nodes.some((n) => n.id === oldId)
+          ? {
+              ...d,
+              workflow: replaceTrigger(d.workflow, oldId, newNode(event, { x: 0, y: 0 }, nodeTitle(event))),
+              enabled: event === "manual.run" ? d.enabled : false,
+            }
+          : d,
+      );
+      setSelectedId(oldId);
+    }
+    setSwap(null);
   };
 
   const remove = (nodeId: string) => {
@@ -393,7 +445,7 @@ export function Editor({
             focus={focus}
           />
         </div>
-        <PaletteButton onAdd={add} />
+        <PaletteButton onAdd={add} hasTrigger={wf.nodes.some(isTrigger)} blocked={!!swapOld || !!testRun.ask} />
         <AssistantPanel
           workflowId={draft.id}
           onOpenChange={(open) => void onAssistant(open)}
@@ -410,6 +462,16 @@ export function Editor({
           onOpenIntegrations={onOpenIntegrations}
           onOpenAiSettings={onOpenAiSettings}
         />
+        {swap && swapOld && (
+          <ReplaceTriggerCard
+            oldName={swapOld.label || nodeTitle(swapOld.event)}
+            newName={nodeTitle(swap.event)}
+            refs={referencingNodes(wf, swapOld.id).length}
+            folder={swapOld.event === "local.folder_new_file" && wf.nodes.some((n) => n.event.startsWith("local.file_"))}
+            turnsOff={draft.enabled && swap.event !== "manual.run"}
+            onAnswer={answerSwap}
+          />
+        )}
         {testRun.ask && <HttpConfirm lines={testRun.ask} skipLabel={t("common.cancel")} onAnswer={testRun.answer} />}
         {selected && (
           <SidePanel
@@ -433,10 +495,10 @@ export function Editor({
             }
           >
             <div className="flex-1 p-5">
-              <ConfigPanel key={selected.id} node={selected} workflow={wf} onChange={setNode} onOpenIntegrations={onOpenIntegrations} />
+              <ConfigPanel key={`${selected.id}:${selected.event}`} node={selected} workflow={wf} onChange={setNode} onOpenIntegrations={onOpenIntegrations} />
             </div>
             <NodeTestSection
-              key={selected.id}
+              key={`${selected.id}:${selected.event}`}
               workflowId={draft.id || null}
               workflow={wf}
               node={selected}
