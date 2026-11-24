@@ -608,14 +608,14 @@ async fn submit_while_turn_running_is_busy() {
     let first = send(&env.sup, &b, &id, "하나", ai(), Limits::default(), &|_| {});
     let second = async {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        submit(&b, &id, 1, data.clone()).await
+        submit(&b, &id, 1, data.clone(), None).await
     };
     let (a, s) = tokio::join!(first, second);
     assert!(a.is_ok());
     assert_eq!(s.unwrap_err(), CHAT_BUSY);
     assert_eq!(stored_bp(&env, &id).status, BlueprintStatus::Active);
     // 턴이 끝난 뒤에는 제출된다.
-    let r = submit(&b, &id, 1, data).await.unwrap();
+    let r = submit(&b, &id, 1, data, None).await.unwrap();
     assert!(r.ok, "{r:?}");
     let bp = stored_bp(&env, &id);
     assert_eq!(

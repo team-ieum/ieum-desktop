@@ -1,7 +1,7 @@
 //! 채팅 패널의 앱 쪽 — 대화 루프(`ieum_local::chat`)를 돌리고 대화·사용량을 채팅 파일에 남긴다.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -17,6 +17,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::active::Active;
 use crate::builder_host::{PickFolder, builder_of};
 use crate::key_limits::{after_use, used_keys};
+use crate::metrics::{event_line, turn_lines};
 use crate::store::now;
 use crate::supervisor::{AppEvent, Supervisor};
 
@@ -94,6 +95,13 @@ fn filled(v: Option<String>) -> Option<String> {
     v.filter(|s| !s.trim().is_empty())
 }
 
+/// 실측 줄을 덧붙인다. 실패해도 턴 결과는 그대로 — 로그에 경로·내용은 남기지 않는다.
+fn record(path: &Path, lines: &[Value]) {
+    if let Err(e) = crate::metrics::append(path, lines) {
+        eprintln!("[ieum] 실측 기록을 쓰지 못했어요: {}", e.kind());
+    }
+}
+
 /// 만들기를 기다리는 설계서 — 제출됐고 아직 오류 없이 끝난 만들기 턴이 없다.
 fn building(b: &mut Option<Blueprint>) -> Option<&mut Blueprint> {
     b.as_mut()
@@ -159,6 +167,16 @@ pub async fn send_with(
         return Err(CHAT_BAD_DATA.into());
     }
     let chat = store.get_chat(workflow_id)?;
+    let mode = if opts.blueprint {
+        "blueprint"
+    } else {
+        "classic"
+    };
+    let before = chat
+        .state
+        .blueprint
+        .as_ref()
+        .map(|b| (b.status, b.build_pending));
     // 저장 파일은 믿지 않는다 — 검증을 못 넘은 설계서는 프롬프트에 싣지 않는다.
     let summary = chat
         .state
@@ -166,6 +184,7 @@ pub async fn send_with(
         .filter(|b| opts.blueprint && validate_stored(b))
         .map(|b| prompt_summary(&b));
     let history = chat.messages;
+    let mut attempt = None;
     store.update_chat(workflow_id, |c| {
         c.messages.push(ChatMessage {
             role: Role::User,
@@ -178,6 +197,7 @@ pub async fn send_with(
             && let Some(b) = building(&mut c.state.blueprint)
         {
             b.build_attempts += 1;
+            attempt = Some(b.build_attempts);
         }
     })?;
     let turn = run_turn(
@@ -200,7 +220,7 @@ pub async fn send_with(
         on_stage,
     )
     .await;
-    store.update_chat(workflow_id, |c| {
+    let saved = store.update_chat(workflow_id, |c| {
         if !turn.say.is_empty() {
             c.messages.push(ChatMessage {
                 role: Role::Assistant,
@@ -221,6 +241,33 @@ pub async fn send_with(
             b.build_pending = false;
         }
     })?;
+    if let Some(path) = &opts.metrics {
+        let at = now();
+        let event = |name, attempt| event_line(&at, workflow_id, mode, name, attempt);
+        let mut lines = Vec::new();
+        match before {
+            Some((BlueprintStatus::Active, _)) if !opts.touched => {
+                lines.push(event("blueprint_ignored", None));
+            }
+            Some((BlueprintStatus::Submitted, false)) => {
+                lines.push(event("text_fix_after_submit", None));
+            }
+            _ => {}
+        }
+        if attempt.is_some() {
+            lines.push(event("build_turn", attempt));
+        }
+        lines.extend(turn_lines(&at, workflow_id, mode, &turn));
+        // 떠 있던 설계서가 이 턴의 직접 편집으로 취소됐다(새 설계서를 띄우지도 않고).
+        let after = saved.state.blueprint.map(|b| b.status);
+        if matches!(before, Some((BlueprintStatus::Active, _)))
+            && after == Some(BlueprintStatus::Cancelled)
+            && !turn.ops.iter().any(|o| o.ui == Some("create"))
+        {
+            lines.push(event("blueprint_bypassed", None));
+        }
+        record(path, &lines);
+    }
     // 사용량을 채팅 파일에 쓴 뒤 — 이번 턴 지출이 이번 달 합계에 들어가야 한다.
     let used = used_keys(turn.usage.iter().cloned());
     for n in after_use(store, &used, chrono::Local::now()) {
@@ -234,14 +281,30 @@ pub async fn send_with(
 }
 
 /// 설계서 카드의 [이대로 만들기]. 도는 턴은 제출 전 설계서를 보고 있으므로 그동안은 막는다.
+/// `metrics` = 실측 기록 파일(None이면 쓰지 않는다).
 pub async fn submit(
     builder: &Builder,
     workflow_id: &str,
     version: u32,
     data: Value,
+    metrics: Option<&Path>,
 ) -> Result<Reply, String> {
     let _running = Running::start(workflow_id)?;
-    Ok(builder.submit_blueprint(workflow_id, version, data).await)
+    let reply = builder.submit_blueprint(workflow_id, version, data).await;
+    if reply.ok
+        && let Some(path) = metrics
+    {
+        // 제출은 설계서 카드에서만 온다.
+        let line = event_line(
+            &now(),
+            workflow_id,
+            "blueprint",
+            "blueprint_submitted",
+            None,
+        );
+        record(path, &[line]);
+    }
+    Ok(reply)
 }
 
 /// 화면에 줄 채팅 파일. 검증을 못 넘은 저장본 설계서는 없는 것으로 본다.
@@ -328,7 +391,12 @@ pub async fn chat_submit_blueprint(
     data: Value,
 ) -> Result<Reply, String> {
     let builder = builder_of(&active, &pick).await?;
-    submit(&builder, &workflow_id, version, data).await
+    let metrics = active
+        .settings()
+        .get_settings()?
+        .chat_metrics
+        .then(|| active.app_data().join("metrics/chat.jsonl"));
+    submit(&builder, &workflow_id, version, data, metrics.as_deref()).await
 }
 
 /// 설계서 카드의 앱 전용 폴더 칸 — 사람이 눌러야만 폴더 창이 열린다. 성공 data의 경로는 화면 전용.

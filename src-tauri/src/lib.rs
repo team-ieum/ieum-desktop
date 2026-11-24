@@ -9,6 +9,7 @@ pub mod github;
 pub mod http_confirm;
 pub mod key_limits;
 pub mod limit_watch;
+pub mod metrics;
 pub mod models;
 pub mod notify;
 pub mod permissions;
