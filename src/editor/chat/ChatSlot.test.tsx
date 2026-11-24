@@ -7,7 +7,7 @@ import { useCredentials } from "../../stores/credentials";
 import { useSettings } from "../../stores/settings";
 import type { BlueprintSurfaceProps } from "./a2ui/BlueprintSurface";
 import { aiChoices, AI_KEY } from "./chatAi";
-import { ChatSlot } from "./ChatSlot";
+import { changedIds, ChatSlot } from "./ChatSlot";
 
 // 설계서 래퍼 대역 — 모듈을 처음 불러올 때만 팩토리가 돈다(`loaded`). 받은 props를 글로 드러내고 콜백 버튼을 둔다.
 let loaded = false;
@@ -459,6 +459,28 @@ test("blueprint_card_moves_to_bottom_and_leaves_stub", async () => {
   await click("칸");
   expect(api.getChat).toHaveBeenCalledTimes(4);
   expect(screen.getByTestId("surface").textContent).toContain("changed:name");
+});
+
+test("changed_includes_components_whose_bound_value_changed", () => {
+  const components = [
+    { id: "root", component: "Blueprint", title: "영수증 정리", children: ["pick", "name"] },
+    {
+      id: "pick",
+      component: "ChipSelect",
+      label: "이름에 넣을 것",
+      options: [
+        { value: "date", label: "날짜" },
+        { value: "shop", label: "가게" },
+        { value: "amount", label: "금액" },
+      ],
+      multiple: true,
+      value: { "@path": "/pick" },
+    },
+    { id: "name", component: "TextInput", label: "새 이름", value: { "@path": "/name" } },
+  ];
+  const old = BP({ components, dataModel: { pick: ["date", "shop"], name: "a" } });
+  const next = BP({ version: 2, components, dataModel: { pick: ["date", "shop", "amount"], name: "a" } });
+  expect(changedIds(old, next)).toEqual(["pick"]);
 });
 
 test("send_carries_blueprint_data_only_while_active", async () => {

@@ -21,9 +21,24 @@ type Item =
   | { kind: "blueprintStub"; title: string };
 
 const titleOf = (b: Blueprint) => String(b.components.find((c) => c.id === "root")?.title ?? "");
-/** AI가 고친 컴포넌트 — 같은 id의 JSON이 달라졌거나 새로 생긴 것. */
-const changedIds = (old: Blueprint, next: Blueprint) =>
-  next.components.filter((c) => JSON.stringify(c) !== JSON.stringify(old.components.find((o) => o.id === c.id))).map((c) => String(c.id));
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** JSON Pointer 위치의 값. 없으면 undefined. */
+const at = (doc: unknown, pointer: string) =>
+  pointer
+    .split("/")
+    .slice(1)
+    .reduce<unknown>((v, k) => (v !== null && typeof v === "object" ? (v as Record<string, unknown>)[k.replace(/~1/g, "/").replace(/~0/g, "~")] : undefined), doc);
+/** 컴포넌트가 묶인 데이터 경로(`{"@path": p}` prop). */
+const boundPaths = (c: Record<string, unknown>) =>
+  Object.values(c).flatMap((v) => {
+    const p = (v as { "@path"?: unknown } | null)?.["@path"];
+    return typeof p === "string" ? [p] : [];
+  });
+/** AI가 고친 컴포넌트 — 같은 id의 JSON이 달라졌거나 새로 생겼거나, 묶인 값이 바뀐 것. */
+export const changedIds = (old: Blueprint, next: Blueprint) =>
+  next.components
+    .filter((c) => !same(c, old.components.find((o) => o.id === c.id)) || boundPaths(c).some((p) => !same(at(old.dataModel, p), at(next.dataModel, p))))
+    .map((c) => String(c.id));
 const failText = (e: unknown) => t(e === "CHAT_BUSY" ? "chat.error.busy" : "chat.error.failed");
 
 const BUBBLE = "max-w-[280px] px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap";
