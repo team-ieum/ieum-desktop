@@ -338,3 +338,32 @@ fn old_pending_reads_as_enable() {
         (Some("/x"), FinishButton::Enable)
     );
 }
+
+/// 완료 확인이 끝나면 쓰지 않고 남은 슬롯 경로를 들고 있지 않는다.
+#[tokio::test]
+async fn confirm_clears_unused_slot_paths() {
+    let Env { h, b, watch, .. } = &setup();
+    let mut bp = apply_ui(
+        None,
+        &[json!({"createSurface": {
+            "surfaceId": "blueprint", "catalogId": "ieum.chat.blueprint/v1",
+            "components": [
+                {"id": "root", "component": "Blueprint", "title": "정리", "children": ["dest", "go"]},
+                {"id": "dest", "component": "AppGate", "slot": "dest",
+                    "target": {"event": "local.file_move", "field": "baseFolder"}},
+                {"id": "go", "component": "SubmitButton"}
+            ]
+        }})],
+    )
+    .unwrap();
+    bp.status = BlueprintStatus::Submitted;
+    bp.slots.get_mut("dest").unwrap().path = Some(watch.display().to_string());
+    h.update_chat(W, &mut |c| c.state.blueprint = Some(bp.clone()))
+        .unwrap();
+    assert!(run(b, finish()).await.ok);
+    let r = b.confirm_finish(W, true).await;
+    assert!(r.ok, "{r:?}");
+    assert!(h.doc(W).enabled);
+    let bp = h.load_chat(W).unwrap().state.blueprint.unwrap();
+    assert_eq!(bp.slots["dest"].path, None);
+}

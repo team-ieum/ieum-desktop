@@ -221,3 +221,128 @@ fn terminal_rejects_ui_and_bind_folder() {
         assert_eq!(r.code, Some(Code::BadRequest), "{op}");
     }
 }
+
+#[tokio::test]
+async fn submit_requires_active_same_version_and_all_slots() {
+    let h = MemHost::with(W, wf());
+    let b = Builder::new(h.clone()).unwrap();
+    let data = json!({"name": "정리"});
+    let r = b.submit_blueprint(W, 1, data.clone()).await;
+    assert_eq!(r.code, Some(Code::Stale)); // 설계서 없음
+    assert!(run(&b, ui()).await.ok);
+    let r = b.submit_blueprint(W, 2, data.clone()).await;
+    assert_eq!(r.code, Some(Code::Stale)); // 사람이 본 판이 아니다
+    let r = b.submit_blueprint(W, 1, data.clone()).await;
+    assert_eq!(r.code, Some(Code::SlotEmpty));
+    set_path(&h, "/h/in");
+    let r = b.submit_blueprint(W, 1, data.clone()).await;
+    assert!(r.ok, "{r:?}");
+    let bp = blueprint(&h);
+    assert_eq!(bp.status, BlueprintStatus::Submitted);
+    assert!(bp.build_pending);
+    assert_eq!(bp.build_attempts, 0);
+    assert_eq!(bp.data_model, data);
+    // 제출한 판은 다시 제출할 수 없다.
+    let r = b.submit_blueprint(W, 1, data).await;
+    assert_eq!(r.code, Some(Code::Stale));
+}
+
+#[tokio::test]
+async fn submit_with_no_app_gates_is_allowed() {
+    let h = MemHost::with(W, wf());
+    let b = Builder::new(h.clone()).unwrap();
+    let mut op = ui();
+    let c = &mut op["args"]["messages"][0]["createSurface"]["components"];
+    c[0]["children"] = json!(["go"]);
+    c.as_array_mut().unwrap().remove(1);
+    assert!(run(&b, op).await.ok);
+    let r = b.submit_blueprint(W, 1, json!({})).await;
+    assert!(r.ok, "{r:?}");
+    assert_eq!(blueprint(&h).status, BlueprintStatus::Submitted);
+}
+
+#[tokio::test]
+async fn submit_rejects_slot_path_in_data() {
+    let h = MemHost::with(W, wf());
+    let b = Builder::new(h.clone()).unwrap();
+    assert!(run(&b, ui()).await.ok);
+    set_path(&h, "/h/in");
+    let r = b.submit_blueprint(W, 1, json!({"note": "/h/in/a"})).await;
+    assert_eq!(r.code, Some(Code::UiInvalid));
+    assert_eq!(r.data["rule"], "data_slot_path");
+    assert!(!r.to_line().contains("/h/in"));
+    let bp = blueprint(&h);
+    assert_eq!(bp.status, BlueprintStatus::Active);
+    assert_eq!(bp.data_model, json!({}));
+}
+
+#[tokio::test]
+async fn pick_slot_saves_path_after_dialog() {
+    let h = MemHost::with(W, wf());
+    let b = Builder::new(h.clone()).unwrap();
+    assert!(run(&b, ui()).await.ok);
+    let r = b.pick_slot(W, "dest", 1).await;
+    assert_eq!(r.code, Some(Code::SlotUnknown));
+    assert!(h.pick_titles().is_empty()); // 창을 띄우기 전에 거절
+    h.push_pick(Some("/h/in".into()));
+    let r = b.pick_slot(W, "watch", 1).await;
+    assert!(r.ok, "{r:?}");
+    assert_eq!(r.data["path"], "/h/in");
+    let s = &blueprint(&h).slots["watch"];
+    assert_eq!(s.path.as_deref(), Some("/h/in"));
+    assert_eq!(s.picked_version, Some(1));
+    assert!(h.pick_titles().last().unwrap().contains("고르기"));
+    assert_eq!(h.saves(), 0); // 워크플로우는 건드리지 않는다
+}
+
+#[tokio::test]
+async fn pick_slot_discards_when_blueprint_changed_during_dialog() {
+    let h = MemHost::with(W, wf());
+    let b = Builder::new(h.clone()).unwrap();
+    assert!(run(&b, ui()).await.ok);
+    h.push_pick(Some("/h/in".into()));
+    h.on_pick(|host| {
+        host.update_chat(W, &mut |c| {
+            c.state.blueprint.as_mut().unwrap().version = 2;
+        })
+        .unwrap();
+    });
+    let r = b.pick_slot(W, "watch", 1).await;
+    assert_eq!(r.code, Some(Code::Stale));
+    assert!(!r.to_line().contains("/h/in"));
+    assert_eq!(blueprint(&h).slots["watch"].path, None);
+}
+
+#[tokio::test]
+async fn pick_slot_rejects_bad_folder_and_cancel() {
+    let h = MemHost::with(W, wf());
+    let b = Builder::new(h.clone()).unwrap();
+    assert!(run(&b, ui()).await.ok);
+    h.bad_folder("/h/in");
+    h.push_pick(Some("/h/in".into()));
+    let r = b.pick_slot(W, "watch", 1).await;
+    assert_eq!(r.code, Some(Code::FolderNotAllowed));
+    assert!(!r.to_line().contains("/h/in"));
+    assert_eq!(blueprint(&h).slots["watch"].path, None);
+    let r = b.pick_slot(W, "watch", 1).await; // 고를 것이 없음 = 취소
+    assert_eq!(r.code, Some(Code::PickCancelled));
+    assert_eq!(blueprint(&h).slots["watch"].path, None);
+}
+
+#[tokio::test]
+async fn sync_data_only_while_active() {
+    let h = MemHost::with(W, wf());
+    let b = Builder::new(h.clone()).unwrap();
+    assert!(b.sync_blueprint_data(W, json!({"a": 0})).await.ok); // 설계서 없음
+    assert!(h.load_chat(W).unwrap().state.blueprint.is_none());
+    assert!(run(&b, ui()).await.ok);
+    assert!(b.sync_blueprint_data(W, json!({"a": 1})).await.ok);
+    assert_eq!(blueprint(&h).data_model, json!({"a": 1}));
+    h.update_chat(W, &mut |c| {
+        c.state.blueprint.as_mut().unwrap().status = BlueprintStatus::Submitted;
+    })
+    .unwrap();
+    let r = b.sync_blueprint_data(W, json!({"a": 2})).await;
+    assert!(r.ok, "{r:?}");
+    assert_eq!(blueprint(&h).data_model, json!({"a": 1}));
+}

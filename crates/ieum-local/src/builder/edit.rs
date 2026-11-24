@@ -277,9 +277,17 @@ pub(super) fn pick_title(catalog: &Catalog, node: &Node, field: &str) -> String 
         .filter(|l| !l.is_empty())
         .or(def.map(|d| d.title.as_str()))
         .unwrap_or(&node.event);
-    let field_title = def
+    format!(
+        "IEUM — '{name}'의 {} 고르기",
+        field_title(catalog, &node.event, field)
+    )
+}
+
+/// 칸 제목(카탈로그 title, 없으면 key) — 노드가 없는 설계서 슬롯 창 제목도 이것을 쓴다.
+pub(super) fn field_title(catalog: &Catalog, event: &str, field: &str) -> String {
+    catalog
+        .get(event)
         .and_then(|d| d.input_fields.iter().find(|f| f.key == field))
-        .and_then(|f| f.title.as_deref())
-        .unwrap_or(field);
-    format!("IEUM — '{name}'의 {field_title} 고르기")
+        .and_then(|f| f.title.clone())
+        .unwrap_or_else(|| field.to_string())
 }

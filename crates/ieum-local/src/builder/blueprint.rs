@@ -9,6 +9,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::core::lock_of;
 use super::edit;
 use super::{Builder, ChatState, Code, Doc, FOLDER_FIELDS, Reply};
 
@@ -338,6 +339,108 @@ pub fn clear_slot_paths(b: &mut Blueprint) {
 }
 
 impl Builder {
+    /// 사람의 [이대로 만들기]. 사람이 본 판(`version`)이 지금 판이고 앱 전용 칸을 다 골랐어야 한다.
+    pub async fn submit_blueprint(&self, workflow_id: &str, version: u32, data: Value) -> Reply {
+        let lock = lock_of(workflow_id);
+        let _guard = lock.lock().await;
+        match self.submit(workflow_id, version, data) {
+            Ok(()) => Reply::ok(()),
+            Err(reply) => reply,
+        }
+    }
+
+    /// 앱 전용 칸 고르기. 성공 data `{"path"}`는 화면 전용이다 — 채팅 루프 결과로 보내지 않는다.
+    pub async fn pick_slot(&self, workflow_id: &str, slot: &str, version: u32) -> Reply {
+        // 창이 열린 동안(최대 5분)도 쥔다 — pick-folder와 같다.
+        let lock = lock_of(workflow_id);
+        let _guard = lock.lock().await;
+        match self.pick_slot_path(workflow_id, slot, version).await {
+            Ok(path) => Reply::ok(json!({"path": path})),
+            Err(reply) => reply,
+        }
+    }
+
+    /// 화면의 입력값을 따라 적는다. 떠 있는(Active) 설계서가 아니면 아무것도 하지 않는다.
+    pub async fn sync_blueprint_data(&self, workflow_id: &str, data: Value) -> Reply {
+        let lock = lock_of(workflow_id);
+        let _guard = lock.lock().await;
+        match self.sync_data(workflow_id, data) {
+            Ok(()) => Reply::ok(()),
+            Err(reply) => reply,
+        }
+    }
+
+    /// 믿을 수 있는 저장본 설계서. `validate_stored`를 못 넘으면 없는 것으로 본다.
+    fn stored_blueprint(&self, id: &str) -> Result<Option<Blueprint>, Reply> {
+        let chat = self.host.load_chat(id).map_err(|_| Code::Internal)?;
+        Ok(chat.state.blueprint.filter(validate_stored))
+    }
+
+    /// 사람이 본 판이 지금도 떠 있는 판인가 — 아니면 Stale.
+    fn active_blueprint(&self, id: &str, version: u32) -> Result<Blueprint, Reply> {
+        let b = self.stored_blueprint(id)?;
+        b.filter(|b| b.status == BlueprintStatus::Active && b.version == version)
+            .ok_or_else(|| Code::Stale.into())
+    }
+
+    fn submit(&self, id: &str, version: u32, data: Value) -> Result<(), Reply> {
+        let mut b = self.active_blueprint(id, version)?;
+        if b.slots.values().any(|s| s.path.is_none()) {
+            return Err(Code::SlotEmpty.into());
+        }
+        check_data(&b, &data).map_err(|e| e.reply())?;
+        b.data_model = data;
+        b.status = BlueprintStatus::Submitted;
+        b.build_pending = true;
+        b.build_attempts = 0;
+        self.update_chat(id, |s| s.blueprint = Some(b.clone()))?;
+        Ok(())
+    }
+
+    async fn pick_slot_path(&self, id: &str, slot: &str, version: u32) -> Result<String, Reply> {
+        let b = self.active_blueprint(id, version)?;
+        let s = b.slots.get(slot).ok_or(Code::SlotUnknown)?;
+        let target = (s.event.clone(), s.field.clone());
+        let title = format!(
+            "IEUM — {} 고르기",
+            edit::field_title(&self.catalog, &target.0, &target.1)
+        );
+        let path = self
+            .host
+            .pick_folder(id, &title)
+            .await
+            .ok_or(Code::PickCancelled)?;
+        // 문구에는 경로가 섞여 있어 버린다.
+        self.host
+            .check_folder(&path)
+            .map_err(|_| Code::FolderNotAllowed)?;
+        // 창이 열린 사이 설계서가 바뀌었을 수 있다 — 같은 판·같은 대상의 칸일 때만 적는다.
+        let mut b = self.active_blueprint(id, version)?;
+        let s = b
+            .slots
+            .get_mut(slot)
+            .filter(|s| (&s.event, &s.field) == (&target.0, &target.1))
+            .ok_or(Code::Stale)?;
+        let text = path.to_string_lossy().into_owned();
+        s.path = Some(text.clone());
+        s.picked_version = Some(version);
+        self.update_chat(id, |c| c.blueprint = Some(b.clone()))?;
+        Ok(text)
+    }
+
+    fn sync_data(&self, id: &str, data: Value) -> Result<(), Reply> {
+        let Some(mut b) = self
+            .stored_blueprint(id)?
+            .filter(|b| b.status == BlueprintStatus::Active)
+        else {
+            return Ok(());
+        };
+        check_data(&b, &data).map_err(|e| e.reply())?;
+        b.data_model = data;
+        self.update_chat(id, |s| s.blueprint = Some(b.clone()))?;
+        Ok(())
+    }
+
     /// `ui` 동작 — 검증을 통과한 설계서만 저장한다. 워크플로우는 건드리지 않는다.
     pub(super) fn ui(
         &self,
