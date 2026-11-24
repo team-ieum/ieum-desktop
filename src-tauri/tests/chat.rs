@@ -487,6 +487,29 @@ async fn build_turn_clears_pending_only_on_clean_finish() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn classic_turn_leaves_build_state_alone() {
+    let env = env(Script::new([ans("네", json!([]))]));
+    let id = save(&env, ai_only_wf(&env.dir("watch")), false);
+    put(&env, &id, submitted());
+    let turn = send_with(
+        &env.sup,
+        &builder(&env),
+        &id,
+        "안녕",
+        ai(),
+        Limits::default(),
+        &|_| {},
+        ChatOpts::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(turn.error, None);
+    // 토글이 꺼진 턴은 만들기 턴이 아니다.
+    let bp = stored_bp(&env, &id);
+    assert_eq!((bp.build_pending, bp.build_attempts), (true, 0));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cut_short_build_turn_keeps_pending() {
     let env = env(Script::new([ans("볼게요", json!([{"op": "status"}]))]));
     let id = save(&env, ai_only_wf(&env.dir("watch")), false);

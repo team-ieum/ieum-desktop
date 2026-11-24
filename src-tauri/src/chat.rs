@@ -172,8 +172,11 @@ pub async fn send_with(
             text: text.to_string(),
             at: now(),
         });
-        // 턴 전에 센다 — 턴 도중 앱이 꺼져도 시도 횟수는 남는다.
-        if let Some(b) = building(&mut c.state.blueprint) {
+        // 턴 전에 센다 — 턴 도중 앱이 꺼져도 시도 횟수는 남는다. 토글이 꺼진 턴은 만들기 턴이
+        // 아니다(설계서는 읽기 전용이고 `bind-folder`가 거절된다).
+        if opts.blueprint
+            && let Some(b) = building(&mut c.state.blueprint)
+        {
             b.build_attempts += 1;
         }
     })?;
@@ -210,7 +213,8 @@ pub async fn send_with(
             usage: u.clone(),
         }));
         // 오류·잘림으로 끝난 만들기 턴은 [이어서 만들기]가 남도록 그대로 둔다.
-        if turn.error.is_none()
+        if opts.blueprint
+            && turn.error.is_none()
             && !turn.cut_short
             && let Some(b) = building(&mut c.state.blueprint)
         {
