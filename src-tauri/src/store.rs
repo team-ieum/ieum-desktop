@@ -184,6 +184,10 @@ pub struct Settings {
     /// 확인 창 토글. 옛 설정엔 없어 `Default`의 true.
     pub confirm_delete_workflow: bool,
     pub confirm_discard_unsaved: bool,
+    /// 실험: 채팅 설계서(A2UI). 옛 설정엔 없어 꺼짐.
+    pub chat_blueprint: bool,
+    /// 실험: 채팅 실측 기록(`<앱 데이터>/metrics/chat.jsonl`). 옛 설정엔 없어 꺼짐.
+    pub chat_metrics: bool,
 }
 
 pub const DEFAULT_SERVER_URL: &str = "https://green.kiacms.co.kr";
@@ -204,6 +208,8 @@ impl Default for Settings {
             notifications_seen_at: String::new(),
             confirm_delete_workflow: true,
             confirm_discard_unsaved: true,
+            chat_blueprint: false,
+            chat_metrics: false,
         }
     }
 }

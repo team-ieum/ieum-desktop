@@ -919,7 +919,12 @@ pub fn web_unwatch_execution(watches: State<'_, Watches>, execution_id: String) 
 /// 채팅 상태 파일(대화·테스트 상태). 없으면 빈 값.
 #[tauri::command]
 pub async fn get_chat(active: State<'_, Active>, workflow_id: String) -> Result<ChatFile, String> {
-    active.sup().await?.store().get_chat(&workflow_id)
+    active
+        .sup()
+        .await?
+        .store()
+        .get_chat(&workflow_id)
+        .map(crate::chat::visible_chat)
 }
 
 /// 사람의 확인을 기다리는 완료 요청(확인 카드 내용). 없으면 None.
