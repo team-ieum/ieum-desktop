@@ -121,6 +121,7 @@ pub async fn send(
             history: &history,
             ai: &ai,
             now: &chrono::Local::now().to_rfc3339(),
+            blueprint: None,
         },
         limits,
         on_stage,
