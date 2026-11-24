@@ -1,11 +1,43 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
-import { api, type ChatTurn, type CredentialsView } from "../../api";
+import { api, type Blueprint, type ChatFile, type ChatTurn, type CredentialsView, type Settings } from "../../api";
 import { setLang } from "../../i18n";
 import { useCredentials } from "../../stores/credentials";
+import { useSettings } from "../../stores/settings";
+import type { BlueprintSurfaceProps } from "./a2ui/BlueprintSurface";
 import { aiChoices, AI_KEY } from "./chatAi";
 import { ChatSlot } from "./ChatSlot";
+
+// 설계서 래퍼 대역 — 모듈을 처음 불러올 때만 팩토리가 돈다(`loaded`). 받은 props를 글로 드러내고 콜백 버튼을 둔다.
+let loaded = false;
+vi.mock("./a2ui/BlueprintSurface", () => {
+  loaded = true;
+  return { default: Surface };
+});
+const DATA = { name: "날짜_가게_금액.pdf" };
+function Surface(p: BlueprintSurfaceProps) {
+  const { version, status, buildPending } = p.blueprint;
+  return (
+    <div data-testid="surface">
+      <p>{[`v${version}`, status, p.locked && "locked", buildPending && "buildPending", `changed:${(p.changed ?? []).join(",")}`].filter(Boolean).join(" ")}</p>
+      <button type="button" onClick={() => p.onSubmit(DATA)}>
+        제출
+      </button>
+      <button type="button" onClick={() => p.onPickSlot("watch")}>
+        칸
+      </button>
+      <button type="button" onClick={() => p.onData(DATA)}>
+        고침
+      </button>
+      {p.onRetry && (
+        <button type="button" onClick={p.onRetry}>
+          이어서
+        </button>
+      )}
+    </div>
+  );
+}
 
 const key = (id: string, isDefault = false) => ({ id, label: id, isDefault, createdAt: "", last4: "" });
 const VIEW: CredentialsView = {
@@ -28,6 +60,7 @@ beforeAll(() => setLang("ko"));
 beforeEach(() => {
   vi.stubGlobal("localStorage", memoryStorage());
   useCredentials.setState({ view: VIEW, load: async () => {} });
+  useSettings.setState({ settings: null });
   vi.spyOn(api, "getChat").mockResolvedValue({
     ...EMPTY_CHAT,
     messages: [
@@ -357,4 +390,180 @@ test("saved_cli_choice_is_not_overwritten_before_clis_are_detected", async () =>
   await act(async () => {}); // 모델 목록까지 끝난 뒤
   expect(api.listModels).toHaveBeenCalled();
   expect(localStorage.getItem(AI_KEY)).toBe(saved);
+});
+
+// ── 설계서 ──
+const AI = { provider: "cli:claude", credential: "system", model: null, effort: null };
+const SETTINGS: Settings = {
+  language: "ko",
+  autostart: false,
+  firstRunDone: true,
+  serverUrl: "",
+  onboardingDone: true,
+  notifyManualStart: false,
+  notifyManualEnd: false,
+  notifyWatchEnd: false,
+};
+const mode = (on: boolean) => act(async () => useSettings.setState({ settings: { ...SETTINGS, chatBlueprint: on } }));
+const BP = (o: Partial<Blueprint> = {}): Blueprint => ({
+  status: "active",
+  version: 1,
+  components: [
+    { id: "root", component: "Blueprint", title: "영수증 정리", children: ["name"] },
+    { id: "name", component: "TextInput", label: "이름", value: { "@path": "/name" } },
+  ],
+  dataModel: { name: "날짜_가게.pdf" },
+  slots: {},
+  buildPending: false,
+  buildAttempts: 0,
+  ...o,
+});
+const chatWith = (b: Blueprint): ChatFile => ({ ...EMPTY_CHAT, messages: [{ role: "user", text: "영수증 정리해 줘", at: "" }], state: { ...EMPTY_CHAT.state, blueprint: b } });
+const click = async (name: string) => {
+  const b = await screen.findByRole("button", { name });
+  await act(async () => fireEvent.click(b));
+};
+
+// 기본 대화에서 래퍼를 불러온 테스트가 아직 없어야 한다 — 설계서 테스트 중 맨 앞에 둔다.
+test("blueprint_chunk_not_loaded_without_blueprint", async () => {
+  await open();
+  await type("정리해 줘");
+  await enter();
+  expect(screen.getByText("만들게요")).toBeTruthy();
+  expect(loaded).toBe(false);
+});
+
+test("blueprint_card_moves_to_bottom_and_leaves_stub", async () => {
+  const v1 = BP();
+  const v2 = BP({ version: 2, components: [v1.components[0], { ...v1.components[1], label: "새 이름" }] });
+  vi.mocked(api.getChat).mockResolvedValueOnce(EMPTY_CHAT).mockResolvedValueOnce(chatWith(v1)).mockResolvedValue(chatWith(v2));
+  vi.spyOn(api, "chatPickSlot").mockResolvedValue({ ok: true, data: { path: "/Users/me/in" } });
+  send
+    .mockResolvedValueOnce({ say: "이렇게 만들어 둘게요", cards: [{ kind: "blueprint", version: 1 }], error: null })
+    .mockResolvedValueOnce({ say: "고쳤어요", cards: [{ kind: "blueprint", version: 2 }], error: null });
+  const r = await open();
+  await type("영수증 정리해 줘");
+  await enter();
+  expect((await screen.findByTestId("surface")).textContent).toContain("v1 active");
+  expect(screen.queryByText(/아래로 옮겨졌어요/)).toBeNull();
+  await type("이름을 바꿔 줘");
+  await enter();
+  expect(screen.getAllByText("영수증 정리 설계서 · 아래로 옮겨졌어요")).toHaveLength(1);
+  const surfaces = screen.getAllByTestId("surface");
+  expect(surfaces).toHaveLength(1);
+  // 맨 아래, 바뀐 컴포넌트만 표시.
+  const list = r.container.querySelector('[data-slot="chat"]')!.firstElementChild!;
+  expect(list.lastElementChild!.contains(surfaces[0])).toBe(true);
+  expect(surfaces[0].textContent).toContain("v2 active locked changed:name");
+  // 같은 판을 다시 읽으면(폴더 칸 고르기) 강조는 그대로.
+  await click("칸");
+  expect(api.getChat).toHaveBeenCalledTimes(4);
+  expect(screen.getByTestId("surface").textContent).toContain("changed:name");
+});
+
+test("send_carries_blueprint_data_only_while_active", async () => {
+  await mode(true);
+  vi.mocked(api.getChat).mockResolvedValue(chatWith(BP()));
+  await open();
+  await screen.findByTestId("surface");
+  await type("하나");
+  await enter();
+  expect(send).toHaveBeenLastCalledWith("w1", "하나", AI, { data: { name: "날짜_가게.pdf" }, touched: false });
+  // 카드에서 고친 값은 다음 글에 실리고, 보낸 뒤 touched는 다시 false.
+  await click("고침");
+  await type("둘");
+  await enter();
+  expect(send).toHaveBeenLastCalledWith("w1", "둘", AI, { data: DATA, touched: true });
+  await type("셋");
+  await enter();
+  expect(send).toHaveBeenLastCalledWith("w1", "셋", AI, { data: DATA, touched: false });
+  await mode(false);
+  await type("넷");
+  await enter();
+  expect(send).toHaveBeenLastCalledWith("w1", "넷", AI);
+});
+
+test("submit_then_sends_fixed_text_without_blueprint_arg", async () => {
+  await mode(true);
+  // 제출 뒤 다시 읽어도 active로 보이는 경우 — 그래도 데이터를 싣지 않는다.
+  vi.mocked(api.getChat).mockResolvedValue(chatWith(BP()));
+  const submit = vi.spyOn(api, "chatSubmitBlueprint").mockResolvedValue({ ok: true });
+  await open();
+  await click("제출");
+  expect(submit).toHaveBeenCalledWith("w1", 1, DATA);
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(send).toHaveBeenLastCalledWith("w1", "설계서대로 만들어 주세요.", AI);
+});
+
+test("refreshes_blueprint_after_turn_even_without_card", async () => {
+  await mode(true);
+  vi.mocked(api.getChat).mockResolvedValueOnce(chatWith(BP())).mockResolvedValueOnce(chatWith(BP({ status: "cancelled" })));
+  await open();
+  expect((await screen.findByTestId("surface")).textContent).not.toContain("locked");
+  await type("그냥 지금 방식으로 해 줘");
+  await enter();
+  expect(api.getChat).toHaveBeenCalledTimes(2);
+  expect(screen.getByTestId("surface").textContent).toContain("cancelled locked");
+  expect(screen.queryByText(/아래로 옮겨졌어요/)).toBeNull();
+});
+
+test("refreshes_after_build_turn_clears_retry", async () => {
+  await mode(true);
+  vi.mocked(api.getChat)
+    .mockResolvedValueOnce(chatWith(BP({ status: "submitted", buildPending: true })))
+    .mockResolvedValueOnce(chatWith(BP({ status: "submitted" })));
+  await open();
+  expect((await screen.findByTestId("surface")).textContent).toContain("buildPending");
+  await click("이어서");
+  expect(send).toHaveBeenLastCalledWith("w1", "설계서대로 만들어 주세요.", AI);
+  expect(api.getChat).toHaveBeenCalledTimes(2);
+  expect(screen.getByTestId("surface").textContent).not.toContain("buildPending");
+});
+
+test("failed_build_shows_retry_after_refresh", async () => {
+  await mode(true);
+  vi.mocked(api.getChat).mockResolvedValueOnce(chatWith(BP())).mockResolvedValue(chatWith(BP({ status: "submitted", buildPending: true })));
+  vi.spyOn(api, "chatSubmitBlueprint").mockResolvedValue({ ok: true });
+  send.mockRejectedValueOnce("만들기 실패");
+  await open();
+  await click("제출");
+  expect(screen.getByRole("alert").textContent).toBe("응답을 받지 못했어요.");
+  expect(api.getChat).toHaveBeenCalledTimes(3); // 복원·제출 뒤·실패한 턴 뒤
+  const s = screen.getByTestId("surface");
+  expect(s.textContent).toContain("submitted locked buildPending");
+  expect(within(s).getByRole("button", { name: "이어서" })).toBeTruthy();
+});
+
+test("restored_blueprint_is_read_only_when_mode_off", async () => {
+  vi.mocked(api.getChat).mockResolvedValue(chatWith(BP()));
+  await open();
+  const s = await screen.findByTestId("surface");
+  expect(s.textContent).toContain("active locked");
+  expect(within(s).queryByRole("button", { name: "이어서" })).toBeNull();
+  await type("하나");
+  await enter();
+  expect(send).toHaveBeenLastCalledWith("w1", "하나", AI);
+});
+
+test("blueprint_slot_and_submit_failures_show_the_reply_message", async () => {
+  await mode(true);
+  vi.mocked(api.getChat).mockResolvedValue(chatWith(BP()));
+  const pick = vi
+    .spyOn(api, "chatPickSlot")
+    .mockResolvedValueOnce({ ok: false, code: "PICK_CANCELLED", message: "사용자가 폴더를 고르지 않음" })
+    .mockResolvedValueOnce({ ok: false, code: "UI_INVALID", message: "설계서 데이터가 규칙에 맞지 않아요" })
+    .mockResolvedValueOnce({ ok: true, data: { path: "/Users/me/in" } });
+  vi.spyOn(api, "chatSubmitBlueprint").mockResolvedValue({ ok: false, code: "SLOT_EMPTY", message: "앱 전용 칸을 먼저 골라 주세요" });
+  await open();
+  await click("칸");
+  expect(pick).toHaveBeenCalledWith("w1", "watch", 1);
+  expect(screen.queryByRole("alert")).toBeNull(); // 취소면 그대로
+  expect(api.getChat).toHaveBeenCalledTimes(1);
+  await click("칸");
+  expect(screen.getByRole("alert").textContent).toBe("설계서 데이터가 규칙에 맞지 않아요");
+  await click("칸");
+  expect(api.getChat).toHaveBeenCalledTimes(2); // 고르면 다시 읽는다
+  await click("제출");
+  expect(screen.getAllByRole("alert")[1].textContent).toBe("앱 전용 칸을 먼저 골라 주세요");
+  expect(send).not.toHaveBeenCalled();
 });
