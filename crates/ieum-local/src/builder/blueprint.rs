@@ -209,6 +209,11 @@ pub fn apply_ui(current: Option<&Blueprint>, messages: &[Value]) -> Result<Bluep
                 build_attempts: 0,
             });
         }
+        // components 없는 updateComponents는 바꾸는 것 없이 판만 올린다. createSurface는 components 없이 열고
+        // 같은 묶음의 updateComponents로 채울 수 있다(A2UI 순서) — 비면 root 검사에서 걸린다.
+        if kind == "updateComponents" && !body.contains_key("components") {
+            return Err(fail("message_kind", at()));
+        }
         let b = work.as_mut().ok_or_else(|| fail("no_surface", at()))?;
         if kind == "updateDataModel" {
             set_data(&mut b.data_model, body.get("path"), body.get("value"))
@@ -673,7 +678,7 @@ fn items(
         }
         for (name, len, required) in fields {
             match o.get_mut(*name) {
-                Some(x) => *x = Value::String(text(x, *len).map_err(|_| "unknown_prop")?),
+                Some(x) => *x = Value::String(text(x, *len)?),
                 None if *required => return Err("unknown_prop"),
                 None => {}
             }
@@ -717,7 +722,11 @@ fn binding(v: &Value, d: Dialect) -> Option<Value> {
         Dialect::Stored => "@path",
     };
     let o = v.as_object().filter(|o| o.len() == 1)?;
-    let p = o.get(key)?.as_str().filter(|p| p.starts_with('/'))?;
+    // 루트 "/"는 거부한다 — 입력 하나가 데이터 모델 전체를 글자로 덮어쓴다.
+    let p = o
+        .get(key)?
+        .as_str()
+        .filter(|p| p.len() > 1 && p.starts_with('/'))?;
     Some(json!({"@path": p}))
 }
 

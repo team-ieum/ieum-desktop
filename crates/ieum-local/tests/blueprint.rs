@@ -397,3 +397,38 @@ fn blueprint_codes_are_known() {
         json!("UI_INVALID")
     );
 }
+
+#[test]
+fn rejects_root_path_binding() {
+    // "/"에 묶이면 입력 하나가 데이터 모델 전체를 덮어쓴다.
+    let c = json!({"id": "t", "component": "TextInput", "label": "칸", "value": {"path": "/"}});
+    assert_eq!(rule(None, plus(c)), "binding");
+    let mut b = base();
+    b.components[5]["value"] = json!({"@path": "/"});
+    assert!(!validate_stored(&b));
+}
+
+#[test]
+fn update_components_requires_components() {
+    let b = base();
+    let msg = json!([{"updateComponents": {"surfaceId": "blueprint"}}]);
+    assert_eq!(rule(Some(&b), msg), "message_kind");
+    // createSurface는 components 없이 열고 같은 묶음의 updateComponents로 채워도 된다(A2UI v1.0 순서).
+    let open = json!({"createSurface": {"surfaceId": "blueprint", "catalogId": "ieum.chat.blueprint/v1", "dataModel": {}}});
+    let fill = json!({"updateComponents": {"surfaceId": "blueprint", "components": comps()}});
+    assert_eq!(ok(None, json!([open, fill])).components.len(), 8);
+}
+
+#[test]
+fn object_in_item_text_is_binding() {
+    let opts = json!([{"value": "a", "label": {"path": "/x"}}, {"value": "b", "label": "나"}]);
+    let c = json!({"id": "s", "component": "Select", "label": "칸", "options": opts, "value": {"path": "/s"}});
+    assert_eq!(rule(None, plus(c)), "binding");
+    let steps = json!([{"label": {"path": "/x"}}]);
+    let f = json!({"id": "f2", "component": "FlowPreview", "steps": steps});
+    assert_eq!(rule(None, plus(f)), "binding");
+    // 객체가 아닌 틀린 모양은 그대로 unknown_prop.
+    let opts = json!([{"value": "a", "label": 3}, {"value": "b", "label": "나"}]);
+    let c = json!({"id": "s", "component": "Select", "label": "칸", "options": opts, "value": {"path": "/s"}});
+    assert_eq!(rule(None, plus(c)), "unknown_prop");
+}
