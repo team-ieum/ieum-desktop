@@ -191,10 +191,19 @@ it("retry_shows_when_build_pending", async () => {
   const { rerender } = render(surface(b, { locked: true, onRetry }));
   fireEvent.click(await screen.findByRole("button", { name: "이어서 만들기" }));
   expect(onRetry).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("만들었어요")).toBeNull();
   rerender(surface(b, { locked: true, onRetry, busy: true }));
   expect((screen.getByRole("button", { name: "이어서 만들기" }) as HTMLButtonElement).disabled).toBe(true);
   rerender(surface(b, { locked: true }));
   expect(screen.queryByRole("button", { name: "이어서 만들기" })).toBeNull();
+});
+
+it("busy_disables_inputs", async () => {
+  render(surface(receipt, { busy: true }));
+  expect(((await screen.findByRole("checkbox", { name: "PDF 파일만" })) as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByRole("textbox", { name: "새 이름" }) as HTMLInputElement).disabled).toBe(true);
+  expect((screen.getByRole("combobox", { name: "날짜 형식" }) as HTMLSelectElement).disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "날짜" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it("pick_button_calls_on_pick_slot_and_is_off_while_busy", async () => {

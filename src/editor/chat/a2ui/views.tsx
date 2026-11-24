@@ -10,7 +10,17 @@ const NAME = "font-semibold text-neutral-700";
 const BOX = "rounded-lg border border-[#d4e4ec] bg-white px-2 py-1.5 text-xs text-neutral-900 disabled:bg-neutral-50 disabled:text-neutral-500";
 
 /** 설계서 카드 바깥틀 — 제목과 자식 컴포넌트를 담는다. 글자는 LLM이 보낸 그대로. */
-export function BlueprintView({ title, status, children }: { title: string; status: "active" | "submitted" | "cancelled"; children?: ReactNode }) {
+export function BlueprintView({
+  title,
+  status,
+  buildPending,
+  children,
+}: {
+  title: string;
+  status: "active" | "submitted" | "cancelled";
+  buildPending: boolean;
+  children?: ReactNode;
+}) {
   return (
     <section role="group" aria-label={title} className={`${CARD} max-w-none flex flex-col gap-2.5`}>
       <div className="flex flex-wrap items-center gap-1.5">
@@ -20,7 +30,7 @@ export function BlueprintView({ title, status, children }: { title: string; stat
           <Sparkles size={11} aria-hidden="true" />
           {t("chat.blueprint.aiMade")}
         </span>
-        {status === "submitted" && (
+        {status === "submitted" && !buildPending && (
           <span className={`${TAG} bg-[#e6f4ee] text-[#2f7d58]`}>
             <CircleCheck size={11} aria-hidden="true" />
             {t("chat.blueprint.built")}

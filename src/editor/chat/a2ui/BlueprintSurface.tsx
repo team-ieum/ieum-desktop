@@ -36,6 +36,7 @@ export interface BlueprintSurfaceProps {
 /** 표면 안 컴포넌트가 읽는 앱 상태 — 데이터 모델이 아니라 래퍼 props에서 온다(슬롯 경로는 LLM에게 가지 않는다). */
 interface Live {
   status: Blueprint["status"];
+  buildPending: boolean;
   slots: Blueprint["slots"];
   locked: boolean;
   busy: boolean;
@@ -45,6 +46,11 @@ interface Live {
 }
 const LiveContext = createContext({} as Live);
 const useLive = () => useContext(LiveContext);
+/** 입력은 잠금뿐 아니라 턴 진행 중에도 막는다 — 그 사이 고친 값은 턴에 실리지 않고, AI가 같은 턴에 버전을 올리면 사라진다. */
+const useInputOff = () => {
+  const { locked, busy } = useLive();
+  return locked || busy;
+};
 
 const Options = z.array(z.object({ value: z.string(), label: z.string() }));
 
@@ -53,9 +59,9 @@ const Options = z.array(z.object({ value: z.string(), label: z.string() }));
 const BlueprintImpl = createComponentImplementation(
   { name: "Blueprint", schema: z.object({ title: z.string(), children: CommonSchemas.ChildList }) },
   ({ props, buildChild }) => {
-    const { status, changed } = useLive();
+    const { status, buildPending, changed } = useLive();
     return (
-      <BlueprintView title={props.title} status={status}>
+      <BlueprintView title={props.title} status={status} buildPending={buildPending}>
         {(props.children ?? []).map((c) => {
           const [id, base] = typeof c === "string" ? [c, undefined] : [c.id, c.basePath];
           return (
@@ -85,7 +91,7 @@ const ChipSelectImpl = createComponentImplementation(
       options={props.options}
       multiple={props.multiple}
       value={props.value ?? []}
-      disabled={useLive().locked}
+      disabled={useInputOff()}
       onChange={(v) => props.setValue(v)}
     />
   ),
@@ -94,19 +100,19 @@ const ChipSelectImpl = createComponentImplementation(
 const SelectImpl = createComponentImplementation(
   { name: "Select", schema: z.object({ label: z.string(), options: Options, value: CommonSchemas.DynamicString }) },
   ({ props }) => (
-    <SelectView label={props.label} options={props.options} value={props.value ?? ""} disabled={useLive().locked} onChange={(v) => props.setValue(v)} />
+    <SelectView label={props.label} options={props.options} value={props.value ?? ""} disabled={useInputOff()} onChange={(v) => props.setValue(v)} />
   ),
 );
 
 const CheckboxImpl = createComponentImplementation(
   { name: "Checkbox", schema: z.object({ label: z.string(), value: CommonSchemas.DynamicBoolean }) },
-  ({ props }) => <CheckboxView label={props.label} value={props.value ?? false} disabled={useLive().locked} onChange={(v) => props.setValue(v)} />,
+  ({ props }) => <CheckboxView label={props.label} value={props.value ?? false} disabled={useInputOff()} onChange={(v) => props.setValue(v)} />,
 );
 
 const TextInputImpl = createComponentImplementation(
   { name: "TextInput", schema: z.object({ label: z.string(), value: CommonSchemas.DynamicString, hint: z.string().optional() }) },
   ({ props }) => (
-    <TextInputView label={props.label} hint={props.hint} value={props.value ?? ""} disabled={useLive().locked} onChange={(v) => props.setValue(v)} />
+    <TextInputView label={props.label} hint={props.hint} value={props.value ?? ""} disabled={useInputOff()} onChange={(v) => props.setValue(v)} />
   ),
 );
 
@@ -176,6 +182,7 @@ export default function BlueprintSurface({ blueprint, locked, busy, changed, onS
         <LiveContext.Provider
           value={{
             status,
+            buildPending: blueprint.buildPending,
             slots: blueprint.slots,
             locked,
             busy,
