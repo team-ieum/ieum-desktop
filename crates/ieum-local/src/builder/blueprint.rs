@@ -424,6 +424,8 @@ impl Builder {
         let text = path.to_string_lossy().into_owned();
         s.path = Some(text.clone());
         s.picked_version = Some(version);
+        // 데이터에 이미 이 경로가 있으면 적은 저장본이 `validate_stored`를 못 넘어 설계서가 사라진다.
+        check_data(&b, &b.data_model).map_err(|e| e.reply())?;
         self.update_chat(id, |c| c.blueprint = Some(b.clone()))?;
         Ok(text)
     }

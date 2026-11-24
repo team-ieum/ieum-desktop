@@ -346,3 +346,26 @@ async fn sync_data_only_while_active() {
     assert!(r.ok, "{r:?}");
     assert_eq!(blueprint(&h).data_model, json!({"a": 1}));
 }
+
+/// 고른 경로가 데이터에 이미 있으면 적지 않는다 — 적으면 저장본이 검사를 못 넘어 설계서가 사라진다.
+#[tokio::test]
+async fn pick_slot_rejects_path_already_in_data() {
+    let h = MemHost::with(W, wf());
+    let b = Builder::new(h.clone()).unwrap();
+    let mut op = ui();
+    let s = &mut op["args"]["messages"][0]["createSurface"];
+    s["components"][0]["children"] = json!(["watch", "note", "go"]);
+    s["components"].as_array_mut().unwrap().push(
+        json!({"id": "note", "component": "TextInput", "label": "메모", "value": {"path": "/note"}}),
+    );
+    s["dataModel"] = json!({"note": "/h/in"});
+    assert!(run(&b, op).await.ok);
+    h.push_pick(Some("/h/in".into()));
+    let r = b.pick_slot(W, "watch", 1).await;
+    assert_eq!(r.code, Some(Code::UiInvalid));
+    assert_eq!(r.data["rule"], "data_slot_path");
+    let bp = blueprint(&h);
+    assert_eq!(bp.slots["watch"].path, None);
+    assert_eq!(bp.status, BlueprintStatus::Active);
+    assert!(validate_stored(&bp)); // 설계서는 그대로 남는다
+}
