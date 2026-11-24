@@ -46,6 +46,22 @@ test("card_shows_custom_old_label", () => {
   expect(screen.getByRole("heading", { name: title })).toBeTruthy();
 });
 
+test("card_escape_from_body_cancels", () => {
+  const onAnswer = vi.fn();
+  const outside = vi.fn();
+  document.addEventListener("keydown", outside);
+  try {
+    card({ onAnswer });
+    // 카드 여백·캔버스를 눌러 포커스가 body로 빠져도 Esc는 카드가 받는다.
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: "Escape" });
+  } finally {
+    document.removeEventListener("keydown", outside);
+  }
+  expect(onAnswer).toHaveBeenCalledWith(false);
+  expect(outside).not.toHaveBeenCalled();
+});
+
 test("card_title_keeps_special_patterns_in_old_label", () => {
   render(<ReplaceTriggerCard oldName="a$&{new}$1b" newName="수동 실행" refs={0} folder={false} turnsOff={false} onAnswer={() => {}} />);
   expect(screen.getByRole("heading", { name: "시작 조건 'a$&{new}$1b'을(를) '수동 실행'(으)로 바꿀까요?" })).toBeTruthy();

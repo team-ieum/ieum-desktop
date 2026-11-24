@@ -637,6 +637,18 @@ test("palette_escape_from_body_keeps_side_panel", async () => {
   expect(screen.getByRole("complementary")).toBeTruthy();
 });
 
+test("replace_card_escape_from_body_keeps_side_panel", async () => {
+  const r = await openWithTrigger();
+  await panelOf(r, "매일 아침 9시");
+  await addNode("manual.run");
+  expect(replaceCard()).toBeTruthy();
+  await act(async () => (document.activeElement as HTMLElement).blur());
+  expect(document.activeElement).toBe(document.body);
+  await act(async () => fireEvent.keyDown(document.body, { key: "Escape" }));
+  expect(replaceCard()).toBeNull();
+  expect(screen.getByRole("complementary", { name: "매일 아침 9시" })).toBeTruthy();
+});
+
 test("replace_card_closes_when_old_trigger_is_gone", async () => {
   vi.spyOn(api, "githubOptions").mockResolvedValue([] as never);
   const r = await openWithTrigger();
@@ -651,3 +663,19 @@ test("replace_card_closes_when_old_trigger_is_gone", async () => {
   expect(sent.workflow.nodes.map((n) => n.id)).toEqual(["a"]);
 });
 
+test("plus_does_not_open_palette_while_replace_card_open", async () => {
+  await openWithTrigger();
+  await addNode("manual.run");
+  expect(replaceCard()).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  expect(palette()).toBeNull();
+});
+
+test("slash_ignored_while_http_confirm_open", async () => {
+  const H: WfNode = { id: "h", event: "http.request", type: "ACTION", label: "h", config: { method: "POST", url: "https://example.com" }, position: { x: 0, y: 0 } };
+  await openSaved(entry([H], "v1"));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "실행" })));
+  expect(screen.getByRole("dialog", { name: "테스트로 실제 요청을 보낼까요?" })).toBeTruthy();
+  await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
+  expect(palette()).toBeNull();
+});

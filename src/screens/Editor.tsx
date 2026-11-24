@@ -108,7 +108,7 @@ export function NodeHead({ node, step }: { node: WfNode; step?: number }) {
  * 캔버스 왼쪽 가운데 [+] — 누르면 팔레트가 떠 있는 패널로. 바깥 클릭·노드 고르면 닫힌다.
  * Esc는 Palette가 한 단계씩 처리하고 마지막에 onClose — 여기서 document Esc를 따로 받으면 SidePanel까지 같이 닫힌다.
  */
-function PaletteButton({ onAdd, hasTrigger, slashOff }: { onAdd: (event: string) => void; hasTrigger: boolean; slashOff: boolean }) {
+function PaletteButton({ onAdd, hasTrigger, blocked }: { onAdd: (event: string) => void; hasTrigger: boolean; blocked: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -119,9 +119,9 @@ function PaletteButton({ onAdd, hasTrigger, slashOff }: { onAdd: (event: string)
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [open]);
-  // `/`로 연다 — 입력 칸·터미널에서 친 /는 글자라 건드리지 않는다. 확인 카드가 떠 있으면 그 답이 먼저다.
+  // `/`로 연다 — 입력 칸·터미널에서 친 /는 글자라 건드리지 않는다. 확인 카드가 떠 있으면(blocked) 그 답이 먼저다.
   useEffect(() => {
-    if (slashOff) return;
+    if (blocked) return;
     const h = (e: KeyboardEvent) => {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
       if ((e.target as Element | null)?.closest?.('input, textarea, select, [contenteditable], .xterm')) return;
@@ -132,17 +132,19 @@ function PaletteButton({ onAdd, hasTrigger, slashOff }: { onAdd: (event: string)
     };
     document.addEventListener("keydown", h);
     return () => document.removeEventListener("keydown", h);
-  }, [slashOff]);
+  }, [blocked]);
   return (
     <div ref={ref} className="absolute left-4 top-1/2 z-40 -translate-y-1/2">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        // 확인 카드가 떠 있는 동안은 [+]도 막는다 — 팔레트(z-40)가 카드(z-30) 위를 덮지 않게.
+        disabled={blocked}
         aria-label={t("editor.palette")}
         title={t("palette.openTitle")}
         aria-expanded={open}
         aria-haspopup="dialog"
-        className="grid size-11 cursor-pointer place-items-center rounded-full bg-main-deep-blue text-white shadow-[0_8px_20px_rgba(41,83,124,0.3)] transition-opacity hover:opacity-90"
+        className="grid size-11 cursor-pointer place-items-center rounded-full bg-main-deep-blue text-white shadow-[0_8px_20px_rgba(41,83,124,0.3)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Plus size={22} aria-hidden="true" />
       </button>
@@ -443,7 +445,7 @@ export function Editor({
             focus={focus}
           />
         </div>
-        <PaletteButton onAdd={add} hasTrigger={wf.nodes.some(isTrigger)} slashOff={!!swapOld} />
+        <PaletteButton onAdd={add} hasTrigger={wf.nodes.some(isTrigger)} blocked={!!swapOld || !!testRun.ask} />
         <AssistantPanel
           workflowId={draft.id}
           onOpenChange={(open) => void onAssistant(open)}
