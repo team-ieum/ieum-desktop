@@ -4,8 +4,7 @@ import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import { api, type WfNode, type WorkflowEntry } from "../api";
 import { nodeTitle } from "../editor/Canvas";
 import { AUTOSAVE_MS } from "../editor/sync";
-import { CATEGORIES, categoryEvents } from "../editor/paletteGroups";
-import { setLang, t } from "../i18n";
+import { setLang } from "../i18n";
 import { PALETTE } from "../nodes/defs";
 import { emptyLive, useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
@@ -50,12 +49,11 @@ afterEach(() => {
 
 const open = () => act(async () => render(<Editor id={null} onBack={() => {}} onOpenRuns={() => {}} />));
 const palette = () => screen.queryByRole("dialog", { name: "노드 추가" });
+const search = () => within(palette()!).getByRole("combobox");
 const addNode = async (event: string) => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
-  // event가 든 카테고리를 누른다 — 노드 1개 카테고리는 바로 추가되고, 아니면 옆 창에서 그 줄을 누른다.
-  const c = CATEGORIES.find((c) => categoryEvents(c).includes(event))!;
-  await act(async () => fireEvent.click(within(palette()!).getByRole("button", { name: t(`palette.cat.${c.id}`) })));
-  if (categoryEvents(c).length === 1) return;
+  // 검색으로 찾는다 — 캔버스에 트리거가 있으면 앱 안 트리거가 접혀 카테고리 옆 창엔 안 보일 수 있다.
+  await act(async () => fireEvent.change(search(), { target: { value: nodeTitle(event) } }));
   await act(async () => fireEvent.click(palette()!.querySelector(`[data-event="${event}"]`)!));
 };
 
@@ -67,8 +65,8 @@ test("editor_palette_opens_from_plus_button", async () => {
   await act(async () => fireEvent.click(plus));
   expect(plus.getAttribute("aria-expanded")).toBe("true");
   expect(palette()).toBeTruthy();
-  // Esc로 닫힌다.
-  await act(async () => fireEvent.keyDown(document, { key: "Escape" }));
+  // 검색 칸에서 Esc로 닫힌다.
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
   expect(palette()).toBeNull();
   // 바깥을 누르면 닫힌다.
   await act(async () => fireEvent.click(plus));
@@ -78,6 +76,46 @@ test("editor_palette_opens_from_plus_button", async () => {
   await addNode(PALETTE[0]);
   expect(palette()).toBeNull();
   expect(r.container.querySelectorAll(".react-flow__node")).toHaveLength(1);
+});
+
+test("palette_escape_does_not_close_side_panel", async () => {
+  await open();
+  await addNode(PALETTE[0]);
+  expect(screen.getByRole("complementary")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
+  // 팔레트만 닫히고 설정 패널은 남는다.
+  expect(palette()).toBeNull();
+  expect(screen.getByRole("complementary")).toBeTruthy();
+});
+
+test("slash_opens_palette_outside_inputs", async () => {
+  await open();
+  await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
+  expect(palette()).toBeTruthy();
+  expect(document.activeElement).toBe(search());
+  // 포커스가 body로 빠져도 다시 /로 검색 칸을 되찾는다.
+  await act(async () => document.body.focus());
+  await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
+  expect(palette()).toBeTruthy();
+  expect(document.activeElement).toBe(search());
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
+  expect(palette()).toBeNull();
+  // 입력 칸에서 친 /는 글자다.
+  await act(async () => fireEvent.keyDown(screen.getByLabelText("워크플로우 이름"), { key: "/" }));
+  expect(palette()).toBeNull();
+  // ⌘/는 다른 단축키 몫.
+  await act(async () => fireEvent.keyDown(document.body, { key: "/", metaKey: true }));
+  expect(palette()).toBeNull();
+});
+
+test("palette_floats_above_panels", async () => {
+  await open();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  const dialog = palette()!;
+  // 채팅(z-30)·설정 패널(z-20) 위로, 옆 창이 잘리지 않게 dialog 자체는 스크롤하지 않는다.
+  expect(dialog.parentElement!.className).toContain("z-40");
+  expect(dialog.className).not.toContain("overflow-y-auto");
 });
 
 test("editor_config_panel_only_when_node_selected", async () => {

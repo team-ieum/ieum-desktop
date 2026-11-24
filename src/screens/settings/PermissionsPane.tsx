@@ -127,10 +127,11 @@ export function AdvancedPane() {
   );
 }
 
-/** 코드에 실제로 걸린 단축키만(App ⌘N·⌘K, 설정 ⌘F, Esc, 캔버스 ⌫, 찾기 ↑↓↵). */
+/** 코드에 실제로 걸린 단축키만(App ⌘N·⌘K, 편집기 /, 설정 ⌘F, Esc, 캔버스 ⌫, 찾기 ↑↓↵). */
 const SHORTCUTS: { keys: string[]; label: Key }[] = [
   { keys: ["⌘K"], label: "nav.search" },
   { keys: ["⌘N"], label: "nav.newCanvas" },
+  { keys: ["/"], label: "editor.palette" },
   { keys: ["⌘F"], label: "settings.search" },
   { keys: ["Esc"], label: "settings.shortcut.close" },
   { keys: ["⌫"], label: "settings.shortcut.delete" },

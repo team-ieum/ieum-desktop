@@ -272,7 +272,7 @@ test("notifications_page_has_toggles_and_test", async () => {
 test("shortcuts_page_lists_real_shortcuts", async () => {
   await renderShell("shortcuts");
   const page = document.getElementById("settings-shortcuts")!;
-  expect([...page.querySelectorAll("kbd")].map((k) => k.textContent)).toEqual(["⌘K", "⌘N", "⌘F", "Esc", "⌫", "↑", "↓", "↵"]);
+  expect([...page.querySelectorAll("kbd")].map((k) => k.textContent)).toEqual(["⌘K", "⌘N", "/", "⌘F", "Esc", "⌫", "↑", "↓", "↵"]);
   for (const name of ["찾기", "새 캔버스", "설정 검색"]) expect(within(page).getByText(name)).toBeTruthy();
 });
 

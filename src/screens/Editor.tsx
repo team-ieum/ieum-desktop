@@ -11,6 +11,7 @@ import { Palette } from "../editor/Palette";
 import { RunErrorCard } from "../editor/RunErrorCard";
 import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
 import { Toolbar } from "../editor/Toolbar";
+import { isTrigger } from "../editor/triggerSwap";
 import { useClosing } from "../editor/useClosing";
 import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
@@ -102,11 +103,13 @@ export function NodeHead({ node, step }: { node: WfNode; step?: number }) {
   );
 }
 
-/** 캔버스 왼쪽 가운데 [+] — 누르면 팔레트가 떠 있는 패널로. 바깥 클릭·Esc·노드 고르면 닫힌다. */
-function PaletteButton({ onAdd }: { onAdd: (event: string) => void }) {
+/**
+ * 캔버스 왼쪽 가운데 [+] — 누르면 팔레트가 떠 있는 패널로. 바깥 클릭·노드 고르면 닫힌다.
+ * Esc는 Palette가 한 단계씩 처리하고 마지막에 onClose — 여기서 document Esc를 따로 받으면 SidePanel까지 같이 닫힌다.
+ */
+function PaletteButton({ onAdd, hasTrigger }: { onAdd: (event: string) => void; hasTrigger: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  useEscape(() => setOpen(false), open);
   useEffect(() => {
     if (!open) return;
     const h = (e: MouseEvent) => {
@@ -115,13 +118,26 @@ function PaletteButton({ onAdd }: { onAdd: (event: string) => void }) {
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [open]);
+  // `/`로 연다 — 입력 칸·터미널에서 친 /는 글자라 건드리지 않는다.
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.target as Element | null)?.closest?.('input, textarea, select, [contenteditable], .xterm')) return;
+      e.preventDefault();
+      setOpen(true);
+      // 이미 열려 있으면 검색 칸을 되찾는다 — WKWebView에선 포커스가 body로 빠질 수 있다.
+      ref.current?.querySelector<HTMLInputElement>('[role="combobox"]')?.focus();
+    };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, []);
   return (
-    <div ref={ref} className="absolute left-4 top-1/2 z-10 -translate-y-1/2">
+    <div ref={ref} className="absolute left-4 top-1/2 z-40 -translate-y-1/2">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-label={t("editor.palette")}
-        title={t("editor.palette")}
+        title={t("palette.openTitle")}
         aria-expanded={open}
         aria-haspopup="dialog"
         className="grid size-11 cursor-pointer place-items-center rounded-full bg-main-deep-blue text-white shadow-[0_8px_20px_rgba(41,83,124,0.3)] transition-opacity hover:opacity-90"
@@ -129,13 +145,10 @@ function PaletteButton({ onAdd }: { onAdd: (event: string) => void }) {
         <Plus size={22} aria-hidden="true" />
       </button>
       {open && (
-        <div
-          role="dialog"
-          aria-label={t("editor.palette")}
-          className="absolute left-14 top-1/2 max-h-[min(40rem,80vh)] w-64 -translate-y-1/2 overflow-y-auto rounded-2xl border border-neutral-200 bg-white p-4 shadow-[0_14px_40px_rgba(43,72,86,0.18)]"
-        >
+        // 스크롤은 목록·옆 창이 각자 한다 — 여기서 overflow를 걸면 옆 창이 잘린다.
+        <div role="dialog" aria-label={t("editor.palette")} className="absolute left-14 top-1/2 flex -translate-y-1/2">
           <Palette
-            hasTrigger={false}
+            hasTrigger={hasTrigger}
             onClose={() => setOpen(false)}
             onAdd={(e) => {
               onAdd(e);
@@ -395,7 +408,7 @@ export function Editor({
             focus={focus}
           />
         </div>
-        <PaletteButton onAdd={add} />
+        <PaletteButton onAdd={add} hasTrigger={wf.nodes.some(isTrigger)} />
         <AssistantPanel
           workflowId={draft.id}
           onOpenChange={(open) => void onAssistant(open)}
