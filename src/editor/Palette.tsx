@@ -100,17 +100,21 @@ export function Palette({ onAdd, onClose, hasTrigger }: { onAdd: (event: string)
       move(e.key === "ArrowDown" ? 1 : -1);
     } else if (e.key === "Enter") {
       if (cur) onAdd(cur);
-    } else if (e.key === "Escape") {
-      // 한 단계씩만 닫는다 — 바깥(document)의 Esc 처리(SidePanel 등)까지 가지 않게.
-      e.stopPropagation();
-      if (q) search("");
-      else if (open) show(null);
-      else onClose();
     }
+  };
+  // Esc는 팔레트 전체에서 받는다 — 포커스가 검색 칸을 떠나(Tab 등) 있어도 뒤의 SidePanel이 대신 닫히지 않게.
+  // ↑↓·Enter는 검색 칸에만 — 포커스된 버튼에선 Enter가 그 버튼을 누른다.
+  const onEscape = (e: KeyboardEvent) => {
+    if (e.key !== "Escape" || e.nativeEvent.isComposing) return;
+    // 한 단계씩만 닫는다 — 바깥(document)의 Esc 처리(SidePanel 등)까지 가지 않게.
+    e.stopPropagation();
+    if (q) search("");
+    else if (open) show(null);
+    else onClose();
   };
 
   return (
-    <div onMouseDown={keepFocus} className="flex items-start gap-2">
+    <div onMouseDown={keepFocus} onKeyDown={onEscape} className="flex items-start gap-2">
       <div className={`${SURFACE} flex w-58 shrink-0 flex-col overflow-y-auto p-2`}>
         <h2 className="px-1.5 pt-1.5 pb-2 text-sm font-semibold text-neutral-800">{t("editor.palette")}</h2>
         <div className="relative flex items-center">

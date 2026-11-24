@@ -95,7 +95,9 @@ test("slash_opens_palette_outside_inputs", async () => {
   expect(palette()).toBeTruthy();
   expect(document.activeElement).toBe(search());
   // 포커스가 body로 빠져도 다시 /로 검색 칸을 되찾는다.
-  await act(async () => document.body.focus());
+  // jsdom에선 body.focus()가 아무 일도 안 한다 — blur로 실제로 뺀다.
+  await act(async () => search().blur());
+  expect(document.activeElement).not.toBe(search());
   await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
   expect(palette()).toBeTruthy();
   expect(document.activeElement).toBe(search());

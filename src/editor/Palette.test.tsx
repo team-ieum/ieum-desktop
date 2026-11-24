@@ -234,6 +234,24 @@ test("palette_escape_steps", () => {
   document.removeEventListener("keydown", outside);
 });
 
+test("palette_escape_from_any_focus_inside", () => {
+  const onClose = vi.fn();
+  const outside = vi.fn();
+  document.addEventListener("keydown", outside);
+  render(<Palette onAdd={() => {}} onClose={onClose} hasTrigger={false} />);
+  // Tab 등으로 포커스가 검색 칸을 떠나 카테고리 버튼에 있어도 Esc는 팔레트가 받는다.
+  fireEvent.click(cat("GitHub"));
+  cat("GitHub").focus();
+  expect(document.activeElement).toBe(cat("GitHub"));
+  fireEvent.keyDown(cat("GitHub"), { key: "Escape" });
+  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.keyDown(cat("GitHub"), { key: "Escape" });
+  expect(onClose).toHaveBeenCalledTimes(1);
+  expect(outside).not.toHaveBeenCalled();
+  document.removeEventListener("keydown", outside);
+});
+
 test("palette_ignores_keys_while_composing", () => {
   const onAdd = vi.fn();
   const onClose = vi.fn();
