@@ -11,7 +11,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use github_support::{no_github, no_watch};
 use ieum_desktop_lib::builder_host::{AppHost, no_pick};
-use ieum_desktop_lib::chat::{ChatOpts, send_with};
+use ieum_desktop_lib::chat::{ChatOpts, send_with, submit};
 use ieum_desktop_lib::credentials::AccountCredentials;
 use ieum_desktop_lib::metrics::{ai_error_kind, append, turn_lines};
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
@@ -22,7 +22,7 @@ use ieum_local::ai::keys::KeyError;
 use ieum_local::ai::{
     AiAnswer, AiError, AiProvider, AiRequest, AiRunner, AiUsage, ChunkFn, KeyStore,
 };
-use ieum_local::builder::{AiDefault, Blueprint, Builder, apply_ui};
+use ieum_local::builder::{AiDefault, Blueprint, BlueprintStatus, Builder, apply_ui};
 use ieum_local::chat::{CallOutcome, CallStat, Limits, OpStat, TurnResult};
 use ieum_local::github::watch::CreatedIssues;
 use serde_json::{Value, json};
@@ -190,16 +190,21 @@ fn ai() -> AiDefault {
     }
 }
 
-/// 설계서 모드 한 턴: 노드 이름을 바꾸고(설계서를 거치지 않은 변경) 끝낸다.
-async fn bypass_turn(env: &Env, script: &Script, metrics: Option<PathBuf>) {
+/// 한 턴: `pre` 동작 뒤 노드 이름을 바꾸고(설계서를 거치지 않은 변경 → 설계서 Cancelled) 끝낸다.
+async fn bypass_turn(
+    env: &Env,
+    script: &Script,
+    blueprint: bool,
+    metrics: Option<PathBuf>,
+    pre: &[Value],
+) -> String {
     let id = save_with_blueprint(env);
     let node = env.store.get_workflow(&id).unwrap().workflow.nodes[1]
         .id
         .clone();
-    script.push(ans(
-        "바꿀게요",
-        json!([{"op": "rename", "args": {"id": node, "label": "분류기"}}]),
-    ));
+    let mut actions = pre.to_vec();
+    actions.push(json!({"op": "rename", "args": {"id": node, "label": "분류기"}}));
+    script.push(ans("바꿀게요", Value::Array(actions)));
     script.push(ans("바꿨어요", json!([])));
     let turn = send_with(
         &env.sup,
@@ -210,7 +215,7 @@ async fn bypass_turn(env: &Env, script: &Script, metrics: Option<PathBuf>) {
         Limits::default(),
         &|_| {},
         ChatOpts {
-            blueprint: true,
+            blueprint,
             metrics,
             ..ChatOpts::default()
         },
@@ -218,6 +223,11 @@ async fn bypass_turn(env: &Env, script: &Script, metrics: Option<PathBuf>) {
     .await
     .unwrap();
     assert_eq!(turn.error, None);
+    id
+}
+
+fn events(lines: &[Value]) -> Vec<&str> {
+    lines.iter().filter_map(|l| l["event"].as_str()).collect()
 }
 
 fn read_lines(path: &Path) -> Vec<Value> {
@@ -236,7 +246,7 @@ fn keys(v: &Value) -> BTreeSet<&str> {
 async fn metrics_off_writes_nothing() {
     let script = Arc::new(Script(Mutex::default()));
     let env = env(script.clone());
-    bypass_turn(&env, &script, None).await;
+    bypass_turn(&env, &script, true, None, &[]).await;
     assert!(env.root.join("data/chats").exists()); // 턴은 돌았다
     assert!(!env.root.join("data/metrics").exists());
 }
@@ -371,16 +381,78 @@ async fn metrics_on_records_calls_ops_and_events() {
     let script = Arc::new(Script(Mutex::default()));
     let env = env(script.clone());
     let path = env.root.join("data/metrics/chat.jsonl");
-    bypass_turn(&env, &script, Some(path.clone())).await;
+    bypass_turn(&env, &script, true, Some(path.clone()), &[]).await;
     let lines = read_lines(&path);
     let kinds: BTreeSet<&str> = lines.iter().map(|l| l["kind"].as_str().unwrap()).collect();
     assert_eq!(kinds, BTreeSet::from(["call", "op", "event"]));
     assert!(lines.iter().all(|l| l["mode"] == "blueprint"));
-    let events: Vec<&str> = lines.iter().filter_map(|l| l["event"].as_str()).collect();
     // 카드를 안 고치고 보냈고, 설계서 대신 바로 고쳤다.
-    assert_eq!(events, ["blueprint_ignored", "blueprint_bypassed"]);
+    assert_eq!(events(&lines), ["blueprint_ignored", "blueprint_bypassed"]);
     let raw = fs::read_to_string(&path).unwrap();
     for leak in ["/h/in", "비밀 계획", "바꿨어요", "분류기", "cafe1234"] {
         assert!(!raw.contains(leak), "{leak}: {raw}");
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn classic_turn_records_no_blueprint_events() {
+    let script = Arc::new(Script(Mutex::default()));
+    let env = env(script.clone());
+    let path = env.root.join("data/metrics/chat.jsonl");
+    let id = bypass_turn(&env, &script, false, Some(path.clone()), &[]).await;
+    // 설계서는 Active·touched false였고 직접 편집으로 Cancelled됐다 — 설계서 모드였다면 사건 둘.
+    let status = env
+        .store
+        .get_chat(&id)
+        .unwrap()
+        .state
+        .blueprint
+        .unwrap()
+        .status;
+    assert_eq!(status, BlueprintStatus::Cancelled);
+    let lines = read_lines(&path);
+    assert!(lines.iter().any(|l| l["kind"] == "op"), "{lines:?}");
+    assert!(lines.iter().all(|l| l["mode"] == "classic"));
+    assert_eq!(events(&lines), Vec::<&str>::new());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_create_still_counts_as_bypass() {
+    let script = Arc::new(Script(Mutex::default()));
+    let env = env(script.clone());
+    let path = env.root.join("data/metrics/chat.jsonl");
+    let bad = json!({"op": "ui", "args": {"messages": [{"createSurface": {
+        "surfaceId": "blueprint", "catalogId": "bad/v0", "components": []
+    }}]}});
+    bypass_turn(&env, &script, true, Some(path.clone()), &[bad]).await;
+    let lines = read_lines(&path);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l["op"] == "ui" && l["ui"] == "create" && l["ok"] == false),
+        "{lines:?}"
+    );
+    assert_eq!(events(&lines), ["blueprint_ignored", "blueprint_bypassed"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn submit_records_event_when_metrics_on() {
+    let env = env(Arc::new(Script(Mutex::default())));
+    let id = save_with_blueprint(&env);
+    let path = env.root.join("data/metrics/chat.jsonl");
+    let r = submit(&builder(&env), &id, 1, json!({}), Some(&path))
+        .await
+        .unwrap();
+    assert!(r.ok, "{r:?}");
+    let lines = read_lines(&path);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        (&lines[0]["kind"], &lines[0]["event"], &lines[0]["mode"]),
+        (
+            &json!("event"),
+            &json!("blueprint_submitted"),
+            &json!("blueprint")
+        )
+    );
+    assert!(!fs::read_to_string(&path).unwrap().contains("/h/in"));
 }

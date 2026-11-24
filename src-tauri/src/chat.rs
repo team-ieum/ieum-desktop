@@ -245,6 +245,8 @@ pub async fn send_with(
         let at = now();
         let event = |name, attempt| event_line(&at, workflow_id, mode, name, attempt);
         let mut lines = Vec::new();
+        // 토글이 꺼진 턴에 설계서는 읽기 전용이라 설계서 사건이 없다(`attempt`도 설계서 모드에서만 Some).
+        let before = before.filter(|_| opts.blueprint);
         match before {
             Some((BlueprintStatus::Active, _)) if !opts.touched => {
                 lines.push(event("blueprint_ignored", None));
@@ -258,11 +260,11 @@ pub async fn send_with(
             lines.push(event("build_turn", attempt));
         }
         lines.extend(turn_lines(&at, workflow_id, mode, &turn));
-        // 떠 있던 설계서가 이 턴의 직접 편집으로 취소됐다(새 설계서를 띄우지도 않고).
+        // 떠 있던 설계서가 이 턴의 직접 편집으로 취소됐다(새 설계서를 띄우지도 않고 — 실패한 create는 상태를 안 바꾼다).
         let after = saved.state.blueprint.map(|b| b.status);
         if matches!(before, Some((BlueprintStatus::Active, _)))
             && after == Some(BlueprintStatus::Cancelled)
-            && !turn.ops.iter().any(|o| o.ui == Some("create"))
+            && !turn.ops.iter().any(|o| o.ok && o.ui == Some("create"))
         {
             lines.push(event("blueprint_bypassed", None));
         }
