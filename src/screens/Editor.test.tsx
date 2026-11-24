@@ -620,3 +620,20 @@ test("slash_ignored_while_replace_card_open", async () => {
   await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
   expect(palette()).toBeNull();
 });
+
+test("palette_escape_from_body_keeps_side_panel", async () => {
+  await open();
+  await addNode(PALETTE[0]);
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  await act(async () => fireEvent.change(search(), { target: { value: "이슈" } }));
+  // 빈 곳 클릭·스크롤바·Tab으로 포커스가 검색 칸을 떠나 body에 있는 상태.
+  await act(async () => search().blur());
+  expect(document.activeElement).toBe(document.body);
+  await act(async () => fireEvent.keyDown(document.body, { key: "Escape" }));
+  expect((search() as HTMLInputElement).value).toBe("");
+  await act(async () => fireEvent.keyDown(document.body, { key: "Escape" }));
+  expect(palette()).toBeNull();
+  // 팔레트가 한 단계씩 받았고 설정 패널은 남는다.
+  expect(screen.getByRole("complementary")).toBeTruthy();
+});
+

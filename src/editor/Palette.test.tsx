@@ -217,39 +217,45 @@ test("palette_escape_steps", () => {
   const onClose = vi.fn();
   const outside = vi.fn();
   document.addEventListener("keydown", outside);
-  render(<Palette onAdd={() => {}} onClose={onClose} hasTrigger={false} />);
-  type("이슈");
-  key("Escape");
-  expect(input().value).toBe("");
-  expect(onClose).not.toHaveBeenCalled();
-  fireEvent.click(cat("GitHub"));
-  expect(screen.getByRole("listbox")).toBeTruthy();
-  key("Escape");
-  expect(screen.queryByRole("listbox")).toBeNull();
-  expect(onClose).not.toHaveBeenCalled();
-  key("Escape");
-  expect(onClose).toHaveBeenCalledTimes(1);
-  // 바깥(document)의 Esc 처리는 한 번도 불리지 않는다.
-  expect(outside).not.toHaveBeenCalled();
-  document.removeEventListener("keydown", outside);
+  try {
+    render(<Palette onAdd={() => {}} onClose={onClose} hasTrigger={false} />);
+    type("이슈");
+    key("Escape");
+    expect(input().value).toBe("");
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(cat("GitHub"));
+    expect(screen.getByRole("listbox")).toBeTruthy();
+    key("Escape");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    key("Escape");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // 바깥(document)의 Esc 처리는 한 번도 불리지 않는다.
+    expect(outside).not.toHaveBeenCalled();
+  } finally {
+    document.removeEventListener("keydown", outside);
+  }
 });
 
 test("palette_escape_from_any_focus_inside", () => {
   const onClose = vi.fn();
   const outside = vi.fn();
   document.addEventListener("keydown", outside);
-  render(<Palette onAdd={() => {}} onClose={onClose} hasTrigger={false} />);
-  // Tab 등으로 포커스가 검색 칸을 떠나 카테고리 버튼에 있어도 Esc는 팔레트가 받는다.
-  fireEvent.click(cat("GitHub"));
-  cat("GitHub").focus();
-  expect(document.activeElement).toBe(cat("GitHub"));
-  fireEvent.keyDown(cat("GitHub"), { key: "Escape" });
-  expect(screen.queryByRole("listbox")).toBeNull();
-  expect(onClose).not.toHaveBeenCalled();
-  fireEvent.keyDown(cat("GitHub"), { key: "Escape" });
-  expect(onClose).toHaveBeenCalledTimes(1);
-  expect(outside).not.toHaveBeenCalled();
-  document.removeEventListener("keydown", outside);
+  try {
+    render(<Palette onAdd={() => {}} onClose={onClose} hasTrigger={false} />);
+    // Tab 등으로 포커스가 검색 칸을 떠나 카테고리 버튼에 있어도 Esc는 팔레트가 받는다.
+    fireEvent.click(cat("GitHub"));
+    cat("GitHub").focus();
+    expect(document.activeElement).toBe(cat("GitHub"));
+    fireEvent.keyDown(cat("GitHub"), { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(cat("GitHub"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(outside).not.toHaveBeenCalled();
+  } finally {
+    document.removeEventListener("keydown", outside);
+  }
 });
 
 test("palette_ignores_keys_while_composing", () => {
@@ -304,3 +310,33 @@ test("palette_search_head_keeps_dollar_patterns", () => {
   type("a$&b$$");
   expect(screen.getByText("‘a$&b$$’ 검색 결과")).toBeTruthy();
 });
+
+test("palette_leaves_escape_to_other_modal", () => {
+  const onClose = vi.fn();
+  const outside = vi.fn();
+  document.addEventListener("keydown", outside);
+  try {
+    render(
+      <>
+        <Palette onAdd={() => {}} onClose={onClose} hasTrigger={false} />
+        <div role="dialog" aria-modal="true">
+          <input aria-label="검색" />
+        </div>
+      </>,
+    );
+    // ⌘K 검색 같은 다른 모달 안의 Esc는 그 모달 몫이다.
+    fireEvent.keyDown(screen.getByLabelText("검색"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(outside).toHaveBeenCalledTimes(1);
+  } finally {
+    document.removeEventListener("keydown", outside);
+  }
+});
+
+test("palette_keeps_focus_on_non_button_click", () => {
+  render(<Palette onAdd={() => {}} onClose={() => {}} hasTrigger={false} />);
+  // 제목·구역 이름 같은 빈 곳을 눌러도 포커스가 검색 칸을 떠나지 않는다.
+  expect(fireEvent.mouseDown(screen.getByRole("heading", { name: "노드 추가" }))).toBe(false);
+  expect(fireEvent.mouseDown(screen.getByText("기본"))).toBe(false);
+});
+

@@ -6,6 +6,7 @@ import { isLocal } from "../nodes/defs";
 import { GithubMark, nodeMeta, toneStyle } from "../nodes/meta";
 import { LocalBadge, nodeTitle } from "./Canvas";
 import { type Category, type CategoryId, CATEGORIES, categoryEvents, isTriggerSection, type Section } from "./paletteGroups";
+import { useCaptureEscape } from "./useCaptureEscape";
 
 // 카테고리 아이콘과 색을 빌려 올 대표 노드 — 색은 캔버스 노드와 같은 nodeMeta에서 온다.
 const LOOK: Record<CategoryId, [ComponentType<{ size?: number }>, string]> = {
@@ -47,10 +48,12 @@ const searchNodes = (needle: string): Hit[] =>
     ({ event }) => `${nodeTitle(event)} ${tDyn(`node.${event}.desc`) ?? ""}`.toLowerCase().includes(needle),
   );
 
-// WKWebView에선 버튼을 눌러도 포커스가 버튼으로 가지 않고 body로 빠진다 — 검색 칸에 붙잡아 둬야 ↑↓·Esc가 계속 먹는다.
-// 검색 칸 자체는 막지 않는다(커서 옮기기).
+// WKWebView에선 버튼을 눌러도 포커스가 버튼으로 가지 않고 body로 빠진다 — 버튼·제목·여백 어디를 눌러도
+// 검색 칸에 붙잡아 둬야 ↑↓·Enter가 계속 먹는다. 검색 칸 자체는 막지 않는다(커서 옮기기·글자 고르기).
+// 스크롤바는 WebKit에서 내용에 mousedown을 보내지 않아 여기로 오지 않는다 — Esc는 useCaptureEscape가 받는다.
 const keepFocus = (e: MouseEvent) => {
-  if ((e.target as Element).closest("button")) e.preventDefault();
+  const el = e.target instanceof Element ? e.target : null;
+  if (!el?.closest("input")) e.preventDefault();
 };
 
 /** 왼쪽에 검색 칸과 카테고리 목록, 고르면 오른쪽 옆 창에 그 노드들(검색어가 있으면 결과) — 누르면 캔버스에 추가. */
@@ -93,7 +96,7 @@ export function Palette({ onAdd, onClose, hasTrigger }: { onAdd: (event: string)
     setActive(visible[i < 0 ? 0 : Math.min(Math.max(i + d, 0), visible.length - 1)]);
   };
   const onKey = (e: KeyboardEvent) => {
-    // 한글 조합 중의 Enter·Esc는 조합을 끝내는 키다.
+    // 한글 조합 중의 Enter는 조합을 끝내는 키다.
     if (e.nativeEvent.isComposing) return;
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
@@ -102,19 +105,16 @@ export function Palette({ onAdd, onClose, hasTrigger }: { onAdd: (event: string)
       if (cur) onAdd(cur);
     }
   };
-  // Esc는 팔레트 전체에서 받는다 — 포커스가 검색 칸을 떠나(Tab 등) 있어도 뒤의 SidePanel이 대신 닫히지 않게.
-  // ↑↓·Enter는 검색 칸에만 — 포커스된 버튼에선 Enter가 그 버튼을 누른다.
-  const onEscape = (e: KeyboardEvent) => {
-    if (e.key !== "Escape" || e.nativeEvent.isComposing) return;
-    // 한 단계씩만 닫는다 — 바깥(document)의 Esc 처리(SidePanel 등)까지 가지 않게.
-    e.stopPropagation();
+  // Esc는 떠 있는 동안 어디서 눌러도 팔레트가 한 단계씩 받는다 — 포커스가 검색 칸을 떠나(빈 곳 클릭·Tab) body에 있어도
+  // 뒤의 SidePanel이 대신 닫히지 않게. ↑↓·Enter는 검색 칸에만 — 포커스된 버튼에선 Enter가 그 버튼을 누른다.
+  useCaptureEscape(() => {
     if (q) search("");
     else if (open) show(null);
     else onClose();
-  };
+  });
 
   return (
-    <div onMouseDown={keepFocus} onKeyDown={onEscape} className="flex items-start gap-2">
+    <div onMouseDown={keepFocus} className="flex items-start gap-2">
       <div className={`${SURFACE} flex w-58 shrink-0 flex-col overflow-y-auto p-2`}>
         <h2 className="px-1.5 pt-1.5 pb-2 text-sm font-semibold text-neutral-800">{t("editor.palette")}</h2>
         <div className="relative flex items-center">
@@ -208,7 +208,17 @@ export function Palette({ onAdd, onClose, hasTrigger }: { onAdd: (event: string)
       </div>
       {results && <Results id={flyoutId} listId={listId} q={q.trim()} hits={results} pick={pick} />}
       {cat && (
-        <Flyout key={cat.id} id={flyoutId} listId={listId} cat={cat} fold={fold} unfolded={unfolded} setUnfolded={setUnfolded} pick={pick} onJump={show} />
+        <Flyout
+          key={cat.id}
+          id={flyoutId}
+          listId={listId}
+          cat={cat}
+          fold={fold}
+          unfolded={unfolded}
+          setUnfolded={setUnfolded}
+          pick={pick}
+          onJump={show}
+        />
       )}
     </div>
   );
