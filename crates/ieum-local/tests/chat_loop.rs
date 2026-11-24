@@ -706,6 +706,21 @@ fn blueprint_instruction_has_no_at_sign() {
     assert!(!BLUEPRINT_INSTRUCTION.contains('@') && !BLUEPRINT_INSTRUCTION.contains('＠'));
 }
 
+/// 선택 prop(검증 표의 multiple·hint와 FlowPreview 항목의 event)은 안내대로 "[선택]"을 달고, 다른 표기는 쓰지 않는다.
+#[test]
+fn blueprint_instruction_marks_every_optional_prop() {
+    assert!(BLUEPRINT_INSTRUCTION.contains("[선택]이라고 적지 않은 prop은 모두 필수"));
+    for name in ["multiple", "hint", "event"] {
+        assert!(
+            BLUEPRINT_INSTRUCTION.contains(&format!("[선택] {name}(")),
+            "{name}"
+        );
+    }
+    assert!(
+        !BLUEPRINT_INSTRUCTION.contains("[multiple(") && !BLUEPRINT_INSTRUCTION.contains("[hint(")
+    );
+}
+
 /// 지시문의 예시가 실제 검증(Task 2 규칙)을 통과한다 — 틀린 예시는 틀린 답을 가르친다.
 #[test]
 fn blueprint_instruction_example_passes_validation() {

@@ -95,11 +95,11 @@ surfaceId는 늘 "blueprint"입니다. update 메시지는 active 설계서가 �
 - [선택]이라고 적지 않은 prop은 모두 필수입니다. 빠지거나 모양이 틀리면 unknown_prop, 글자·참거짓·목록 자리에 객체를 넣으면 binding으로 거부됩니다.
 - 글자는 줄바꿈이 공백이 되고 한도에서 잘립니다. 개수 한도를 넘으면 limit으로 거부됩니다.
 - Blueprint: title(글자 40자), children(컴포넌트 id 목록 12개까지, root·같은 id 두 번 없이)
-- FlowPreview: steps(목록 0~8개, 항목은 {"label":글자 20자} 또는 {"label":..,"event":노드 event})
-- ChipSelect: label(글자 30자), options(2~8개), value(바인딩, 값은 고른 value의 목록), [multiple(참거짓, 여러 개 고르기)]
+- FlowPreview: steps(목록 0~8개, 항목마다 label(글자 20자)과 [선택] event(그 단계의 노드 event))
+- ChipSelect: label(글자 30자), options(2~8개), value(바인딩, 값은 고른 value의 목록), [선택] multiple(참거짓, 여러 개 고르기)
 - Select: label(글자 30자), options(2~30개), value(바인딩, 값은 고른 value 글자)
 - Checkbox: label(글자 40자), value(바인딩, 값은 참거짓)
-- TextInput: label(글자 30자), value(바인딩, 값은 글자 200자), [hint(글자 80자, 예시 한 줄)]
+- TextInput: label(글자 30자), value(바인딩, 값은 글자 200자), [선택] hint(글자 80자, 예시 한 줄)
 - AppGate: slot, target. 사용자가 여기서 폴더를 고릅니다. 라벨은 앱이 붙이니 쓰지 않습니다.
   - slot은 영문 소문자로 시작하고 소문자·숫자·_로 32자까지, 설계서 안에서 겹치지 않게.
   - target은 {"event":"local.folder_new_file","field":"folder"}(감시 폴더)나 {"event":"local.file_move","field":"baseFolder"}(옮길 기준 폴더) 둘 중 하나이고 target마다 AppGate 하나.
