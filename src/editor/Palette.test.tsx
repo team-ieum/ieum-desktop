@@ -340,3 +340,14 @@ test("palette_keeps_focus_on_non_button_click", () => {
   expect(fireEvent.mouseDown(screen.getByText("기본"))).toBe(false);
 });
 
+test("palette_refold_does_not_revive_selection", () => {
+  render(<Palette onAdd={() => {}} onClose={() => {}} hasTrigger />);
+  fireEvent.click(cat("GitHub"));
+  const fold = () => screen.getByRole("button", { name: /^트리거 2 시작 조건이/ });
+  fireEvent.click(fold());
+  fireEvent.mouseEnter(option("github.new_issue"));
+  fireEvent.click(fold());
+  // 다시 펼쳐도 고르지 않은 줄에 선택이 되살아나지 않는다.
+  fireEvent.click(fold());
+  expect(input().getAttribute("aria-activedescendant")).toBeNull();
+});

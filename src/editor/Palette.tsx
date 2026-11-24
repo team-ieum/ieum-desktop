@@ -215,7 +215,11 @@ export function Palette({ onAdd, onClose, hasTrigger }: { onAdd: (event: string)
           cat={cat}
           fold={fold}
           unfolded={unfolded}
-          setUnfolded={setUnfolded}
+          setUnfolded={(u) => {
+            setUnfolded(u);
+            // 접히는 줄의 선택은 버린다 — 다시 펼쳤을 때 고르지 않은 줄이 선택돼 보이지 않게.
+            if (!u) setActive((a) => (a && fold?.events.includes(a) ? null : a));
+          }}
           pick={pick}
           onJump={show}
         />
