@@ -58,32 +58,39 @@ export function Palette({ onAdd, onClose, hasTrigger }: { onAdd: (event: string)
   const [open, setOpen] = useState<CategoryId | null>(null);
   const [q, setQ] = useState("");
   const [active, setActive] = useState<string | null>(null);
-  const root = useRef<HTMLDivElement>(null);
+  const [unfolded, setUnfolded] = useState(false);
   const uid = useId();
   const flyoutId = `${uid}flyout`;
   const listId = `${uid}list`;
   const needle = q.trim().toLowerCase();
   const results = needle ? searchNodes(needle) : null;
-  // 검색 결과면 첫 줄이 처음부터 선택돼 있다.
-  const cur = active ?? results?.[0]?.event ?? null;
   const cat = results ? undefined : CATEGORIES.find((c) => c.id === open);
+  // 캔버스에 시작 조건이 이미 있으면 앱 안 트리거는 맨 아래 한 줄로 접는다('start'엔 trigger 소제목이 없어 접히지 않는다).
+  const fold = cat && hasTrigger ? cat.sections.find(isTriggerSection) : undefined;
+  // 지금 화면에 보이는 줄 — 옆 창은 그려지는 순서대로(접힌 트리거는 펼쳤을 때만 맨 끝).
+  const visible = results
+    ? results.map((h) => h.event)
+    : cat
+      ? [...cat.sections.filter((s) => s !== fold), ...(fold && unfolded ? [fold] : [])].flatMap((s) => s.events)
+      : [];
+  // 접기 등으로 사라진 줄은 선택으로 치지 않는다. 검색 결과면 첫 줄이 처음부터 선택돼 있다.
+  const cur = active && visible.includes(active) ? active : results ? (visible[0] ?? null) : null;
   const listShown = !!cat || !!results?.length;
   const pick: Pick = { cur, hover: setActive, id: (e) => `${uid}opt-${e}`, add: onAdd };
 
   const show = (id: CategoryId | null) => {
     setOpen(id);
     setActive(null);
+    setUnfolded(false);
   };
   const search = (v: string) => {
     setQ(v);
     setActive(null);
   };
   const move = (d: 1 | -1) => {
-    // 접힌 줄은 그려지지 않으므로 지금 화면에 있는 option만 센다.
-    const ids = Array.from(root.current?.querySelectorAll<HTMLElement>('[role="option"]') ?? [], (o) => o.dataset.event ?? "");
-    if (!ids.length) return;
-    const i = cur ? ids.indexOf(cur) : -1;
-    setActive(ids[i < 0 ? 0 : Math.min(Math.max(i + d, 0), ids.length - 1)]);
+    if (!visible.length) return;
+    const i = cur ? visible.indexOf(cur) : -1;
+    setActive(visible[i < 0 ? 0 : Math.min(Math.max(i + d, 0), visible.length - 1)]);
   };
   const onKey = (e: KeyboardEvent) => {
     // 한글 조합 중의 Enter·Esc는 조합을 끝내는 키다.
@@ -103,7 +110,7 @@ export function Palette({ onAdd, onClose, hasTrigger }: { onAdd: (event: string)
   };
 
   return (
-    <div ref={root} onMouseDown={keepFocus} className="flex items-start gap-2">
+    <div onMouseDown={keepFocus} className="flex items-start gap-2">
       <div className={`${SURFACE} flex w-58 shrink-0 flex-col overflow-y-auto p-2`}>
         <h2 className="px-1.5 pt-1.5 pb-2 text-sm font-semibold text-neutral-800">{t("editor.palette")}</h2>
         <div className="relative flex items-center">
@@ -196,13 +203,15 @@ export function Palette({ onAdd, onClose, hasTrigger }: { onAdd: (event: string)
         </p>
       </div>
       {results && <Results id={flyoutId} listId={listId} q={q.trim()} hits={results} pick={pick} />}
-      {cat && <Flyout key={cat.id} id={flyoutId} listId={listId} cat={cat} hasTrigger={hasTrigger} pick={pick} onJump={show} />}
+      {cat && (
+        <Flyout key={cat.id} id={flyoutId} listId={listId} cat={cat} fold={fold} unfolded={unfolded} setUnfolded={setUnfolded} pick={pick} onJump={show} />
+      )}
     </div>
   );
 }
 
 function Results({ id, listId, q, hits, pick }: { id: string; listId: string; q: string; hits: Hit[]; pick: Pick }) {
-  const head = t("palette.search.results").replace("{q}", q);
+  const head = t("palette.search.results").replace("{q}", () => q);
   return (
     <section id={id} aria-label={head} className={`${SURFACE} flex w-80 shrink-0 flex-col overflow-hidden`}>
       <div className="border-b border-neutral-100 px-3.5 pt-3.5 pb-3">
@@ -230,21 +239,22 @@ function Flyout({
   id,
   listId,
   cat,
-  hasTrigger,
+  fold,
+  unfolded,
+  setUnfolded,
   pick,
   onJump,
 }: {
   id: string;
   listId: string;
   cat: Category;
-  hasTrigger: boolean;
+  fold: Section | undefined;
+  unfolded: boolean;
+  setUnfolded: (u: boolean) => void;
   pick: Pick;
   onJump: (id: CategoryId) => void;
 }) {
-  // 캔버스에 시작 조건이 이미 있으면 앱 안 트리거는 맨 아래 한 줄로 접는다('start'엔 trigger 소제목이 없어 접히지 않는다).
-  const fold = hasTrigger ? cat.sections.find(isTriggerSection) : undefined;
   const shown = cat.sections.filter((s) => s !== fold);
-  const [unfolded, setUnfolded] = useState(false);
   const [current, setCurrent] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const chipSecs = categoryEvents(cat).length >= 20 ? [...shown.filter((s) => s.id !== "main"), ...(fold ? [fold] : [])] : [];
@@ -313,7 +323,7 @@ function Flyout({
             // 펼치면 칩이 위의 소제목 머리로 스크롤하도록 표시를 넘긴다.
             data-sec={unfolded ? undefined : fold.id}
             aria-expanded={unfolded}
-            onClick={() => setUnfolded((u) => !u)}
+            onClick={() => setUnfolded(!unfolded)}
             className="group mx-1.5 mt-3 mb-1 flex w-[calc(100%-12px)] cursor-pointer items-center gap-2 rounded-lg border border-dashed border-neutral-200 px-2.5 py-2 text-left text-xs text-neutral-500 hover:bg-neutral-50 hover:text-neutral-700"
           >
             <b className={`inline-flex shrink-0 items-center gap-1 font-semibold ${TRIGGER_GREEN}`}>

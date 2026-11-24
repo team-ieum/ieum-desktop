@@ -261,3 +261,28 @@ test("palette_keeps_focus_in_search_after_click", () => {
   type("이슈");
   kept(screen.getByRole("button", { name: "검색어 지우기" }));
 });
+
+test("palette_folding_clears_selection_of_hidden_row", () => {
+  const onAdd = vi.fn();
+  render(<Palette onAdd={onAdd} onClose={() => {}} hasTrigger />);
+  fireEvent.click(cat("GitHub"));
+  const fold = () => screen.getByRole("button", { name: /^트리거 2 시작 조건이/ });
+  fireEvent.click(fold());
+  fireEvent.mouseEnter(option("github.new_issue"));
+  expect(input().getAttribute("aria-activedescendant")).toBe(option("github.new_issue").id);
+  // 다시 접으면 사라진 줄은 선택이 아니다 — Enter로 숨은 트리거가 추가되지 않는다.
+  fireEvent.click(fold());
+  expect(input().getAttribute("aria-activedescendant")).toBeNull();
+  key("Enter");
+  expect(onAdd).not.toHaveBeenCalled();
+  // ↓는 보이는 첫 줄부터.
+  key("ArrowDown");
+  key("Enter");
+  expect(onAdd).toHaveBeenLastCalledWith("github.create_issue");
+});
+
+test("palette_search_head_keeps_dollar_patterns", () => {
+  render(<Palette onAdd={() => {}} onClose={() => {}} hasTrigger={false} />);
+  type("a$&b$$");
+  expect(screen.getByText("‘a$&b$$’ 검색 결과")).toBeTruthy();
+});
