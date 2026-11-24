@@ -637,3 +637,17 @@ test("palette_escape_from_body_keeps_side_panel", async () => {
   expect(screen.getByRole("complementary")).toBeTruthy();
 });
 
+test("replace_card_closes_when_old_trigger_is_gone", async () => {
+  vi.spyOn(api, "githubOptions").mockResolvedValue([] as never);
+  const r = await openWithTrigger();
+  await panelOf(r, "매일 아침 9시");
+  await addNode("github.new_issue");
+  expect(replaceCard()).toBeTruthy();
+  // 카드가 떠 있는 동안 옛 트리거를 지운다 — 카드는 사라지고 켜짐 상태는 그대로.
+  await act(async () => fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "노드 삭제" })));
+  expect(replaceCard()).toBeNull();
+  const sent = await saveNow();
+  expect(sent.enabled).toBe(true);
+  expect(sent.workflow.nodes.map((n) => n.id)).toEqual(["a"]);
+});
+

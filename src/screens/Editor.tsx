@@ -214,7 +214,8 @@ export function Editor({
   }, [draft.id, onIdChange]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // 시작 조건을 다른 트리거로 바꿀지 묻는 중.
-  const [swap, setSwap] = useState<{ old: WfNode; event: string } | null>(null);
+  // 옛 노드는 id로만 들고 그릴 때마다 지금 워크플로우에서 찾는다 — 카드가 떠 있는 동안 지워지거나 바뀔 수 있다.
+  const [swap, setSwap] = useState<{ oldId: string; event: string } | null>(null);
   const [techInfo, setTechInfo] = useState(false);
   /** Assistant 패널이 가리는 캔버스 오른쪽 폭(px). */
   const [cover, setCover] = useState(0);
@@ -248,11 +249,14 @@ export function Editor({
   const general = errors.filter((e) => !e.nodeId || !known.has(e.nodeId));
   const setWorkflow = (workflow: StoredWorkflow["workflow"]) => setDraft((d) => ({ ...d, workflow }));
   const setNode = (node: WfNode) => setWorkflow({ ...wf, nodes: wf.nodes.map((n) => (n.id === node.id ? node : n)) });
+  const swapOld = swap ? wf.nodes.find((n) => n.id === swap.oldId && isTrigger(n) && n.event !== swap.event) : undefined;
+  // 옛 트리거가 지워졌거나(휴지통·빌더 AI) 더는 바꿀 대상이 아니면 묻던 것을 접는다.
+  if (swap && !swapOld) setSwap(null);
 
   const add = (event: string) => {
     const plan = planAdd(wf, event);
     if (plan.kind === "select") return showNode(plan.id);
-    if (plan.kind === "ask") return setSwap({ old: plan.old, event });
+    if (plan.kind === "ask") return setSwap({ oldId: plan.old.id, event });
     if (plan.kind === "prepend") {
       const node = newNode(event, { x: 0, y: 0 }, nodeTitle(event));
       setWorkflow(prependTrigger(wf, node));
@@ -264,15 +268,20 @@ export function Editor({
   };
 
   const answerSwap = (ok: boolean) => {
-    if (ok && swap) {
-      const { old, event } = swap;
+    if (ok && swap && swapOld) {
+      const { oldId, event } = swap;
       // 수동 실행은 켜고 끌 것이 없다 — 그 밖의 트리거는 설정을 확인하기 전까지 돌지 않게 끈다.
-      setDraft((d) => ({
-        ...d,
-        workflow: replaceTrigger(d.workflow, old.id, newNode(event, old.position ?? { x: 0, y: 0 }, nodeTitle(event))),
-        enabled: event === "manual.run" ? d.enabled : false,
-      }));
-      setSelectedId(old.id);
+      // 그사이 옛 트리거가 사라졌으면 아무것도 바꾸지 않는다(켜짐만 꺼지는 일이 없게).
+      setDraft((d) =>
+        d.workflow.nodes.some((n) => n.id === oldId)
+          ? {
+              ...d,
+              workflow: replaceTrigger(d.workflow, oldId, newNode(event, { x: 0, y: 0 }, nodeTitle(event))),
+              enabled: event === "manual.run" ? d.enabled : false,
+            }
+          : d,
+      );
+      setSelectedId(oldId);
     }
     setSwap(null);
   };
@@ -434,7 +443,7 @@ export function Editor({
             focus={focus}
           />
         </div>
-        <PaletteButton onAdd={add} hasTrigger={wf.nodes.some(isTrigger)} slashOff={!!swap} />
+        <PaletteButton onAdd={add} hasTrigger={wf.nodes.some(isTrigger)} slashOff={!!swapOld} />
         <AssistantPanel
           workflowId={draft.id}
           onOpenChange={(open) => void onAssistant(open)}
@@ -451,12 +460,12 @@ export function Editor({
           onOpenIntegrations={onOpenIntegrations}
           onOpenAiSettings={onOpenAiSettings}
         />
-        {swap && (
+        {swap && swapOld && (
           <ReplaceTriggerCard
-            oldName={swap.old.label || nodeTitle(swap.old.event)}
+            oldName={swapOld.label || nodeTitle(swapOld.event)}
             newName={nodeTitle(swap.event)}
-            refs={referencingNodes(wf, swap.old.id).length}
-            folder={swap.old.event === "local.folder_new_file" && wf.nodes.some((n) => n.event.startsWith("local.file_"))}
+            refs={referencingNodes(wf, swapOld.id).length}
+            folder={swapOld.event === "local.folder_new_file" && wf.nodes.some((n) => n.event.startsWith("local.file_"))}
             turnsOff={draft.enabled && swap.event !== "manual.run"}
             onAnswer={answerSwap}
           />
