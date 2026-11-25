@@ -303,7 +303,7 @@ pub fn check_data(b: &Blueprint, data: &Value) -> Result<(), UiError> {
     Ok(())
 }
 
-/// 프롬프트 "## 설계서" 구역 본문. 바인딩은 LLM 표기로 되돌리고, 슬롯은 고름 여부만 싣는다.
+/// 프롬프트 "## 설계서" 구역 본문. 바인딩은 LLM 표기로 되돌리고, 슬롯은 고름·노드에 넣음 여부만 싣는다.
 pub fn prompt_summary(b: &Blueprint) -> String {
     let status = serde_json::to_value(b.status).unwrap_or_default();
     let mut out = format!(
@@ -326,10 +326,10 @@ pub fn prompt_summary(b: &Blueprint) -> String {
     }
     out += &format!("데이터: {}\n앱 전용 칸:\n", b.data_model);
     for (slot, s) in &b.slots {
-        let picked = if s.path.is_some() {
-            "고름"
-        } else {
-            "안 고름"
+        let picked = match (&s.path, &s.bound_node) {
+            (Some(_), _) => "고름".to_string(),
+            (None, Some(n)) => format!("노드에 넣음({n})"),
+            (None, None) => "안 고름".to_string(),
         };
         out += &format!("- {slot} {}.{} {picked}\n", s.event, s.field);
     }

@@ -432,3 +432,21 @@ fn object_in_item_text_is_binding() {
     let c = json!({"id": "s", "component": "Select", "label": "칸", "options": opts, "value": {"path": "/s"}});
     assert_eq!(rule(None, plus(c)), "unknown_prop");
 }
+
+#[test]
+fn prompt_summary_marks_bound_slots() {
+    let mut b = base();
+    let s = b.slots.get_mut("watch").unwrap();
+    s.path = None;
+    s.bound_node = Some("n1".into());
+    let out = prompt_summary(&b);
+    assert!(
+        out.contains("watch local.folder_new_file.folder 노드에 넣음(n1)"),
+        "{out}"
+    );
+    assert!(
+        !out.contains("watch local.folder_new_file.folder 안 고름"),
+        "{out}"
+    );
+    assert!(!out.contains("/h/in"), "{out}");
+}
