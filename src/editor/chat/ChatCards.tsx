@@ -5,7 +5,7 @@ import { type Key, t } from "../../i18n";
 
 export const CARD =
   "rounded-xl border border-[#cde9f4] bg-white px-3 py-2.5 text-xs max-w-[280px] shadow-[0_4px_14px_-10px_rgba(41,83,124,.35)]";
-const CARD_BUTTON =
+export const CARD_BUTTON =
   "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-main-blue px-3 py-2 text-xs font-semibold text-main-blue transition-colors hover:bg-main-blue/5 disabled:opacity-40";
 /** 상태 점 색 — 상태 글이 같이 있어 색만으로 전하지 않는다. */
 const DOT: Record<string, string> = { succeeded: "bg-[#2f9e6e]", success: "bg-[#2f9e6e]", failed: "bg-[#d0573b]" };
@@ -22,7 +22,17 @@ const statusText = (s: string) => (STATUS[s] ? t(STATUS[s]) : s);
 const shown = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v)).slice(0, 200);
 
 /** 테스트 결과 — 값은 실행 기록에서 직접 읽어 화면에만 보인다(AI에게 다시 가지 않는다). */
-export function TestCard({ runId, status, nodeNames }: { runId: string; status: string; nodeNames?: Record<string, string> }) {
+export function TestCard({
+  runId,
+  status,
+  nodeNames,
+  httpSent,
+}: {
+  runId: string;
+  status: string;
+  nodeNames?: Record<string, string>;
+  httpSent?: boolean;
+}) {
   const [run, setRun] = useState<StoredRun | null>(null);
   useEffect(() => {
     api.getRun(runId).then(setRun, () => {});
@@ -35,6 +45,7 @@ export function TestCard({ runId, status, nodeNames }: { runId: string; status: 
         <FlaskConical size={13} aria-hidden="true" />
         {t("chat.card.test")} · {statusText(status)}
       </p>
+      {httpSent && <p className="font-semibold text-danger-700">{t("chat.card.httpSent")}</p>}
       {nodes.map(([id, n]) => (
         <div key={id} className="flex flex-col gap-0.5 border-t border-[#e8f1f5] pt-1.5">
           <p className="flex items-center gap-1.5 font-semibold">

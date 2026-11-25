@@ -630,6 +630,24 @@ fn remove_dir(dir: &Path) -> Result<(), String> {
     }
 }
 
+/// 한도 알림·막는 문구용 API 키 이름표. 키체인은 부르지 않고 `root/credentials.json`만 읽는다.
+/// 못 읽거나 없으면 옛 키는 "기본", 그 밖에는 id 그대로.
+pub fn api_label_in(root: &Path, provider: &str, id: &str) -> String {
+    read_json(&root.join(FILE))
+        .ok()
+        .and_then(|c| {
+            let list = c.api_keys.get(provider)?;
+            Some(list.iter().find(|m| m.id == id)?.label.clone())
+        })
+        .unwrap_or_else(|| {
+            if id == LEGACY_ID {
+                "기본".into()
+            } else {
+                id.into()
+            }
+        })
+}
+
 /// 없는 파일은 빈 목록.
 fn read_json(path: &Path) -> Result<Credentials, String> {
     match std::fs::read_to_string(path) {

@@ -1,12 +1,13 @@
 //! 화면이 부르는 Tauri 명령 — 로직은 `store`·`supervisor`에 두고 여기는 얇게 감싼다.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ieum_engine::{ValidationError, Workflow};
 use ieum_local::UndoReport;
 use ieum_local::ai::{KeyStore, detect_clis};
-use ieum_local::builder::{ChatFile, PendingFinish, Reply};
+use ieum_local::builder::{ChatFile, HttpConfirm, PendingFinish, Reply};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
@@ -15,13 +16,16 @@ use crate::account::AccountId;
 use crate::active::{Active, NOT_SIGNED_IN};
 use crate::builder_host::{PickFolder, builder_of};
 use crate::channel::Channel;
-use crate::credentials::{AccountCredentials, ApiKeyMeta, CliAccountBegin, CredentialsView};
+use crate::credentials::{
+    API_PROVIDERS, AccountCredentials, ApiKeyMeta, CliAccountBegin, CredentialsView,
+};
+use crate::key_limits::{self, KeyLimitsView};
 use crate::permissions;
 use crate::plan_usage::PlanUsage;
 use crate::pricing;
-use crate::store::{RunSummary, Settings, Store, StoredRun, StoredWorkflow};
+use crate::store::{RunSummary, Sample, Settings, Store, StoredRun, StoredWorkflow};
 use crate::sub_usage::{AntigravityUsageClient, SubscriptionUsage};
-use crate::supervisor::{Supervisor, WorkflowEntry};
+use crate::supervisor::{NodeTestResult, Supervisor, WorkflowEntry};
 use crate::terminal::Terms;
 use crate::usage::{self, UsageReport, UsageSummary};
 use crate::web::dashboard::{WebDashboardError, WebDashboardExecution, WebDashboardSummary};
@@ -125,13 +129,36 @@ pub async fn validate_workflow(
 pub async fn run_now(
     active: State<'_, Active>,
     id: String,
-    file_path: String,
+    file_path: Option<String>,
 ) -> Result<String, String> {
+    let file = file_path.map(PathBuf::from);
+    active.sup().await?.run_now(&id, file.as_deref()).await
+}
+
+/// 노드 패널 테스트 — 편집본의 노드 하나만 돌린다(실행 이벤트 없음). 확인 카드는 화면이 먼저 받는다.
+#[tauri::command]
+pub async fn test_node(
+    active: State<'_, Active>,
+    id: String,
+    workflow: Workflow,
+    node_id: String,
+    file_path: Option<String>,
+) -> Result<NodeTestResult, String> {
+    let file = file_path.map(PathBuf::from);
     active
         .sup()
         .await?
-        .run_now(&id, &PathBuf::from(file_path))
+        .test_node(&id, workflow, &node_id, file.as_deref())
         .await
+}
+
+/// 노드별 마지막 테스트 결과.
+#[tauri::command]
+pub async fn get_samples(
+    active: State<'_, Active>,
+    id: String,
+) -> Result<BTreeMap<String, Sample>, String> {
+    active.sup().await?.store().get_samples(&id)
 }
 
 #[tauri::command]
@@ -159,6 +186,33 @@ pub async fn usage_summary(
     let runs = sup.store().all_runs()?;
     let chats = sup.store().all_chat_usage()?;
     Ok(usage::summarize(&runs, &chats, from, now, pricing::table()))
+}
+
+/// 키별 월 한도와 이번 달 지출(대시보드와 같은 계산).
+#[tauri::command]
+pub async fn key_limits(active: State<'_, Active>) -> Result<KeyLimitsView, String> {
+    key_limits::view(active.sup().await?.store(), chrono::Local::now())
+}
+
+/// 키 한도를 정한다. `usd`가 없으면 한도를 푼다.
+#[tauri::command]
+pub async fn set_key_limit(
+    active: State<'_, Active>,
+    source: String,
+    id: String,
+    usd: Option<f64>,
+) -> Result<(), String> {
+    if !API_PROVIDERS.contains(&source.as_str()) {
+        return Err("지원하지 않는 공급원이에요.".into());
+    }
+    if !key_limits::valid_key_id(&id) {
+        return Err("키 id가 올바르지 않아요.".into());
+    }
+    active
+        .sup()
+        .await?
+        .store()
+        .set_key_limit(&format!("{source}:{id}"), usd)
 }
 
 /// 활성 계정의 통계 및 사용량 화면 — 합계·최근 30일 개요·공급자별 분석(로컬 시각대).
@@ -273,7 +327,16 @@ pub async fn delete_credential(
     kind: String,
     id: String,
 ) -> Result<(), String> {
-    with_credentials(&active, move |c| c.delete(&kind, &id)).await
+    let (k, i) = (kind.clone(), id.clone());
+    with_credentials(&active, move |c| c.delete(&kind, &id)).await?;
+    if API_PROVIDERS.contains(&k.as_str()) {
+        active
+            .sup()
+            .await?
+            .store()
+            .remove_key_limit(&format!("{k}:{i}"))?;
+    }
+    Ok(())
 }
 
 /// 구독 계정 추가 시작: 설정 폴더를 만들고 터미널에서 돌릴 로그인 명령을 준다. `kind` = `claude|codex`.
@@ -378,7 +441,7 @@ const HELP_URL: &str = "https://github.com/team-ieum/ieum-desktop/blob/main/docs
 
 /// 기본 브라우저로 연다. 주소는 화면이 아니라 고정값·저장된 설정에서 만든다.
 // ponytail: macOS `open`만(1단계는 macOS 전용) — 다른 OS를 내면 opener 플러그인으로.
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     let status = std::process::Command::new("/usr/bin/open")
         .arg(url)
         .status()
@@ -856,7 +919,12 @@ pub fn web_unwatch_execution(watches: State<'_, Watches>, execution_id: String) 
 /// 채팅 상태 파일(대화·테스트 상태). 없으면 빈 값.
 #[tauri::command]
 pub async fn get_chat(active: State<'_, Active>, workflow_id: String) -> Result<ChatFile, String> {
-    active.sup().await?.store().get_chat(&workflow_id)
+    active
+        .sup()
+        .await?
+        .store()
+        .get_chat(&workflow_id)
+        .map(crate::chat::visible_chat)
 }
 
 /// 사람의 확인을 기다리는 완료 요청(확인 카드 내용). 없으면 None.
@@ -881,6 +949,20 @@ pub async fn confirm_finish(
         .await?
         .confirm_finish(&workflow_id, accept)
         .await)
+}
+
+/// HTTP 테스트 확인 카드의 [보내기]/[테스트 없이 넘어가기]. 기다리는 대기가 없으면(시간 초과·덮어씀) false.
+#[tauri::command]
+pub async fn answer_http_confirm(
+    active: State<'_, Active>,
+    workflow_id: String,
+    send: bool,
+) -> Result<bool, String> {
+    let choice = match send {
+        true => HttpConfirm::Send,
+        false => HttpConfirm::Skip,
+    };
+    Ok(active.sup().await?.http_gate().answer(&workflow_id, choice))
 }
 
 /// 편집기의 미저장 편집 표시 — 켜져 있는 동안 빌더의 고치는 동작은 `USER_EDITING`으로 거절된다(사람의 편집 우선).

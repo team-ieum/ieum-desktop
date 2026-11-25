@@ -1,24 +1,28 @@
-import { Play, Plus, Trash2, X } from "lucide-react";
+import { Plus, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type StoredWorkflow, type ValidationError, type WfNode, type WorkflowEntry } from "../api";
-import { Canvas, LocalBadge, nodeTitle, StatusIcon } from "../editor/Canvas";
+import { Canvas, LocalBadge, nodeTitle } from "../editor/Canvas";
 import { AssistantPanel } from "../editor/chat/AssistantPanel";
 import { FinishCard } from "../editor/chat/FinishCard";
+import { HttpConfirm, HttpTestCard } from "../editor/chat/HttpTestCard";
 import { ConfigPanel } from "../editor/ConfigPanel";
+import { NodeTestSection } from "../editor/NodeTestSection";
 import { Palette } from "../editor/Palette";
+import { RunErrorCard } from "../editor/RunErrorCard";
 import { AUTOSAVE_MS, mergeRemote, STALE } from "../editor/sync";
 import { Toolbar } from "../editor/Toolbar";
+import { ReplaceTriggerCard } from "../editor/ReplaceTriggerCard";
+import { isTrigger, planAdd, prependTrigger, referencingNodes, replaceTrigger } from "../editor/triggerSwap";
+import { useClosing } from "../editor/useClosing";
 import { useTestRun } from "../editor/useTestRun";
 import { t } from "../i18n";
 import { isLocal, newNode, nextPosition } from "../nodes/defs";
+import { BUTTON, PRIMARY } from "../editor/buttons";
 import { nodeMeta, toneStyle } from "../nodes/meta";
 import { emptyLive, useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
 
-export const BUTTON =
-  "inline-flex items-center gap-1.5 rounded-brand-sm border border-neutral-300 bg-white px-3 py-2 typo-button1_semibold text-neutral-700 hover:bg-neutral-100 disabled:opacity-40";
-export const PRIMARY =
-  "inline-flex items-center gap-1.5 rounded-brand-sm bg-main-blue px-3 py-2 typo-button1_semibold text-white hover:bg-main-deep-blue disabled:opacity-40";
+export { BUTTON, PRIMARY };
 
 const strip = ({ watch: _w, watchMessage: _m, ...wf }: WorkflowEntry): StoredWorkflow => wf;
 
@@ -40,20 +44,28 @@ export function useEscape(onEscape: () => void, active = true) {
  * 캔버스 위 오른쪽에 떠 있는 카드 — 머리 + [X]. Esc로도 닫힌다.
  * 부모는 `relative`, 캔버스는 그 안에서 `absolute inset-0`(패널 뒤로 전체 폭).
  */
-export function SidePanel({ label, header, onClose, children }: { label: string; header: ReactNode; onClose: () => void; children: ReactNode }) {
-  const [closing, setClosing] = useState(false);
-  // 열 때는 CSS(@starting-style)로 밀려 들어오고, 닫을 때는 밀려 나간 뒤 없앤다. 움직임 줄이기면 바로.
-  const close = () => {
-    if (!window.matchMedia?.("(prefers-reduced-motion: no-preference)").matches) return onClose();
-    setClosing(true);
-    setTimeout(onClose, 150);
-  };
+export function SidePanel({
+  label,
+  header,
+  onClose,
+  right,
+  children,
+}: {
+  label: string;
+  header: ReactNode;
+  onClose: () => void;
+  /** 오른쪽 여백(px). 없으면 right-4 — 채팅창이 열려 있으면 그 왼쪽으로 비킨다. */
+  right?: number;
+  children: ReactNode;
+}) {
+  const { closing, close } = useClosing(onClose);
   useEscape(close);
   return (
     <aside
       aria-label={label}
-      className={`absolute top-4 right-4 bottom-4 z-20 flex w-96 flex-col overflow-y-auto rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] transition-[translate,opacity] duration-150 ease-out starting:translate-x-6 starting:opacity-0 motion-reduce:transition-none ${
-        closing ? "translate-x-6 opacity-0" : ""
+      style={right === undefined ? undefined : { right }}
+      className={`absolute top-4 ${right === undefined ? "right-4" : ""} bottom-4 z-20 flex w-96 flex-col overflow-y-auto rounded-2xl border border-neutral-200 bg-white shadow-[0_14px_40px_rgba(43,72,86,0.18)] ${
+        closing ? "ieum-slide-out" : "ieum-slide-in"
       }`}
     >
       <div className="flex items-center gap-2.5 border-b border-neutral-200 px-5 py-4">
@@ -92,11 +104,13 @@ export function NodeHead({ node, step }: { node: WfNode; step?: number }) {
   );
 }
 
-/** 캔버스 왼쪽 가운데 [+] — 누르면 팔레트가 떠 있는 패널로. 바깥 클릭·Esc·노드 고르면 닫힌다. */
-function PaletteButton({ onAdd }: { onAdd: (event: string) => void }) {
+/**
+ * 캔버스 왼쪽 가운데 [+] — 누르면 팔레트가 떠 있는 패널로. 바깥 클릭·노드 고르면 닫힌다.
+ * Esc는 Palette가 한 단계씩 처리하고 마지막에 onClose — 여기서 document Esc를 따로 받으면 SidePanel까지 같이 닫힌다.
+ */
+function PaletteButton({ onAdd, hasTrigger, blocked }: { onAdd: (event: string) => void; hasTrigger: boolean; blocked: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  useEscape(() => setOpen(false), open);
   useEffect(() => {
     if (!open) return;
     const h = (e: MouseEvent) => {
@@ -105,26 +119,41 @@ function PaletteButton({ onAdd }: { onAdd: (event: string) => void }) {
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, [open]);
+  // `/`로 연다 — 입력 칸·터미널에서 친 /는 글자라 건드리지 않는다. 확인 카드가 떠 있으면(blocked) 그 답이 먼저다.
+  useEffect(() => {
+    if (blocked) return;
+    const h = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      if ((e.target as Element | null)?.closest?.('input, textarea, select, [contenteditable], .xterm')) return;
+      e.preventDefault();
+      setOpen(true);
+      // 이미 열려 있으면 검색 칸을 되찾는다 — WKWebView에선 포커스가 body로 빠질 수 있다.
+      ref.current?.querySelector<HTMLInputElement>('[role="combobox"]')?.focus();
+    };
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, [blocked]);
   return (
-    <div ref={ref} className="absolute left-4 top-1/2 z-10 -translate-y-1/2">
+    <div ref={ref} className="absolute left-4 top-1/2 z-40 -translate-y-1/2">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        // 확인 카드가 떠 있는 동안은 [+]도 막는다 — 팔레트(z-40)가 카드(z-30) 위를 덮지 않게.
+        disabled={blocked}
         aria-label={t("editor.palette")}
-        title={t("editor.palette")}
+        title={t("palette.openTitle")}
         aria-expanded={open}
         aria-haspopup="dialog"
-        className="grid size-11 cursor-pointer place-items-center rounded-full bg-main-deep-blue text-white shadow-[0_8px_20px_rgba(41,83,124,0.3)] transition-opacity hover:opacity-90"
+        className="grid size-11 cursor-pointer place-items-center rounded-full bg-main-deep-blue text-white shadow-[0_8px_20px_rgba(41,83,124,0.3)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Plus size={22} aria-hidden="true" />
       </button>
       {open && (
-        <div
-          role="dialog"
-          aria-label={t("editor.palette")}
-          className="absolute left-14 top-1/2 max-h-[min(40rem,80vh)] w-64 -translate-y-1/2 overflow-y-auto rounded-2xl border border-neutral-200 bg-white p-4 shadow-[0_14px_40px_rgba(43,72,86,0.18)]"
-        >
+        // 스크롤은 목록·옆 창이 각자 한다 — 여기서 overflow를 걸면 옆 창이 잘린다.
+        <div role="dialog" aria-label={t("editor.palette")} className="absolute left-14 top-1/2 flex -translate-y-1/2">
           <Palette
+            hasTrigger={hasTrigger}
+            onClose={() => setOpen(false)}
             onAdd={(e) => {
               onAdd(e);
               setOpen(false);
@@ -142,6 +171,8 @@ export function Editor({
   onOpenRuns,
   onDirty,
   onIdChange,
+  onOpenIntegrations,
+  onOpenAiSettings,
 }: {
   id: string | null;
   onBack: () => void;
@@ -150,6 +181,10 @@ export function Editor({
   onDirty?: (dirty: boolean) => void;
   /** 지금 보여 주는 워크플로우 id — 새 캔버스는 선저장 뒤에 생긴다. 아직 없거나 편집기를 떠나면 "". */
   onIdChange?: (id: string) => void;
+  /** 오류 카드·띠의 [설정 › 연동 열기] — GitHub 연결 오류일 때만 보인다. */
+  onOpenIntegrations?: () => void;
+  /** 오류 카드·띠의 [설정 › AI 열기] — 키 월 한도 초과일 때만 보인다. */
+  onOpenAiSettings?: () => void;
 }) {
   const entry = useWorkflows((s) => s.list.find((w) => w.id === id));
   const save = useWorkflows((s) => s.save);
@@ -180,15 +215,23 @@ export function Editor({
     return () => onIdChange?.("");
   }, [draft.id, onIdChange]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // 시작 조건을 다른 트리거로 바꿀지 묻는 중.
+  // 옛 노드는 id로만 들고 그릴 때마다 지금 워크플로우에서 찾는다 — 카드가 떠 있는 동안 지워지거나 바뀔 수 있다.
+  const [swap, setSwap] = useState<{ oldId: string; event: string } | null>(null);
   const [techInfo, setTechInfo] = useState(false);
   /** Assistant 패널이 가리는 캔버스 오른쪽 폭(px). */
   const [cover, setCover] = useState(0);
+  /** 오류 카드 [노드 보기] — nonce가 바뀔 때마다 캔버스가 그 노드로 보기를 옮긴다. */
+  const [focus, setFocus] = useState<{ id: string; nonce: number; right: number }>();
   const [errors, setErrors] = useState<ValidationError[]>([]);
   const [status, setStatus] = useState<{ saving?: boolean; error?: string }>({});
   const live = useRuns((s) => s.live[draft.id]) ?? emptyLive(draft.id);
-  const testRun = useTestRun(draft.id);
+  // runNow는 저장본을 돌린다(실행 버튼은 미저장 편집이 있으면 꺼진다) — 확인도 저장본으로 판단한다.
+  const testRun = useTestRun(draft.id, base.workflow.nodes);
   /** 빌더의 테스트가 되돌리지 못한 파일(`원래 자리 → 지금 자리`) — 터미널 입구에는 결과 카드가 없어 여기 배너로 보인다. */
   const [stuck, setStuck] = useState<string[]>([]);
+  /** 캔버스 자리 — 노드 테스트 확인 카드를 패널 밖 여기에 띄운다. */
+  const [area, setArea] = useState<HTMLDivElement | null>(null);
 
   // 고칠 때마다 검증 결과를 노드 위에 보여 준다.
   useEffect(() => {
@@ -208,11 +251,41 @@ export function Editor({
   const general = errors.filter((e) => !e.nodeId || !known.has(e.nodeId));
   const setWorkflow = (workflow: StoredWorkflow["workflow"]) => setDraft((d) => ({ ...d, workflow }));
   const setNode = (node: WfNode) => setWorkflow({ ...wf, nodes: wf.nodes.map((n) => (n.id === node.id ? node : n)) });
+  const swapOld = swap ? wf.nodes.find((n) => n.id === swap.oldId && isTrigger(n) && n.event !== swap.event) : undefined;
+  // 옛 트리거가 지워졌거나(휴지통·빌더 AI) 더는 바꿀 대상이 아니면 묻던 것을 접는다.
+  if (swap && !swapOld) setSwap(null);
 
   const add = (event: string) => {
+    const plan = planAdd(wf, event);
+    if (plan.kind === "select") return showNode(plan.id);
+    if (plan.kind === "ask") return setSwap({ oldId: plan.old.id, event });
+    if (plan.kind === "prepend") {
+      const node = newNode(event, { x: 0, y: 0 }, nodeTitle(event));
+      setWorkflow(prependTrigger(wf, node));
+      return setSelectedId(node.id);
+    }
     const node = newNode(event, nextPosition(wf.nodes), nodeTitle(event));
     setWorkflow({ ...wf, nodes: [...wf.nodes, node] });
     setSelectedId(node.id);
+  };
+
+  const answerSwap = (ok: boolean) => {
+    if (ok && swap && swapOld) {
+      const { oldId, event } = swap;
+      // 수동 실행은 켜고 끌 것이 없다 — 그 밖의 트리거는 설정을 확인하기 전까지 돌지 않게 끈다.
+      // 그사이 옛 트리거가 사라졌으면 아무것도 바꾸지 않는다(켜짐만 꺼지는 일이 없게).
+      setDraft((d) =>
+        d.workflow.nodes.some((n) => n.id === oldId)
+          ? {
+              ...d,
+              workflow: replaceTrigger(d.workflow, oldId, newNode(event, { x: 0, y: 0 }, nodeTitle(event))),
+              enabled: event === "manual.run" ? d.enabled : false,
+            }
+          : d,
+      );
+      setSelectedId(oldId);
+    }
+    setSwap(null);
   };
 
   const remove = (nodeId: string) => {
@@ -318,7 +391,14 @@ export function Editor({
     (m): m is string => !!m,
   );
   const unsaved = dirty || !draft.id;
-  const nodeStatus = selected && live.nodes[selected.id];
+  // 취소한 실행은 실패로 보이지 않는다.
+  const showRun = live.status !== "cancelled";
+  const nodeRight = cover > 0 ? cover + 12 + 384 : 400;
+  const showNode = (nodeId: string) => {
+    setSelectedId(nodeId);
+    // 노드 패널(w-96 384)은 채팅창 왼쪽(cover + 12)에 놓인다. 채팅창이 없으면 오른쪽 여백 16.
+    setFocus((f) => ({ id: nodeId, nonce: (f?.nonce ?? 0) + 1, right: nodeRight }));
+  };
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -330,6 +410,7 @@ export function Editor({
         dirty={unsaved}
         enabled={draft.enabled}
         onEnabled={(enabled) => setDraft({ ...draft, enabled })}
+        hideEnabled={wf.nodes.some((n) => n.event === "manual.run")}
         problems={errors.length}
         onBack={onBack}
         onOpenRuns={draft.id ? () => onOpenRuns(draft.id) : undefined}
@@ -345,7 +426,7 @@ export function Editor({
           ))}
         </ul>
       )}
-      <div className="relative min-h-0 flex-1">
+      <div ref={setArea} className="relative min-h-0 flex-1">
         <div className="absolute inset-0">
           <Canvas
             workflow={wf}
@@ -357,9 +438,14 @@ export function Editor({
             onNodeClick={setSelectedId}
             techInfo={techInfo}
             rightCover={cover}
+            runErrors={showRun ? live.errors : undefined}
+            runCodes={showRun ? live.codes : undefined}
+            onOpenIntegrations={onOpenIntegrations}
+            onOpenAiSettings={onOpenAiSettings}
+            focus={focus}
           />
         </div>
-        <PaletteButton onAdd={add} />
+        <PaletteButton onAdd={add} hasTrigger={wf.nodes.some(isTrigger)} blocked={!!swapOld || !!testRun.ask} />
         <AssistantPanel
           workflowId={draft.id}
           onOpenChange={(open) => void onAssistant(open)}
@@ -367,8 +453,29 @@ export function Editor({
           nodeNames={Object.fromEntries(draft.workflow.nodes.map((n) => [n.id, n.label || nodeTitle(n.event)]))}
         />
         <FinishCard workflowId={draft.id} version={base.updatedAt} />
+        <HttpTestCard key={draft.id} workflowId={draft.id} />
+        <RunErrorCard
+          key={live.runId ?? ""}
+          live={live}
+          nodes={wf.nodes}
+          onShow={showNode}
+          onOpenIntegrations={onOpenIntegrations}
+          onOpenAiSettings={onOpenAiSettings}
+        />
+        {swap && swapOld && (
+          <ReplaceTriggerCard
+            oldName={swapOld.label || nodeTitle(swapOld.event)}
+            newName={nodeTitle(swap.event)}
+            refs={referencingNodes(wf, swapOld.id).length}
+            folder={swapOld.event === "local.folder_new_file" && wf.nodes.some((n) => n.event.startsWith("local.file_"))}
+            turnsOff={draft.enabled && swap.event !== "manual.run"}
+            onAnswer={answerSwap}
+          />
+        )}
+        {testRun.ask && <HttpConfirm lines={testRun.ask} skipLabel={t("common.cancel")} onAnswer={testRun.answer} />}
         {selected && (
           <SidePanel
+            right={cover > 0 ? cover + 12 : undefined}
             label={selected.label || nodeTitle(selected.event)}
             onClose={() => setSelectedId(null)}
             header={
@@ -388,39 +495,19 @@ export function Editor({
             }
           >
             <div className="flex-1 p-5">
-              <ConfigPanel key={selected.id} node={selected} workflow={wf} onChange={setNode} />
+              <ConfigPanel key={`${selected.id}:${selected.event}`} node={selected} workflow={wf} onChange={setNode} onOpenIntegrations={onOpenIntegrations} />
             </div>
-            {/* 시험 실행은 워크플로우 전체 — 결과는 이 노드 것만(마지막 실행의 상태·오류·출력 조각). */}
-            <section className="flex flex-col gap-2 border-t border-neutral-200 bg-neutral-50 p-5">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="typo-body2_bold text-neutral-800">{t("editor.test")}</h3>
-                <button
-                  type="button"
-                  className={BUTTON}
-                  onClick={() => void testRun.run()}
-                  disabled={unsaved || testRun.running}
-                  title={unsaved ? t("run.saveFirst") : t("editor.testHint")}
-                >
-                  <Play size={14} aria-hidden="true" />
-                  {t("editor.test")}
-                </button>
-              </div>
-              <p className="typo-caption1_regular text-neutral-500">{t("editor.testHint")}</p>
-              {nodeStatus ? (
-                <p className="flex items-center gap-2 typo-body3_semibold text-neutral-800">
-                  <StatusIcon status={nodeStatus} />
-                  {t(`status.${nodeStatus}`)}
-                </p>
-              ) : (
-                <p className="typo-body3_regular text-neutral-500">{t("editor.noResult")}</p>
-              )}
-              {live.errors[selected.id] && <p className="typo-caption1_semibold text-danger-700">{live.errors[selected.id]}</p>}
-              {live.chunks[selected.id] && (
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-brand-sm border border-neutral-200 bg-white p-2.5 font-mono text-xs text-neutral-700">
-                  {live.chunks[selected.id]}
-                </pre>
-              )}
-            </section>
+            <NodeTestSection
+              key={`${selected.id}:${selected.event}`}
+              workflowId={draft.id || null}
+              workflow={wf}
+              node={selected}
+              onOpen={showNode}
+              lastFailed={showRun && live.nodes[selected.id] === "failed"}
+              lastError={live.errors[selected.id]}
+              chunk={live.chunks[selected.id]}
+              host={area}
+            />
           </SidePanel>
         )}
       </div>

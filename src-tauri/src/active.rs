@@ -2,18 +2,22 @@
 //! 만료는 슬롯을 건드리지 않는다 — 명시적 로그아웃(`deactivate`)만 감시를 멈춘다.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::{ScopedKeys, copy_legacy_keys, delete_legacy_keys};
 use ieum_local::ai::{AiRunner, KeyStore};
+use ieum_local::github::watch::CreatedIssues;
+use ieum_local::github::{GithubApi, GithubRunner};
 
 use crate::account::{AccountId, account_key, account_root, claim_legacy};
 use crate::credentials::AccountCredentials;
+use crate::github::{CachedGhToken, GhToken};
+use crate::key_limits::LimitGate;
 use crate::store::Store;
-use crate::supervisor::{Deps, Emit, Supervisor};
+use crate::supervisor::{Deps, Emit, GITHUB_POLL, Supervisor};
 use crate::web::validate_server_url;
 
 pub const NOT_SIGNED_IN: &str = "NOT_SIGNED_IN";
@@ -69,6 +73,19 @@ impl Active {
         &self.base.settings
     }
 
+    pub fn app_data(&self) -> &Path {
+        &self.base.app_data
+    }
+
+    /// 활성 계정 폴더. 로그인 전이면 `NOT_SIGNED_IN`.
+    pub async fn account_dir(&self) -> Result<PathBuf, String> {
+        let key = self
+            .account_key()
+            .await
+            .ok_or_else(|| NOT_SIGNED_IN.to_string())?;
+        Ok(account_root(&self.base.app_data, &key))
+    }
+
     /// 같은 계정이 이미 활성이면 그대로 둔다(만료 뒤 재로그인). 다른 계정이면 그 감시를 멈추고 바꾼다.
     /// 네트워크를 쓰지 않고 키체인을 기다리지 않는다(옛 키 옮기기는 따로 돈다). tokio 런타임 안에서 부른다.
     pub async fn activate(&self, mut id: AccountId) -> Result<(), String> {
@@ -113,19 +130,43 @@ impl Active {
             Err(e) => eprintln!("[ieum] 옛 데이터를 옮기지 못했어요(그대로 둠): {e}"),
         }
         let first_open = !slot.opened.contains(&key);
+        let store = Store::new(account_root(&b.app_data, &key));
+        // GitHub 노드가 만든 이슈와 새 이슈 트리거가 같은 기억을 본다.
+        let created = Arc::new(CreatedIssues::open(store.created_issues_path()));
         let started = Supervisor::start_with(
             Deps {
-                store: Store::new(account_root(&b.app_data, &key)),
+                store: store.clone(),
                 app_data: b.app_data.clone(),
                 home: b.home.clone(),
                 trash_dir: b.trash_dir.clone(),
                 ai: Arc::new(
                     (b.ai_factory)(Arc::new(ScopedKeys::new(b.keys.clone(), &key)))
-                        .with_resolver(Arc::new(self.credentials_of(&key))),
+                        .with_resolver(Arc::new(self.credentials_of(&key)))
+                        .with_gate(Arc::new(LimitGate {
+                            store,
+                            now: chrono::Local::now,
+                        })),
                 ),
+                github: Arc::new(
+                    GithubRunner::new(
+                        GithubApi::new(),
+                        Arc::new(GhToken {
+                            app_data: b.app_data.clone(),
+                            account_dir: account_root(&b.app_data, &key),
+                        }),
+                    )
+                    .with_created(created.clone()),
+                ),
+                github_watch: Arc::new(CachedGhToken::for_account(
+                    b.app_data.clone(),
+                    account_root(&b.app_data, &key),
+                )),
+                github_created: created,
+                github_poll: GITHUB_POLL,
                 emit: b.emit.clone(),
                 timing: b.timing,
                 recheck: b.recheck,
+                now: Arc::new(chrono::Utc::now),
             },
             first_open,
         );

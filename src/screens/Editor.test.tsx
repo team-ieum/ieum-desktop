@@ -6,6 +6,7 @@ import { nodeTitle } from "../editor/Canvas";
 import { AUTOSAVE_MS } from "../editor/sync";
 import { setLang } from "../i18n";
 import { PALETTE } from "../nodes/defs";
+import { emptyLive, useRuns } from "../stores/runs";
 import { useWorkflows } from "../stores/workflows";
 import { Editor } from "./Editor";
 
@@ -28,6 +29,7 @@ beforeAll(() => {
   vi.spyOn(api, "setEditing").mockResolvedValue();
   vi.spyOn(api, "pendingFinish").mockResolvedValue(null);
   vi.spyOn(api, "onTestUndoFailed").mockImplementation(async (cb) => ((undoFailed = cb), () => {}));
+  vi.spyOn(api, "getSamples").mockResolvedValue({});
   // 채팅 패널(갈래 D) — 패널을 여는 테스트가 실제 invoke를 타지 않게.
   vi.spyOn(api, "getChat").mockResolvedValue({ messages: [], state: { outline: [], baseline: null, tests: {}, pendingFinish: null }, usage: [] });
   vi.spyOn(api, "onChatStage").mockResolvedValue(() => {});
@@ -40,15 +42,19 @@ beforeAll(() => {
 });
 afterEach(() => {
   cleanup();
+  useRuns.setState({ live: {} });
   vi.useRealTimers();
   vi.clearAllMocks();
 });
 
 const open = () => act(async () => render(<Editor id={null} onBack={() => {}} onOpenRuns={() => {}} />));
 const palette = () => screen.queryByRole("dialog", { name: "노드 추가" });
+const search = () => within(palette()!).getByRole("combobox");
 const addNode = async (event: string) => {
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
-  await act(async () => fireEvent.click(within(palette()!).getAllByRole("button", { name: new RegExp(`^${nodeTitle(event)}`) })[0]));
+  // 검색으로 찾는다 — 캔버스에 트리거가 있으면 앱 안 트리거가 접혀 카테고리 옆 창엔 안 보일 수 있다.
+  await act(async () => fireEvent.change(search(), { target: { value: nodeTitle(event) } }));
+  await act(async () => fireEvent.click(palette()!.querySelector(`[data-event="${event}"]`)!));
 };
 
 test("editor_palette_opens_from_plus_button", async () => {
@@ -59,8 +65,8 @@ test("editor_palette_opens_from_plus_button", async () => {
   await act(async () => fireEvent.click(plus));
   expect(plus.getAttribute("aria-expanded")).toBe("true");
   expect(palette()).toBeTruthy();
-  // Esc로 닫힌다.
-  await act(async () => fireEvent.keyDown(document, { key: "Escape" }));
+  // 검색 칸에서 Esc로 닫힌다.
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
   expect(palette()).toBeNull();
   // 바깥을 누르면 닫힌다.
   await act(async () => fireEvent.click(plus));
@@ -70,6 +76,48 @@ test("editor_palette_opens_from_plus_button", async () => {
   await addNode(PALETTE[0]);
   expect(palette()).toBeNull();
   expect(r.container.querySelectorAll(".react-flow__node")).toHaveLength(1);
+});
+
+test("palette_escape_does_not_close_side_panel", async () => {
+  await open();
+  await addNode(PALETTE[0]);
+  expect(screen.getByRole("complementary")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
+  // 팔레트만 닫히고 설정 패널은 남는다.
+  expect(palette()).toBeNull();
+  expect(screen.getByRole("complementary")).toBeTruthy();
+});
+
+test("slash_opens_palette_outside_inputs", async () => {
+  await open();
+  await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
+  expect(palette()).toBeTruthy();
+  expect(document.activeElement).toBe(search());
+  // 포커스가 body로 빠져도 다시 /로 검색 칸을 되찾는다.
+  // jsdom에선 body.focus()가 아무 일도 안 한다 — blur로 실제로 뺀다.
+  await act(async () => search().blur());
+  expect(document.activeElement).not.toBe(search());
+  await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
+  expect(palette()).toBeTruthy();
+  expect(document.activeElement).toBe(search());
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
+  expect(palette()).toBeNull();
+  // 입력 칸에서 친 /는 글자다.
+  await act(async () => fireEvent.keyDown(screen.getByLabelText("워크플로우 이름"), { key: "/" }));
+  expect(palette()).toBeNull();
+  // ⌘/는 다른 단축키 몫.
+  await act(async () => fireEvent.keyDown(document.body, { key: "/", metaKey: true }));
+  expect(palette()).toBeNull();
+});
+
+test("palette_floats_above_panels", async () => {
+  await open();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  const dialog = palette()!;
+  // 채팅(z-30)·설정 패널(z-20) 위로, 옆 창이 잘리지 않게 dialog 자체는 스크롤하지 않는다.
+  expect(dialog.parentElement!.className).toContain("z-40");
+  expect(dialog.className).not.toContain("overflow-y-auto");
 });
 
 test("editor_config_panel_only_when_node_selected", async () => {
@@ -140,9 +188,9 @@ const entry = (nodes: WfNode[], updatedAt: string): WorkflowEntry => ({
   watchMessage: null,
   workflow: { nodes, edges: [] },
 });
-const openSaved = async (e: WorkflowEntry) => {
+const openSaved = async (e: WorkflowEntry, onOpenIntegrations?: () => void) => {
   useWorkflows.setState({ list: [e] });
-  return act(async () => render(<Editor id="w1" onBack={() => {}} onOpenRuns={() => {}} />));
+  return act(async () => render(<Editor id="w1" onBack={() => {}} onOpenRuns={() => {}} onOpenIntegrations={onOpenIntegrations} />));
 };
 const openAssistant = () => act(async () => fireEvent.click(screen.getByRole("button", { name: "IEUM Assistant 열기" })));
 const tick = (ms: number) => act(async () => vi.advanceTimersByTime(ms));
@@ -313,4 +361,321 @@ test("test_undo_failure_shows_paths_on_canvas", async () => {
   await act(async () => undoFailed({ id: "w1", runId: "r1" }));
   expect(screen.getByText("테스트가 옮긴 파일을 되돌리지 못했어요")).toBeTruthy();
   expect(screen.getByText("/in/a.pdf → /out/a.pdf")).toBeTruthy();
+});
+
+test("enable_switch_hidden_for_manual_trigger", async () => {
+  const trig = (event: string, config: Record<string, unknown>): WfNode => ({ id: "t", event, type: "TRIGGER", label: "t", config, position: { x: 0, y: 0 } });
+  await openSaved(entry([trig("manual.run", {})], "v1"));
+  expect(screen.queryByRole("switch", { name: "활성" })).toBeNull();
+  for (const n of [trig("schedule.daily", { hour: "9" }), trig("local.folder_new_file", { folder: "/in" })]) {
+    cleanup();
+    await openSaved(entry([n], "v1"));
+    expect(screen.getByRole("switch", { name: "활성" })).toBeTruthy();
+  }
+});
+
+const GH_MSG = "GitHub 연결이 필요해요.";
+const failRun = (status: "failed" | "cancelled" = "failed") =>
+  useRuns.setState({
+    live: { w1: { ...emptyLive("w1"), runId: "r1", status, nodes: { m: "failed" }, errors: { m: GH_MSG }, codes: { m: "GITHUB_AUTH" } } },
+  });
+
+test("failed_run_shows_card_and_strip", async () => {
+  failRun();
+  await openSaved(entry([N("m", 0)], "v1"));
+  expect(screen.getByRole("alert")).toBeTruthy();
+  expect(screen.getByText(GH_MSG)).toBeTruthy(); // 노드 위 오류 띠
+});
+
+test("show_node_opens_panel", async () => {
+  failRun();
+  await openSaved(entry([N("m", 0)], "v1"));
+  expect(screen.queryByRole("complementary", { name: "m" })).toBeNull();
+  await act(async () => fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "노드 보기" })));
+  expect(screen.getByRole("complementary", { name: "m" })).toBeTruthy();
+});
+
+test("open_integrations_calls_prop", async () => {
+  failRun();
+  const onOpenIntegrations = vi.fn();
+  await openSaved(entry([N("m", 0)], "v1"), onOpenIntegrations);
+  await act(async () => fireEvent.click(within(screen.getByRole("alert")).getByRole("button", { name: "설정 > 연동 열기" })));
+  expect(onOpenIntegrations).toHaveBeenCalledTimes(1);
+  cleanup();
+  await openSaved(entry([N("m", 0)], "v1"));
+  expect(screen.queryByRole("button", { name: "설정 > 연동 열기" })).toBeNull();
+});
+
+test("cancelled_run_no_strip", async () => {
+  failRun("cancelled");
+  await openSaved(entry([N("m", 0)], "v1"));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByText(GH_MSG)).toBeNull();
+});
+
+test("next_failure_shows_card_again_after_dismiss_with_motion", async () => {
+  vi.stubGlobal("matchMedia", () => ({ matches: true }));
+  vi.useFakeTimers();
+  try {
+    failRun();
+    await openSaved(entry([N("m", 0)], "v1"));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "오류 알림 닫기" })));
+    await act(async () => void vi.advanceTimersByTime(160));
+    expect(screen.queryByRole("alert")).toBeNull();
+    // 다음 실행(r2)도 실패 — 닫는 동안 다음 실행이 끼어도 새 카드가 닫히지 않게 실행마다 새로 그린다.
+    act(() => useRuns.setState({ live: { w1: { ...useRuns.getState().live.w1!, runId: "r2" } } }));
+    expect(screen.getByRole("alert").className).toContain("ieum-rise-in");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+test("card_stays_bottom_right_above_panels", async () => {
+  failRun();
+  const r = await openSaved(entry([N("m", 0)], "v1"));
+  await openAssistant();
+  await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
+  // 채팅창(z-30)·노드 패널이 열려 있어도 그 왼쪽으로 밀리지 않고 우측 하단 맨 위에 뜬다.
+  const card = screen.getByRole("alert");
+  expect(card.style.right).toBe("");
+  expect(card.className).toContain("right-4");
+  expect(card.className).toContain("z-40");
+});
+
+test("node_panel_sits_left_of_open_chat", async () => {
+  failRun();
+  const r = await openSaved(entry([N("m", 0)], "v1"));
+  await openAssistant(); // 채팅 탭 폭 380 + 16 = cover 396
+  await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
+  expect(screen.getByRole("complementary", { name: "m" }).style.right).toBe("408px");
+});
+
+const panelOf = async (r: { container: HTMLElement }, name: string) => {
+  await act(async () => fireEvent.click(r.container.querySelector(".react-flow__node")!));
+  return screen.getByRole("complementary", { name });
+};
+
+test("test_runs_single_node_with_draft", async () => {
+  const testNode = vi.spyOn(api, "testNode").mockResolvedValue({
+    status: "succeeded",
+    output: { trashed: "/in/a.pdf" },
+    error: null,
+    errorCode: null,
+    testedAt: new Date().toISOString(),
+    missing: [],
+    undone: false,
+    undoFailed: 0,
+    runId: "r1",
+  });
+  const runNow = vi.spyOn(api, "runNow").mockResolvedValue("r0");
+  const r = await openSaved(entry([N("a", 0)], "v1"));
+  const panel = await panelOf(r, "a");
+  // 저장하지 않은 편집이 있어도 막지 않고 편집본을 보낸다.
+  await act(async () => fireEvent.change(within(panel).getByLabelText("노드 이름"), { target: { value: "고친 이름" } }));
+  const button = within(screen.getByRole("complementary")).getByRole("button", { name: "테스트" });
+  expect((button as HTMLButtonElement).disabled).toBe(false);
+  await act(async () => fireEvent.click(button));
+  expect(testNode).toHaveBeenCalledTimes(1);
+  const [id, wf, nodeId] = testNode.mock.calls[0];
+  expect([id, nodeId]).toEqual(["w1", "a"]);
+  expect(wf.nodes[0].label).toBe("고친 이름");
+  expect(runNow).not.toHaveBeenCalled();
+  expect(screen.getByText("trashed")).toBeTruthy();
+});
+
+test("test_disabled_without_id", async () => {
+  await open();
+  await addNode(PALETTE[0]);
+  const button = within(screen.getByRole("complementary")).getByRole("button", { name: "테스트" }) as HTMLButtonElement;
+  expect(button.disabled).toBe(true);
+  expect(button.title).toBe("먼저 저장해야 실행할 수 있어요.");
+  expect(api.getSamples).not.toHaveBeenCalled();
+});
+
+test("sample_loaded_on_open", async () => {
+  vi.mocked(api.getSamples).mockResolvedValueOnce({
+    a: { status: "succeeded", output: { kept: 3 }, error: null, errorCode: null, testedAt: new Date().toISOString(), node: { event: "local.file_trash", config: {} } },
+  });
+  const r = await openSaved(entry([N("a", 0)], "v1"));
+  const panel = await panelOf(r, "a");
+  expect(api.getSamples).toHaveBeenCalledWith("w1");
+  expect(within(panel).getByText("성공")).toBeTruthy();
+  expect(within(panel).getByText("kept")).toBeTruthy();
+  expect(within(panel).queryByText("설정을 바꿨어요. 결과는 바꾸기 전 기준이에요.")).toBeNull();
+});
+
+test("last_run_failure_line", async () => {
+  failRun();
+  const r = await openSaved(entry([N("m", 0)], "v1"));
+  const panel = await panelOf(r, "m");
+  expect(within(panel).getByText(`마지막 실행: 실패 · ${GH_MSG}`)).toBeTruthy();
+  cleanup();
+  failRun("cancelled");
+  const r2 = await openSaved(entry([N("m", 0)], "v1"));
+  const panel2 = await panelOf(r2, "m");
+  expect(within(panel2).queryByText(/마지막 실행/)).toBeNull();
+});
+
+// ── 시작 조건 넣기·바꾸기 ──
+const TRIG: WfNode = { id: "t", event: "schedule.daily", type: "TRIGGER", label: "매일 아침 9시", config: { hour: "9", weekends: true }, position: { x: 0, y: 0 } };
+const USES: WfNode = { ...N("a", 320), config: { note: "{{nodes.t.output.triggeredAt}}" } };
+const EDGES = [{ id: "e1", source: "t", target: "a" }];
+const openWithTrigger = (nodes: WfNode[] = [TRIG, USES]) => openSaved({ ...entry(nodes, "v1"), enabled: true, workflow: { nodes, edges: EDGES } });
+const replaceCard = () => screen.queryByRole("dialog", { name: /^시작 조건 '/ });
+const unsavedDot = () => screen.queryByRole("status", { name: "저장 안 된 변경" });
+const saveNow = async () => {
+  const saveSpy = vi.spyOn(api, "saveWorkflow").mockImplementation(async (wf) => ({ ...wf, updatedAt: "v2" }));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "저장" })));
+  return saveSpy.mock.calls[0][0];
+};
+
+test("replacing_trigger_keeps_id_and_edges", async () => {
+  vi.spyOn(api, "githubOptions").mockResolvedValue([] as never);
+  await openWithTrigger();
+  // 시작 조건이 있으면 팔레트의 앱 안 트리거는 접힌다 — hasTrigger가 팔레트까지 간다.
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  await act(async () => fireEvent.click(within(palette()!).getByRole("button", { name: "GitHub" })));
+  expect(palette()!.querySelector('[data-event="github.new_issue"]')).toBeNull();
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
+  await act(async () => fireEvent.keyDown(search(), { key: "Escape" }));
+  expect(palette()).toBeNull();
+
+  await addNode("github.new_issue");
+  const card = replaceCard()!;
+  expect(card.textContent).toContain("매일 아침 9시");
+  expect(card.textContent).toContain("새 GitHub 이슈");
+  expect(within(card).getByText("뒤 노드 1개가 이 시작 조건의 결과를 쓰고 있어요. 바꾸면 그 참조가 끊길 수 있어요.")).toBeTruthy();
+  expect(within(card).getByText("바꾸면 워크플로우가 꺼져요. 설정을 확인한 뒤 다시 켜 주세요.")).toBeTruthy();
+  await act(async () => fireEvent.click(within(card).getByRole("button", { name: "바꾸기" })));
+  expect(replaceCard()).toBeNull();
+  expect(screen.getByRole("complementary", { name: "새 GitHub 이슈" })).toBeTruthy();
+  const sent = await saveNow();
+  expect(sent.enabled).toBe(false);
+  expect(sent.workflow.nodes).toHaveLength(2);
+  expect(sent.workflow.nodes[0]).toMatchObject({ id: "t", event: "github.new_issue", label: "새 GitHub 이슈", position: { x: 0, y: 0 } });
+  expect(sent.workflow.edges).toEqual(EDGES);
+});
+
+test("cancel_keeps_workflow", async () => {
+  await openWithTrigger();
+  await addNode("manual.run");
+  await act(async () => fireEvent.click(within(replaceCard()!).getByRole("button", { name: "취소" })));
+  expect(replaceCard()).toBeNull();
+  expect(unsavedDot()).toBeNull();
+});
+
+test("same_trigger_selects_without_card", async () => {
+  await openWithTrigger();
+  await addNode("schedule.daily");
+  expect(replaceCard()).toBeNull();
+  expect(screen.getByRole("complementary", { name: "매일 아침 9시" })).toBeTruthy();
+  expect(unsavedDot()).toBeNull();
+});
+
+test("switch_to_manual_keeps_enabled", async () => {
+  await openWithTrigger();
+  await addNode("manual.run");
+  const card = replaceCard()!;
+  expect(within(card).queryByText("바꾸면 워크플로우가 꺼져요. 설정을 확인한 뒤 다시 켜 주세요.")).toBeNull();
+  await act(async () => fireEvent.click(within(card).getByRole("button", { name: "바꾸기" })));
+  const sent = await saveNow();
+  expect(sent.enabled).toBe(true);
+  expect(sent.workflow.nodes[0]).toMatchObject({ id: "t", event: "manual.run" });
+});
+
+test("two_triggers_just_append", async () => {
+  await openWithTrigger([TRIG, { ...TRIG, id: "u", label: "또 하나" }, USES]);
+  await addNode("manual.run");
+  expect(replaceCard()).toBeNull();
+  const sent = await saveNow();
+  expect(sent.workflow.nodes).toHaveLength(4);
+  expect(sent.workflow.nodes[3].event).toBe("manual.run");
+});
+
+test("first_trigger_goes_to_front", async () => {
+  await openSaved(entry([N("a", 0)], "v1"));
+  await addNode("manual.run");
+  expect(within(screen.getByRole("complementary", { name: "수동 실행" })).getByText(/^1단계/)).toBeTruthy();
+  const sent = await saveNow();
+  expect(sent.workflow.nodes.map((n) => [n.event, n.position])).toEqual([
+    ["manual.run", { x: -320, y: 0 }],
+    ["local.file_trash", { x: 0, y: 0 }],
+  ]);
+});
+
+test("panel_remounts_after_replace", async () => {
+  const r = await openWithTrigger();
+  await panelOf(r, "매일 아침 9시");
+  const before = vi.mocked(api.getSamples).mock.calls.length;
+  await addNode("manual.run");
+  await act(async () => fireEvent.click(within(replaceCard()!).getByRole("button", { name: "바꾸기" })));
+  // 설정·테스트 칸이 새 트리거 기준으로 다시 그려진다(같은 id여도).
+  expect(vi.mocked(api.getSamples).mock.calls.length).toBe(before + 1);
+});
+
+test("slash_ignored_while_replace_card_open", async () => {
+  await openWithTrigger();
+  await addNode("manual.run");
+  expect(replaceCard()).toBeTruthy();
+  await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
+  expect(palette()).toBeNull();
+});
+
+test("palette_escape_from_body_keeps_side_panel", async () => {
+  await open();
+  await addNode(PALETTE[0]);
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  await act(async () => fireEvent.change(search(), { target: { value: "이슈" } }));
+  // 빈 곳 클릭·스크롤바·Tab으로 포커스가 검색 칸을 떠나 body에 있는 상태.
+  await act(async () => search().blur());
+  expect(document.activeElement).toBe(document.body);
+  await act(async () => fireEvent.keyDown(document.body, { key: "Escape" }));
+  expect((search() as HTMLInputElement).value).toBe("");
+  await act(async () => fireEvent.keyDown(document.body, { key: "Escape" }));
+  expect(palette()).toBeNull();
+  // 팔레트가 한 단계씩 받았고 설정 패널은 남는다.
+  expect(screen.getByRole("complementary")).toBeTruthy();
+});
+
+test("replace_card_escape_from_body_keeps_side_panel", async () => {
+  const r = await openWithTrigger();
+  await panelOf(r, "매일 아침 9시");
+  await addNode("manual.run");
+  expect(replaceCard()).toBeTruthy();
+  await act(async () => (document.activeElement as HTMLElement).blur());
+  expect(document.activeElement).toBe(document.body);
+  await act(async () => fireEvent.keyDown(document.body, { key: "Escape" }));
+  expect(replaceCard()).toBeNull();
+  expect(screen.getByRole("complementary", { name: "매일 아침 9시" })).toBeTruthy();
+});
+
+test("replace_card_closes_when_old_trigger_is_gone", async () => {
+  vi.spyOn(api, "githubOptions").mockResolvedValue([] as never);
+  const r = await openWithTrigger();
+  await panelOf(r, "매일 아침 9시");
+  await addNode("github.new_issue");
+  expect(replaceCard()).toBeTruthy();
+  // 카드가 떠 있는 동안 옛 트리거를 지운다 — 카드는 사라지고 켜짐 상태는 그대로.
+  await act(async () => fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "노드 삭제" })));
+  expect(replaceCard()).toBeNull();
+  const sent = await saveNow();
+  expect(sent.enabled).toBe(true);
+  expect(sent.workflow.nodes.map((n) => n.id)).toEqual(["a"]);
+});
+
+test("plus_does_not_open_palette_while_replace_card_open", async () => {
+  await openWithTrigger();
+  await addNode("manual.run");
+  expect(replaceCard()).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "노드 추가" })));
+  expect(palette()).toBeNull();
+});
+
+test("slash_ignored_while_http_confirm_open", async () => {
+  const H: WfNode = { id: "h", event: "http.request", type: "ACTION", label: "h", config: { method: "POST", url: "https://example.com" }, position: { x: 0, y: 0 } };
+  await openSaved(entry([H], "v1"));
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "실행" })));
+  expect(screen.getByRole("dialog", { name: "테스트로 실제 요청을 보낼까요?" })).toBeTruthy();
+  await act(async () => fireEvent.keyDown(document.body, { key: "/" }));
+  expect(palette()).toBeNull();
 });

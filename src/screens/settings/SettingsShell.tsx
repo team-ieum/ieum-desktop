@@ -1,4 +1,4 @@
-import { ArrowLeft, BarChart3, Bell, Bot, CircleUserRound, Keyboard, Search, ShieldCheck, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
+import { ArrowLeft, BarChart3, Bell, Bot, CircleUserRound, Keyboard, Plug, Search, ShieldCheck, SlidersHorizontal, Wrench, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { t, type Key } from "../../i18n";
 import { ROW, ROW_OFF, ROW_ON, SIDE, TOP_ROW } from "../../shell/Sidebar";
@@ -7,17 +7,19 @@ import { useWeb } from "../../stores/web";
 import { AccountPane } from "./AccountPane";
 import { AiProvidersPane, aiTexts, usePlans } from "./AiPane";
 import { GeneralPane, generalTexts } from "./GeneralPane";
+import { IntegrationsPane, integrationsTexts } from "./IntegrationsPane";
 import { AdvancedPane, MacosPane, macosTexts, notificationTexts, NotificationsPane, ShortcutsPane, shortcutTexts, useAdvancedTexts } from "./PermissionsPane";
 import { matches, QueryContext } from "./Row";
 import { UsagePane, usageTexts } from "./UsagePane";
 
-export type SettingsSection = "account" | "ai" | "usage" | "general" | "notifications" | "shortcuts" | "macos" | "advanced";
+export type SettingsSection = "account" | "ai" | "usage" | "integrations" | "general" | "notifications" | "shortcuts" | "macos" | "advanced";
 type Id = SettingsSection;
 
 const SECTIONS: { id: Id; group: Key; label: Key; icon: LucideIcon; badge?: Key }[] = [
   { id: "account", group: "settings.groupAccount", label: "settings.account", icon: CircleUserRound },
   { id: "ai", group: "settings.groupAi", label: "settings.providers", icon: Bot, badge: "settings.optional" },
   { id: "usage", group: "settings.groupAi", label: "settings.usage", icon: BarChart3 },
+  { id: "integrations", group: "settings.groupIntegrations", label: "settings.integrations", icon: Plug },
   { id: "general", group: "settings.general", label: "settings.general", icon: SlidersHorizontal },
   { id: "notifications", group: "settings.general", label: "settings.notifications", icon: Bell },
   { id: "shortcuts", group: "settings.general", label: "settings.shortcuts", icon: Keyboard },
@@ -63,6 +65,7 @@ export function SettingsShell({ onBack, version, initial = "account", header }: 
     account: account ? [account.email, t("settings.loggedInAs"), t("settings.logout"), ...(expired ? [t("settings.sessionExpired"), t("settings.reloginHint"), t("settings.relogin")] : [])] : [],
     ai: aiTexts(plans, view),
     usage: usageTexts(),
+    integrations: integrationsTexts(),
     general: generalTexts(version),
     notifications: notificationTexts(),
     shortcuts: shortcutTexts(),
@@ -76,8 +79,9 @@ export function SettingsShell({ onBack, version, initial = "account", header }: 
 
   const panes: Record<Id, ReactNode> = {
     account: <AccountPane />,
-    ai: <AiProvidersPane view={view} plans={plans} refreshPlan={refreshPlan} refreshCreds={refresh} />,
+    ai: <AiProvidersPane view={view} plans={plans} refreshPlan={refreshPlan} refreshCreds={refresh} limits />,
     usage: <UsagePane view={view} plans={plans} refreshPlans={() => refreshPlan()} />,
+    integrations: <IntegrationsPane />,
     general: <GeneralPane version={version} />,
     notifications: <NotificationsPane />,
     shortcuts: <ShortcutsPane />,

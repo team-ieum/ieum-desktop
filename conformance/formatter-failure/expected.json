@@ -1,0 +1,8 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/executor/TextFormats.java:158 (required 'defaultValue' → FormatterInputs.java:48-53 '기본값' 칸이 비어 있어요), TransformNodeExecutor.java:90-94 (FormatterFailure → 노드 실패), SyncExecutionRuntime.java:306-315 (노드 실패 시 전체 중단 — 뒤 노드는 실행 기록 없음)",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED"},
+    "f": {"status": "FAILED"}
+  }
+}

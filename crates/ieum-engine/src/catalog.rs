@@ -2,6 +2,37 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use serde_json::{Map, Value, json};
+
+/// 데스크톱이 러너를 가진 GitHub 이슈·PR·조회 노드. 카탈로그엔 이 밖에도 있지만 싣지 않는다.
+pub const GITHUB_EVENTS: [&str; 21] = [
+    "github.create_issue",
+    "github.update_issue",
+    "github.find_issue",
+    "github.find_or_create_issue",
+    "github.list_issues",
+    "github.add_labels",
+    "github.create_comment",
+    "github.find_branch",
+    "github.find_org",
+    "github.find_repo",
+    "github.find_user",
+    "github.get_file",
+    "github.check_org_membership",
+    "github.create_pull_request",
+    "github.update_pull_request",
+    "github.request_reviewers",
+    "github.find_pull_request",
+    "github.find_or_create_pull_request",
+    "github.get_pr_files",
+    "github.get_pr_reviews",
+    "github.submit_pr_review",
+];
+
+/// 데스크톱이 직접 확인하는(폴링) GitHub 트리거. 칸은 소유자·저장소로 바꿔 싣는다.
+pub const GITHUB_TRIGGERS: [&str; 2] = ["github.new_issue", "github.new_pull_request"];
+
+const GITHUB_INPUTS: &str = include_str!("../../ieum-local/github_inputs.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeType {
@@ -9,6 +40,8 @@ pub enum NodeType {
     Ai,
     Action,
     Condition,
+    Transform,
+    Http,
 }
 
 #[derive(Debug, Clone)]
@@ -99,7 +132,10 @@ struct RawEvent {
     #[serde(default)]
     outputs_from: Option<String>,
     #[serde(default)]
-    input_fields: Vec<InputField>,
+    input_fields: Vec<Value>,
+    /// 카탈로그의 칸 설명(제목·선택지 등). 필수·기본값은 없어 데스크톱 표와 합친다.
+    #[serde(default)]
+    fields: Option<Map<String, Value>>,
 }
 
 #[derive(Deserialize)]
@@ -109,6 +145,10 @@ struct RawField {
 
 impl Catalog {
     pub fn load(files: &[(String, PathBuf)]) -> Result<Catalog, CatalogError> {
+        Self::load_with(files, GITHUB_INPUTS)
+    }
+
+    fn load_with(files: &[(String, PathBuf)], table: &str) -> Result<Catalog, CatalogError> {
         let mut sources = Vec::new();
         for (event, path) in files {
             let text = std::fs::read_to_string(path).map_err(|source| CatalogError::Io {
@@ -117,14 +157,14 @@ impl Catalog {
             })?;
             sources.push((event.clone(), path.clone(), text));
         }
-        Self::parse(sources)
+        Self::parse(sources, &github_table(table)?)
     }
 
-    /// 실행 파일에 묶은 1단계 노드 정의(빌드 시 `catalog/events/branch/if.json` + `crates/ieum-local/defs/*.json`).
+    /// 실행 파일에 묶은 노드 정의(`stage1`과 같은 파일들).
     /// 배포된 CLI·앱은 이걸 쓴다. `stage1`(디스크)은 테스트·개발용.
     pub fn embedded() -> Result<Catalog, CatalogError> {
         macro_rules! src {
-            ($event:literal, $rel:literal) => {
+            ($event:expr, $rel:expr) => {
                 (
                     $event.to_string(),
                     PathBuf::from($rel),
@@ -132,7 +172,7 @@ impl Catalog {
                 )
             };
         }
-        Self::parse(vec![
+        let mut sources = vec![
             src!("branch.if", "catalog/events/branch/if.json"),
             src!("local.ai", "crates/ieum-local/defs/local.ai.json"),
             src!(
@@ -151,11 +191,143 @@ impl Catalog {
                 "local.folder_new_file",
                 "crates/ieum-local/defs/local.folder_new_file.json"
             ),
-        ])
+            src!("schedule.every", "catalog/events/schedule/every.json"),
+            src!("schedule.hourly", "catalog/events/schedule/hourly.json"),
+            src!("schedule.daily", "catalog/events/schedule/daily.json"),
+            src!("schedule.weekly", "catalog/events/schedule/weekly.json"),
+            src!("schedule.monthly", "catalog/events/schedule/monthly.json"),
+            src!("manual.run", "catalog/events/manual/run.json"),
+            src!("transform.map", "catalog/events/transform/map.json"),
+            src!("http.request", "catalog/events/http/request.json"),
+            src!(
+                "formatter.date_add",
+                "catalog/events/formatter/date_add.json"
+            ),
+            src!(
+                "formatter.date_compare",
+                "catalog/events/formatter/date_compare.json"
+            ),
+            src!(
+                "formatter.date_format",
+                "catalog/events/formatter/date_format.json"
+            ),
+            src!(
+                "formatter.list_pick",
+                "catalog/events/formatter/list_pick.json"
+            ),
+            src!(
+                "formatter.list_to_text",
+                "catalog/events/formatter/list_to_text.json"
+            ),
+            src!(
+                "formatter.lookup_table",
+                "catalog/events/formatter/lookup_table.json"
+            ),
+            src!(
+                "formatter.number_currency",
+                "catalog/events/formatter/number_currency.json"
+            ),
+            src!(
+                "formatter.number_format",
+                "catalog/events/formatter/number_format.json"
+            ),
+            src!(
+                "formatter.number_math",
+                "catalog/events/formatter/number_math.json"
+            ),
+            src!(
+                "formatter.number_phone",
+                "catalog/events/formatter/number_phone.json"
+            ),
+            src!(
+                "formatter.text_case",
+                "catalog/events/formatter/text_case.json"
+            ),
+            src!(
+                "formatter.text_default",
+                "catalog/events/formatter/text_default.json"
+            ),
+            src!(
+                "formatter.text_extract",
+                "catalog/events/formatter/text_extract.json"
+            ),
+            src!(
+                "formatter.text_extract_pattern",
+                "catalog/events/formatter/text_extract_pattern.json"
+            ),
+            src!(
+                "formatter.text_length",
+                "catalog/events/formatter/text_length.json"
+            ),
+            src!(
+                "formatter.text_markdown_to_html",
+                "catalog/events/formatter/text_markdown_to_html.json"
+            ),
+            src!(
+                "formatter.text_replace",
+                "catalog/events/formatter/text_replace.json"
+            ),
+            src!(
+                "formatter.text_split",
+                "catalog/events/formatter/text_split.json"
+            ),
+            src!(
+                "formatter.text_strip_html",
+                "catalog/events/formatter/text_strip_html.json"
+            ),
+            src!(
+                "formatter.text_trim",
+                "catalog/events/formatter/text_trim.json"
+            ),
+            src!(
+                "formatter.text_truncate",
+                "catalog/events/formatter/text_truncate.json"
+            ),
+            src!(
+                "formatter.text_url_encode",
+                "catalog/events/formatter/text_url_encode.json"
+            ),
+        ];
+        macro_rules! github {
+            ($($name:literal),*) => {
+                $(sources.push(src!(
+                    concat!("github.", $name),
+                    concat!("catalog/events/github/", $name, ".json")
+                ));)*
+            };
+        }
+        github!(
+            "create_issue",
+            "update_issue",
+            "find_issue",
+            "find_or_create_issue",
+            "list_issues",
+            "add_labels",
+            "create_comment",
+            "find_branch",
+            "find_org",
+            "find_repo",
+            "find_user",
+            "get_file",
+            "check_org_membership",
+            "create_pull_request",
+            "update_pull_request",
+            "request_reviewers",
+            "find_pull_request",
+            "find_or_create_pull_request",
+            "get_pr_files",
+            "get_pr_reviews",
+            "submit_pr_review"
+        );
+        github!("new_issue", "new_pull_request");
+        Self::parse(sources, &github_table(GITHUB_INPUTS)?)
     }
 
     /// (event, 에러에 쓸 경로, JSON 본문).
-    fn parse(sources: Vec<(String, PathBuf, String)>) -> Result<Catalog, CatalogError> {
+    fn parse(
+        sources: Vec<(String, PathBuf, String)>,
+        inputs: &Map<String, Value>,
+    ) -> Result<Catalog, CatalogError> {
         let mut events = HashMap::new();
         for (event, path, text) in &sources {
             let raw: RawEvent =
@@ -168,6 +340,8 @@ impl Catalog {
                 "AI" => NodeType::Ai,
                 "ACTION" => NodeType::Action,
                 "CONDITION" => NodeType::Condition,
+                "TRANSFORM" => NodeType::Transform,
+                "HTTP" => NodeType::Http,
                 other => {
                     return Err(CatalogError::UnknownNodeType {
                         event: event.clone(),
@@ -184,6 +358,26 @@ impl Catalog {
                     .get_or_insert_with(BTreeSet::new)
                     .insert("output".to_string());
             }
+            // 표에 항목이 있으면 표가 이긴다 — 트리거의 `inputFields`는 칸 정보 출처로만 쓴다.
+            let input_fields = if let Some(rows) = inputs.get(event) {
+                let from_input: Map<String, Value> = raw
+                    .input_fields
+                    .iter()
+                    .filter_map(|f| Some((f.get("key")?.as_str()?.to_string(), f.clone())))
+                    .collect();
+                let fields = raw.fields.as_ref().unwrap_or(&from_input);
+                merge_fields(path, Some(rows), Some(fields))?
+            } else {
+                raw.input_fields
+                    .into_iter()
+                    .map(|f| {
+                        serde_json::from_value(f).map_err(|source| CatalogError::Json {
+                            path: path.clone(),
+                            source,
+                        })
+                    })
+                    .collect::<Result<_, _>>()?
+            };
             events.insert(
                 event.clone(),
                 EventDef {
@@ -194,7 +388,7 @@ impl Catalog {
                     output_keys,
                     output_dynamic: raw.output_dynamic,
                     outputs_from: raw.outputs_from,
-                    input_fields: raw.input_fields,
+                    input_fields,
                 },
             );
         }
@@ -212,29 +406,124 @@ impl Catalog {
         all
     }
 
-    /// `catalog/events/branch/if.json` + `crates/ieum-local/defs/*.json`(파일 이름 = event).
+    /// `catalog/events/branch/if.json` + `crates/ieum-local/defs/*.json`(파일 이름 = event)
+    /// + `catalog/events/{transform,formatter,http,schedule,manual}/*.json`(event = `<폴더>.<파일 이름>`).
     pub fn stage1(repo_root: &Path) -> Result<Catalog, CatalogError> {
         let mut files = vec![(
             "branch.if".to_string(),
             repo_root.join("catalog/events/branch/if.json"),
         )];
-        let defs = repo_root.join("crates/ieum-local/defs");
-        let entries = std::fs::read_dir(&defs).map_err(|source| CatalogError::Io {
-            path: defs.clone(),
+        json_files(&repo_root.join("crates/ieum-local/defs"), "", &mut files)?;
+        for dir in ["transform", "formatter", "http", "schedule", "manual"] {
+            let prefix = format!("{dir}.");
+            json_files(
+                &repo_root.join("catalog/events").join(dir),
+                &prefix,
+                &mut files,
+            )?;
+        }
+        for event in GITHUB_EVENTS.into_iter().chain(GITHUB_TRIGGERS) {
+            let name = event.trim_start_matches("github.");
+            files.push((
+                event.to_string(),
+                repo_root.join(format!("catalog/events/github/{name}.json")),
+            ));
+        }
+        let table_path = repo_root.join("crates/ieum-local/github_inputs.json");
+        let table = std::fs::read_to_string(&table_path).map_err(|source| CatalogError::Io {
+            path: table_path.clone(),
             source,
         })?;
-        for entry in entries {
-            let path = entry
-                .map_err(|source| CatalogError::Io {
-                    path: defs.clone(),
-                    source,
-                })?
-                .path();
-            if path.extension().is_some_and(|e| e == "json") {
-                let event = path.file_stem().unwrap().to_string_lossy().into_owned();
-                files.push((event, path));
+        Self::load_with(&files, &table)
+    }
+}
+
+fn github_table(text: &str) -> Result<Map<String, Value>, CatalogError> {
+    serde_json::from_str(text).map_err(|source| CatalogError::Json {
+        path: PathBuf::from("crates/ieum-local/github_inputs.json"),
+        source,
+    })
+}
+
+/// 칸 하나 = `{key, type: string}` ← 데스크톱 표 항목(`desktop` 뺀 것) ← 카탈로그 `fields[key]` ← 표 항목의 `desktop`(뒤가 앞을 덮는다).
+fn merge_fields(
+    path: &Path,
+    rows: Option<&Value>,
+    fields: Option<&Map<String, Value>>,
+) -> Result<Vec<InputField>, CatalogError> {
+    let Some(rows) = rows.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    rows.iter()
+        .map(|row| {
+            let mut merged = json!({"type": "string"}).as_object().cloned().unwrap();
+            let mut desktop = None;
+            if let Some(row) = row.as_object() {
+                let mut row = row.clone();
+                desktop = row.remove("desktop");
+                merged.extend(row);
             }
+            let key = merged.get("key").and_then(Value::as_str).unwrap_or("");
+            if let Some(over) = fields.and_then(|f| f.get(key)).and_then(Value::as_object) {
+                merged.extend(over.clone());
+            }
+            if let Some(Value::Object(over)) = desktop {
+                merged.extend(over);
+            }
+            serde_json::from_value(Value::Object(merged)).map_err(|source| CatalogError::Json {
+                path: path.to_path_buf(),
+                source,
+            })
+        })
+        .collect()
+}
+
+fn json_files(
+    dir: &Path,
+    prefix: &str,
+    files: &mut Vec<(String, PathBuf)>,
+) -> Result<(), CatalogError> {
+    let io = |source| CatalogError::Io {
+        path: dir.to_path_buf(),
+        source,
+    };
+    for entry in std::fs::read_dir(dir).map_err(io)? {
+        let path = entry.map_err(io)?.path();
+        if path.extension().is_some_and(|e| e == "json") {
+            let stem = path.file_stem().unwrap().to_string_lossy();
+            files.push((format!("{prefix}{stem}"), path));
         }
-        Catalog::load(&files)
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn merge(rows: Value, fields: Value) -> Vec<InputField> {
+        merge_fields(Path::new("t"), Some(&rows), fields.as_object()).unwrap()
+    }
+
+    #[test]
+    fn desktop_overrides_catalog() {
+        let out = merge(
+            json!([{"key":"author","desktop":{"default":"me","choices":[{"id":"me","name":"내 GitHub 계정"}]}}]),
+            json!({"author":{"title":"리뷰 작성자","default":"bot","choices":[{"id":"bot","name":"IEUM 봇"},{"id":"me","name":"내 GitHub 계정"}]}}),
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].default, Some(json!("me")));
+        assert_eq!(out[0].choices.len(), 1);
+        assert_eq!(out[0].choices[0].id, "me");
+        assert_eq!(out[0].title.as_deref(), Some("리뷰 작성자"));
+    }
+
+    #[test]
+    fn no_desktop_keeps_catalog_last() {
+        let out = merge(
+            json!([{"key":"n","type":"integer"}]),
+            json!({"n":{"type":"text"}}),
+        );
+        assert_eq!(out[0].kind.as_deref(), Some("text"));
     }
 }

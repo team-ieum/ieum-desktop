@@ -4,13 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ammonia = "4.2.5"
 async-trait = "0.1.92"
+bigdecimal = "0.4.11"
 chrono = "0.4.45"
 chrono-tz = "0.10.4"
+croner = "4.0.3"
+fancy-regex = "0.20.2"
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
 regex = "1.13.1"
+scraper = "0.29.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 tokio = { version = "1.54.1", default-features = false, features = ["sync", "rt", "macros"] }
 tokio-util = "0.7.20"
+unicode-segmentation = "1.13.3"
 uuid = { version = "1.29.2", features = ["v4"] }

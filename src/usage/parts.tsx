@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import type { CredentialsView, PlanUsage, PlanWindow } from "../api";
 import { t } from "../i18n";
 import { credLabel } from "../screens/settings/AiPane";
-import { formatReset } from "./format";
+import { formatLimit, formatReset, formatUsd } from "./format";
 
 /** 사용 비율 0~100 정수. */
 export const usedOf = (w: PlanWindow) => Math.max(0, Math.min(100, Math.round(w.usedPct)));
@@ -32,6 +32,29 @@ export function WindowMeter({ w, now, inline = false }: { w: PlanWindow; now: Da
         <div className={`h-full rounded-full ${pct > 80 ? "bg-danger-600" : "bg-main-blue"}`} style={{ width: `${pct}%` }} />
       </div>
       {!inline && <div className="mt-1 typo-caption2_regular text-neutral-400">{resetText(w, now)}</div>}
+    </div>
+  );
+}
+
+/** 키 한도 알림 단계 — Rust 판정과 같은 기준. */
+export const limitLevel = (spend: number, limit: number): 0 | 80 | 100 => (spend >= limit ? 100 : spend >= limit * 0.8 ? 80 : 0);
+const LIMIT_BAR = { 0: "bg-main-blue", 80: "bg-[#c98a12]", 100: "bg-[#c2412d]" };
+
+/** API 키 한 줄의 이번 달 지출 — 한도가 있으면 막대와(넘으면) 멈춤 문구. */
+export function LimitMeter({ spend, limit }: { spend: number; limit: number | null }) {
+  if (limit === null) return <span className="typo-caption1_regular text-neutral-500">{t("keyLimit.noLimit").replace("{spend}", formatUsd(spend))}</span>;
+  const level = limitLevel(spend, limit);
+  const pct = Math.min(100, Math.floor((spend / limit) * 100));
+  const text = t("keyLimit.month").replace("{spend}", formatUsd(spend)).replace("{limit}", formatLimit(limit));
+  return (
+    <div>
+      <div className="flex justify-between gap-2 typo-caption1_medium text-neutral-500">
+        <span className="tabular-nums">{text}</span>
+        {level === 100 && <span className="text-danger-700">{t("keyLimit.over")}</span>}
+      </div>
+      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-main-light-blue" role="progressbar" aria-label={text} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+        <div className={`h-full rounded-full ${LIMIT_BAR[level]}`} style={{ width: `${pct}%` }} />
+      </div>
     </div>
   );
 }

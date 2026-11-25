@@ -1,17 +1,21 @@
 //! 캔버스 저장 — 화면이 읽은 `updatedAt`이 저장본과 다르면 덮지 않는다.
 
+mod github_support;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use github_support::{no_github, no_watch};
 use ieum_desktop_lib::commands::save_from_canvas;
 use ieum_desktop_lib::store::{Store, StoredWorkflow};
-use ieum_desktop_lib::supervisor::{AppEvent, Deps, STALE, Supervisor};
+use ieum_desktop_lib::supervisor::{AppEvent, Deps, GITHUB_POLL, STALE, Supervisor};
 use ieum_engine::Workflow;
 use ieum_local::WatchTiming;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
+use ieum_local::github::watch::CreatedIssues;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -57,6 +61,10 @@ fn env() -> Env {
         home: root.clone(),
         trash_dir: root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", Arc::new(FakeAi))),
+        github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),
@@ -64,6 +72,7 @@ fn env() -> Env {
             recent_window: Duration::from_secs(10),
         },
         recheck: Duration::from_secs(30),
+        now: Arc::new(chrono::Utc::now),
     })
     .unwrap();
     Env {

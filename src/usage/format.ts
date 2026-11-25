@@ -7,6 +7,9 @@ export function formatUsd(n: number | null): string {
   return `$${n.toFixed(2)}`;
 }
 
+/** 한도 금액 — `formatUsd`에서 끝의 ".00"만 뗀다("$10", "$2.50"). */
+export const formatLimit = (n: number) => formatUsd(n).replace(/\.00$/, "");
+
 /** ko "12.3만", en "123K". */
 export const formatTokens = (n: number) => new Intl.NumberFormat(locale(), { notation: "compact", maximumFractionDigits: 1 }).format(n);
 

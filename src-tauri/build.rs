@@ -5,10 +5,14 @@ const COMMANDS: &[&str] = &[
     "delete_workflow",
     "validate_workflow",
     "run_now",
+    "test_node",
+    "get_samples",
     "list_runs",
     "get_run",
     "usage_summary",
     "usage_report",
+    "key_limits",
+    "set_key_limit",
     "undo_run",
     "detect_providers",
     "list_credentials",
@@ -68,7 +72,19 @@ const COMMANDS: &[&str] = &[
     // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
     "chat_send",
     "chat_pick_folder",
+    "chat_submit_blueprint",
+    "chat_pick_slot",
     "list_models",
+    "answer_http_confirm",
+    // ── 설정 > 연동: GitHub(gh CLI) ──
+    "github_status",
+    "github_connect",
+    "github_disconnect",
+    "github_cancel",
+    "github_open_device",
+    "github_install",
+    "github_job",
+    "github_options",
 ];
 
 fn main() {

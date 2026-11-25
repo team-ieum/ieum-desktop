@@ -21,9 +21,9 @@ export const hourlySeries = (counts: Record<string, number>) =>
   });
 
 /** "방금"·"12분 전"·"3일 전" */
-export function formatRelative(iso: string, now = Date.now()): string {
+export function formatRelative(iso: string, now = Date.now(), numeric: "auto" | "always" = "auto"): string {
   const sec = Math.round((Date.parse(iso) - now) / 1000);
-  const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: "auto" });
+  const rtf = new Intl.RelativeTimeFormat(locale(), { numeric });
   const a = Math.abs(sec);
   if (a < 60) return rtf.format(0, "second");
   if (a < 3600) return rtf.format(Math.round(sec / 60), "minute");

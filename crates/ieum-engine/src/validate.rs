@@ -1,5 +1,5 @@
 //! 정적 검증(1단계분) — ieum-agent `core/validators/static_validator.py`를 옮겼다(에러 순서·문구 동일).
-//! `REQUIRED`·`TYPE`·`CHOICE`·`CRON`·`TOO_LARGE`는 1단계 범위 밖이라 옮기지 않았다.
+//! `REQUIRED`·`TYPE`·`CHOICE`·`TOO_LARGE`는 1단계 범위 밖이라 옮기지 않았다. `CRON`은 스케줄 트리거(1b)와 함께 옮겼다.
 //! 필수 칸·선택지는 채팅 빌더용 `validate_fields`가 따로 본다(`validate`의 결과는 그대로).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -28,6 +28,9 @@ pub enum ErrorCode {
     /// `validate_fields`만 낸다(`validate`는 내지 않는다).
     Required,
     Choice,
+    Cron,
+    /// `node_errors`만 낸다 — 전체 실행은 `RejectReason::UnknownEvent`로 거부한다.
+    UnknownEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -215,6 +218,35 @@ fn under(loc: &str, p: &str) -> bool {
 
 // ── 그래프 ─────────────────────────────────────────────
 
+/// SCHEDULE 트리거의 `config.cron`. 비어 있으면 REQUIRED 몫.
+/// agent와 같은 필드 수(5·6·7)·문자 집합에 더해, 데스크톱은 실제로 계산할 수 있는지(`to_quartz`)까지 본다.
+fn cron_error(node: &Node, nid: &str, catalog: &Catalog) -> Option<ValidationError> {
+    // 카탈로그가 trigger_type을 읽지 않는다 — SCHEDULE 정의 = 카탈로그에 있는 `schedule.*` 5개.
+    if !node.event.starts_with("schedule.") || catalog.get(&node.event).is_none() {
+        return None;
+    }
+    let cron = node.config.get("cron")?;
+    if is_empty(Some(cron)) {
+        return None;
+    }
+    let invalid = |message| Some(err(Cron, message, Some(nid), Some("config.cron".into())));
+    let Some(cron) = cron.as_str() else {
+        return invalid("cron 표현식은 문자열이어야 합니다.".into());
+    };
+    let parts: Vec<&str> = cron.split_whitespace().collect();
+    let charset_ok = parts.iter().all(|p| {
+        p.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "*/,-?LW#".contains(c))
+    });
+    if !(5..=7).contains(&parts.len()) || !charset_ok || crate::schedule::to_quartz(cron).is_err() {
+        return invalid(format!(
+            "cron 표현식 '{}'이 올바르지 않습니다(5필드 또는 Quartz 6·7필드).",
+            clip(cron)
+        ));
+    }
+    None
+}
+
 fn graph_errors(nodes: &[Node], edges: &[Edge], catalog: &Catalog) -> Vec<ValidationError> {
     if nodes.is_empty() {
         return vec![err(
@@ -254,7 +286,10 @@ fn graph_errors(nodes: &[Node], edges: &[Edge], catalog: &Catalog) -> Vec<Valida
                 Some(nid),
                 None,
             )),
-            Some(t) if t.to_uppercase() == "TRIGGER" => triggers.push(nid),
+            Some(t) if t.to_uppercase() == "TRIGGER" => {
+                triggers.push(nid);
+                errors.extend(cron_error(node, nid, catalog));
+            }
             Some(_) => {}
         }
     }
@@ -791,25 +826,71 @@ fn cut_loc(s: String) -> String {
 pub fn validate_fields(wf: &Workflow, catalog: &Catalog) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     for node in &wf.nodes {
-        let Some(entry) = catalog.get(&node.event) else {
-            continue;
-        };
-        for f in &entry.input_fields {
-            let path = field_path(f);
-            if unused_field(entry, node, &path) {
-                continue;
-            }
-            let mut value = get_path(node, &path);
-            if entry.node_type == NodeType::Condition
-                && is_empty(value)
-                && let Some(alias) = condition_alias(&path)
-            {
-                value = get_path(node, alias);
-            }
-            check_required_choice(f, value, &path, sid(&node.id), &mut errors);
-        }
+        required_choice_errors(node, catalog, &mut errors);
     }
     errors
+}
+
+fn required_choice_errors(node: &Node, catalog: &Catalog, errors: &mut Vec<ValidationError>) {
+    let Some(entry) = catalog.get(&node.event) else {
+        return;
+    };
+    for f in &entry.input_fields {
+        let path = field_path(f);
+        if unused_field(entry, node, &path) {
+            continue;
+        }
+        let mut value = get_path(node, &path);
+        if entry.node_type == NodeType::Condition
+            && is_empty(value)
+            && let Some(alias) = condition_alias(&path)
+        {
+            value = get_path(node, alias);
+        }
+        check_required_choice(f, value, &path, sid(&node.id), errors);
+    }
+}
+
+/// 노드 테스트용 — 그 노드 하나의 오류만. 노드 하나만 돌리니 그래프 오류(트리거 수·고아·사이클·엣지)는 보지 않는다.
+/// 카탈로그에 없는 event → cron → 필수·선택지 → 참조 금지 칸 → 참조식 순. 없는 node_id면 빈 목록.
+pub fn node_errors(wf: &Workflow, catalog: &Catalog, node_id: &str) -> Vec<ValidationError> {
+    let Some(node) = wf.nodes.iter().find(|n| n.id == node_id) else {
+        return Vec::new();
+    };
+    let nid = sid(node_id);
+    let mut errors = Vec::new();
+    if catalog.get(&node.event).is_none() {
+        errors.push(err(
+            UnknownEvent,
+            format!("실행할 수 없는 노드 종류예요: {}", clip(&node.event)),
+            nid,
+            None,
+        ));
+    }
+    if let Some(nid) = nid
+        && node
+            .r#type
+            .as_deref()
+            .is_some_and(|t| t.to_uppercase() == "TRIGGER")
+    {
+        errors.extend(cron_error(node, nid, catalog));
+    }
+    required_choice_errors(node, catalog, &mut errors);
+    errors.extend(field_errors(node, catalog));
+    let mut out = Collector::default();
+    for e in errors {
+        if !out.push(e) {
+            return out.errors;
+        }
+    }
+    let by_id: HashMap<&str, &Node> = wf
+        .nodes
+        .iter()
+        .filter_map(|n| sid(&n.id).map(|id| (id, n)))
+        .collect();
+    let preds = predecessors(&wf.edges, &by_id);
+    ref_errors(node, catalog, &by_id, &preds, &mut HashMap::new(), &mut out);
+    out.errors
 }
 
 fn check_required_choice(

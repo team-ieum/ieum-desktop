@@ -5,6 +5,7 @@ import { api, type CliAccountMeta, type CredentialsView, type PlanUsage, type Us
 import { setLang } from "../i18n";
 import { StatusBar } from "../shell/StatusBar";
 import { useCredentials } from "../stores/credentials";
+import { useKeyLimits } from "../stores/keyLimits";
 import { usePlanStore } from "../stores/plans";
 import { useWeb } from "../stores/web";
 import { UsageCard } from "./UsageCard";
@@ -26,6 +27,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   useCredentials.setState({ view: null });
+  useKeyLimits.setState({ view: null });
   usePlanStore.setState({ plans: {} });
 });
 // 이 환경의 localStorage는 온전하지 않다 — 테스트마다 빈 메모리 저장소를 꽂는다.
@@ -277,4 +279,114 @@ test("plans_cleared_when_ieum_account_changes", async () => {
   sub.mockClear();
   await act(async () => useWeb.setState({ account: null }));
   expect(sub).toHaveBeenCalledTimes(1);
+});
+
+const later = () => {
+  let done: (s: UsageSummary) => void = () => {};
+  const p = new Promise<UsageSummary>((r) => (done = r));
+  return { p, done };
+};
+
+test("api_refresh_keeps_numbers_while_loading", async () => {
+  const slow = later();
+  const summary = vi.spyOn(api, "usageSummary").mockResolvedValueOnce(SUMMARY).mockReturnValueOnce(slow.p);
+  await act(async () => {
+    render(<UsageCard hidden={false} onUsage={() => {}} onAccounts={() => {}} />);
+  });
+  const btn = screen.getByRole("button", { name: "API 사용량 새로 고침" });
+  await act(async () => fireEvent.click(btn));
+  expect(screen.getByText("$1.85")).toBeTruthy();
+  expect(btn.querySelector("svg")?.getAttribute("class")).toContain("animate-spin");
+  // 도는 중 다시 누르면 무시
+  await act(async () => fireEvent.click(btn));
+  expect(summary).toHaveBeenCalledTimes(2);
+  await act(async () => slow.done({ ...SUMMARY, totalUsd: 2 }));
+  expect(screen.getByText("$2.00")).toBeTruthy();
+  expect(btn.querySelector("svg")?.getAttribute("class")).not.toContain("animate-spin");
+  expect(summary).toHaveBeenNthCalledWith(1, "today");
+  expect(summary).toHaveBeenNthCalledWith(2, "today");
+});
+
+test("api_refresh_failure_keeps_old", async () => {
+  vi.spyOn(api, "usageSummary").mockResolvedValueOnce(SUMMARY).mockRejectedValueOnce(new Error("x"));
+  await act(async () => {
+    render(<UsageCard hidden={false} onUsage={() => {}} onAccounts={() => {}} />);
+  });
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "API 사용량 새로 고침" })));
+  expect(screen.getByText("$1.85")).toBeTruthy();
+});
+
+const KEYS_SUM: UsageSummary = {
+  ...SUMMARY,
+  bySource: [
+    { source: "anthropic", input: 90_000, output: 10_000, usd: 1 },
+    { source: "openai", input: 5_000, output: 0, usd: 0.1 },
+  ],
+  byCredential: [
+    { source: "anthropic", credential: "k2", input: 9_000, output: 1_000, usd: 0.1 },
+    { source: "anthropic", credential: "k1", input: 81_000, output: 9_000, usd: 0.9 },
+    { source: "openai", credential: "default", input: 5_000, output: 0, usd: 0.1 },
+  ],
+};
+const mockKeys = (sum: UsageSummary) => {
+  const k1 = { id: "k1", label: "업무용", isDefault: true, createdAt: "", last4: "a1b2" };
+  useCredentials.setState({ view: { ...VIEW, apiKeys: { ...VIEW.apiKeys, anthropic: [k1] } } });
+  vi.spyOn(api, "usageSummary").mockResolvedValue(sum);
+};
+
+test("keys_expand_when_two_or_more", async () => {
+  mockKeys(KEYS_SUM);
+  await mountCard();
+  expect(screen.getAllByRole("button", { name: "키별 보기" })).toHaveLength(1);
+  expect(screen.queryByText("업무용")).toBeNull();
+  const btn = screen.getByRole("button", { name: "키별 보기" });
+  expect(btn.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => fireEvent.click(btn));
+  expect(btn.getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByText("…a1b2")).toBeTruthy();
+  const a = screen.getByText("업무용");
+  const b = screen.getByText("지운 키");
+  expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await act(async () => fireEvent.click(btn));
+  expect(screen.queryByText("업무용")).toBeNull();
+});
+
+test("single_key_has_no_toggle", async () => {
+  mockKeys({ ...KEYS_SUM, byCredential: KEYS_SUM.byCredential.slice(1) });
+  await mountCard();
+  expect(screen.queryByRole("button", { name: "키별 보기" })).toBeNull();
+});
+
+test("single_limited_key_expands_with_meter", async () => {
+  mockKeys({ ...KEYS_SUM, byCredential: KEYS_SUM.byCredential.slice(1) });
+  useKeyLimits.setState({ view: { limits: { "anthropic:k1": 10 }, spend: { "anthropic:k1": 3.2 } } });
+  await mountCard();
+  const btn = screen.getByRole("button", { name: "키별 보기" });
+  await act(async () => fireEvent.click(btn));
+  expect(screen.getByText("이번 달 $3.20 / $10")).toBeTruthy();
+});
+
+test("limited_unused_key_shows_row", async () => {
+  mockKeys({ ...KEYS_SUM, byCredential: KEYS_SUM.byCredential.slice(1) });
+  const k3 = { id: "k3", label: "예비", isDefault: false, createdAt: "", last4: "c3c3" };
+  useCredentials.setState({ view: { ...VIEW, apiKeys: { ...VIEW.apiKeys, anthropic: [k3] } } });
+  useKeyLimits.setState({ view: { limits: { "anthropic:k3": 10 }, spend: {} } });
+  await mountCard();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "키별 보기" })));
+  expect(screen.getByText("예비")).toBeTruthy();
+  expect(screen.getByText(/\/ \$10/)).toBeTruthy();
+});
+
+test("api_refresh_reloads_key_limits", async () => {
+  mockKeys({ ...KEYS_SUM, byCredential: KEYS_SUM.byCredential.slice(1) });
+  const limits = vi
+    .spyOn(api, "keyLimits")
+    .mockResolvedValueOnce({ limits: { "anthropic:k1": 10 }, spend: { "anthropic:k1": 3.2 } })
+    .mockResolvedValueOnce({ limits: { "anthropic:k1": 10 }, spend: { "anthropic:k1": 5 } });
+  await mountCard();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "키별 보기" })));
+  expect(screen.getByText("이번 달 $3.20 / $10")).toBeTruthy();
+  await act(async () => fireEvent.click(screen.getByRole("button", { name: "API 사용량 새로 고침" })));
+  expect(limits).toHaveBeenCalledTimes(2);
+  expect(screen.getByText("이번 달 $5.00 / $10")).toBeTruthy();
 });

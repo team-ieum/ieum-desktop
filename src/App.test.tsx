@@ -207,7 +207,7 @@ test("recent_web_item_opens_that_workflow", async () => {
   });
   await act(async () => fireEvent.click(screen.getByRole("button", { name: /웹 흐름/ })));
   expect(get).toHaveBeenCalledWith(id);
-  expect(screen.getByTestId("crumb").textContent).toBe("웹 이음");
+  expect(screen.getByTestId("crumb").textContent).toBe("이음 클라우드");
   expect(screen.getByRole("heading", { name: "웹 흐름" })).toBeTruthy();
 });
 
@@ -388,6 +388,20 @@ test("finish_pending_asks_rust_to_notify_and_notification_opens_editor", async (
   await act(async () => finishPending({ id: "w1", name: "정리" }));
   expect(notice).toHaveBeenLastCalledWith("w1", true); // 이제 그 편집 화면
   vi.mocked(api.listWorkflows).mockResolvedValue([]);
+});
+
+test("open_target_ai_settings", async () => {
+  const limits = vi.spyOn(api, "keyLimits").mockResolvedValue({ limits: {}, spend: {} });
+  await act(async () => {
+    render(<App />);
+  });
+  await act(async () => openTarget({ kind: "aiSettings" })); // 한도 알림 클릭
+  expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("AI 제공자 계정");
+  expect(screen.getByTestId("settings-crumb").textContent).toBe("AI 제공자 계정");
+  // 이미 그 화면이어도 알림을 누르면 한도를 다시 읽는다 — 막대가 넘기 전 값에 머물지 않게.
+  const before = limits.mock.calls.length;
+  await act(async () => openTarget({ kind: "aiSettings" }));
+  expect(limits.mock.calls.length).toBe(before + 1);
 });
 
 test("workflow_first_saved_from_new_canvas_counts_as_on_screen", async () => {

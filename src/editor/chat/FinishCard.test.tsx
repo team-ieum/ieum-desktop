@@ -37,6 +37,81 @@ test("card_shows_folder_and_actions_and_only_a_click_turns_on", async () => {
   expect(usePendingFinish.getState().pending.w1).toBeUndefined();
 });
 
+test("finish_card_shows_http_action", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({
+    ...P,
+    actions: [{ nodeId: "h", event: "http.request", label: "주문 넣기", target: "POST https://x.test/o/{{nodes.a.output.id}}" }],
+  });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  expect(within(card).getByText("이 워크플로우가 하는 일")).toBeTruthy();
+  expect(within(card).getByText("요청 보내기 → POST https://x.test/o/{{nodes.a.output.id}}")).toBeTruthy();
+});
+
+test("finish_card_shows_http_line_like_confirm_card", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({
+    ...P,
+    actions: [
+      {
+        nodeId: "h",
+        event: "http.request",
+        label: "주문 넣기",
+        target: "POST https://x.test/o/{{nodes.a.output.id}}",
+        http: {
+          nodeId: "h",
+          label: "주문 넣기",
+          method: "POST",
+          url: "https://x.test/o/{{nodes.a.output.id}}",
+          headerKeys: ["X-Data"],
+          sends: [{ nodeId: "a", nodeLabel: "파일 읽기", output: "id" }],
+          hasBody: true,
+        },
+      },
+      P.actions[0],
+    ],
+  });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  expect(within(card).getByTestId("http-request").textContent).toBe("요청 보내기 → POST https://x.test/o/〈앞 노드 값〉");
+  expect(within(card).getByText("x.test").tagName).toBe("STRONG");
+  expect(within(card).getByText("머리말: X-Data")).toBeTruthy();
+  expect(within(card).getByText("본문 있음")).toBeTruthy();
+  expect(within(card).getByText("함께 보내는 값: 파일 읽기 의 id").className).toContain("text-danger-700");
+  // 파일 동작 줄은 그대로.
+  expect(within(card).getByText("옮기기 → /h/out/{{nodes.a.output.folder}}")).toBeTruthy();
+  expect(card.querySelector(".overflow-y-auto")).toBeTruthy();
+});
+
+test("finish_card_shows_github_write_line", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({
+    ...P,
+    actions: [
+      {
+        nodeId: "g",
+        event: "github.create_issue",
+        label: "",
+        target: "a/b",
+        http: {
+          nodeId: "g",
+          label: "",
+          method: "",
+          url: "",
+          headerKeys: [],
+          sends: [{ nodeId: "t", nodeLabel: "", output: "name" }],
+          hasBody: true,
+          github: { event: "github.create_issue", repo: "a/b", summary: "{{nodes.t.output.name}}" },
+        },
+      },
+    ],
+  });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  // 스케줄·폴더 실행은 확인 없이 돈다 — 켜기 전에 어느 저장소에 무엇을 쓰는지 보여야 한다.
+  expect(within(card).getByTestId("http-request").textContent).toBe("GitHub 이슈 만들기 · a/b · 〈앞 노드 값〉");
+  expect(within(card).getByText("본문 있음")).toBeTruthy();
+  expect(within(card).getByText("함께 보내는 값: t 의 name")).toBeTruthy();
+});
+
 test("card_lists_ai_nodes_and_marks_file_content_sending", async () => {
   vi.spyOn(api, "pendingFinish").mockResolvedValue({
     ...P,
@@ -98,4 +173,15 @@ test("refusal_reason_stays_even_when_pending_is_cleared", async () => {
   // 워크플로우가 바뀌면 지난 이유는 지운다.
   await act(async () => r.rerender(<FinishCard workflowId="w1" version="v2" />));
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("finish_card_save_button_for_manual", async () => {
+  vi.spyOn(api, "pendingFinish").mockResolvedValue({ ...P, folder: null, button: "save" });
+  const confirm = vi.spyOn(api, "confirmFinish").mockResolvedValue({ ok: true });
+  await act(async () => render(<FinishCard workflowId="w1" version="v1" />));
+  const card = screen.getByRole("dialog");
+  expect(within(card).queryByText("감시할 폴더")).toBeNull();
+  expect(within(card).queryByRole("button", { name: "켜기" })).toBeNull();
+  await act(async () => fireEvent.click(within(card).getByRole("button", { name: "저장" })));
+  expect(confirm).toHaveBeenCalledWith("w1", true);
 });

@@ -16,6 +16,7 @@ const entry = (over: Partial<WorkflowEntry> = {}): WorkflowEntry => ({
   updatedAt: "2026-11-12T00:00:00Z",
   watch: "watching",
   watchMessage: null,
+  nextRun: null,
   workflow: {
     nodes: [
       { id: "a", event: "local.folder_new_file", config: { folder: "~/Documents/청구서" } },
@@ -41,6 +42,33 @@ test("local_card_maps_status_and_trigger", () => {
   expect(localCard(entry({ workflow: { nodes: [{ id: "x", event: "local.file_trash", config: {} }], edges: [] } })).trigger).toBe("manual");
 });
 
+const sched = (event: string, config: Record<string, unknown>, nextRun: string | null = null) =>
+  localCard(entry({ nextRun, workflow: { nodes: [{ id: "t", event, config }], edges: [] } }));
+
+test("schedule_card_summaries", () => {
+  expect(sched("schedule.hourly", { weekends: true }).triggerDetail).toBe("매시 정각");
+  expect(sched("schedule.hourly", { weekends: false }).triggerDetail).toBe("평일 매시 정각");
+  expect(sched("schedule.daily", { hour: "9", weekends: true }).triggerDetail).toBe("매일 오전 9시");
+  expect(sched("schedule.daily", { hour: "9", weekends: false }).triggerDetail).toBe("평일 매일 오전 9시");
+  expect(sched("schedule.daily", { hour: "9", weekends: "false" }).triggerDetail).toBe("평일 매일 오전 9시");
+  expect(sched("schedule.hourly", { weekends: "false" }).triggerDetail).toBe("평일 매시 정각");
+  expect(sched("schedule.weekly", { weekday: "MON", hour: "9" }).triggerDetail).toBe("매주 월요일 오전 9시");
+  expect(sched("schedule.monthly", { day: "15", hour: "0" }).triggerDetail).toBe("매월 15일 자정");
+  expect(sched("schedule.monthly", { day: "L", hour: "9" }).triggerDetail).toBe("매월 마지막 날 오전 9시");
+  expect(sched("schedule.every", { cron: "0 9 * * 5" }).triggerDetail).toBe("cron 0 9 * * 5");
+  expect(sched("schedule.daily", { hour: "9" }).trigger).toBe("schedule");
+  expect(sched("manual.run", {}).trigger).toBe("manual");
+  // 수동 실행은 켜고 끌 스위치가 없다 — 꺼진 채 저장돼도 "활성".
+  expect(localCard(entry({ enabled: false, workflow: { nodes: [{ id: "t", event: "manual.run", config: {} }], edges: [] } })).status).toBe("active");
+  expect(localCard(entry({ enabled: false })).status).toBe("paused");
+});
+
+test("schedule_card_shows_next_run", () => {
+  render(<WorkflowCard data={sched("schedule.daily", { hour: "9" }, "2026-11-17T09:00:00")} onOpen={() => {}} menu={[]} />);
+  expect(screen.getByText(/매일 오전 9시/)).toBeTruthy();
+  expect(screen.getByText("다음 11/17 09:00")).toBeTruthy();
+});
+
 test("web_card_menu_opens_in_browser", async () => {
   vi.spyOn(api, "webListWorkflows").mockResolvedValue([
     { id: "aaaaaaaa-0000-4000-8000-000000000001", name: "브리핑", active: true, services: ["DISCORD"], nodeCount: 4 },
@@ -51,6 +79,16 @@ test("web_card_menu_opens_in_browser", async () => {
   });
   expect(screen.getByText("노드 4개")).toBeTruthy();
   await act(async () => fireEvent.click(screen.getByRole("button", { name: "메뉴" })));
-  await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "웹에서 열기" })));
+  await act(async () => fireEvent.click(screen.getByRole("menuitem", { name: "이음 클라우드에서 열기" })));
   expect(open).toHaveBeenCalledWith("aaaaaaaa-0000-4000-8000-000000000001");
+});
+
+test("github_trigger_card_is_app_event_with_repo", () => {
+  const c = sched("github.new_issue", { owner: "o", repo: "r" });
+  expect(c.trigger).toBe("event");
+  expect(c.triggerDetail).toBe("o/r");
+  expect(sched("github.new_pull_request", { owner: "o" }).triggerDetail).toBeUndefined();
+  expect(c.services).toEqual(["GITHUB"]);
+  const manual = localCard(entry({ workflow: { nodes: [{ id: "m", event: "manual.run", config: {} }, { id: "g", event: "github.create_issue", config: {} }], edges: [] } }));
+  expect(manual.services).toEqual(["GITHUB"]);
 });

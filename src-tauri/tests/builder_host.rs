@@ -1,5 +1,7 @@
 //! 채팅 빌더의 앱 쪽 Host(`AppHost`). 모든 파일은 임시 폴더 안, AI는 가짜 러너, 키체인은 가짜.
 
+mod github_support;
+
 use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
@@ -10,15 +12,17 @@ use std::task::Poll;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use github_support::{no_github, no_watch};
 use ieum_desktop_lib::builder_host::{AppHost, PickFolder, no_pick};
 use ieum_desktop_lib::credentials::AccountCredentials;
 use ieum_desktop_lib::store::{RunSummary, RunTrigger, Store, StoredWorkflow};
-use ieum_desktop_lib::supervisor::{AppEvent, Deps, Supervisor, WatchState};
+use ieum_desktop_lib::supervisor::{AppEvent, Deps, GITHUB_POLL, Supervisor, WatchState};
 use ieum_engine::{ExecEvent, RunStatus, Workflow};
 use ieum_local::WatchTiming;
 use ieum_local::ai::keys::KeyError;
 use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn, KeyStore};
-use ieum_local::builder::{Builder, Code, Host, Op, SaveError, TestStatus};
+use ieum_local::builder::{Builder, Code, Host, Op, SaveError, TestStatus, TestTrigger};
+use ieum_local::github::watch::CreatedIssues;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -99,6 +103,10 @@ fn env_with_providers(providers: &[&str]) -> Env {
         home: root.clone(),
         trash_dir: root.join("trash"),
         ai: Arc::new(ai.with_resolver(Arc::new(creds.clone()))),
+        github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| {
             if let Some(f) = hook.lock().unwrap().as_mut() {
                 f(&e);
@@ -111,6 +119,7 @@ fn env_with_providers(providers: &[&str]) -> Env {
             recent_window: Duration::from_secs(10),
         },
         recheck: Duration::from_secs(30),
+        now: Arc::new(chrono::Utc::now),
     })
     .unwrap();
     Env {
@@ -354,7 +363,7 @@ async fn test_run_is_undone_even_if_caller_goes_away() {
     let wf = env.store.get_workflow(&id).unwrap().workflow;
     // 테스트를 요청한 쪽이 결과를 기다리지 않고 사라진다(소켓 끊김·시간 초과).
     let sample = watch.join("a.txt");
-    let mut fut = Box::pin(env.sup.run_test(&id, wf, &sample));
+    let mut fut = Box::pin(env.sup.run_test(&id, wf, TestTrigger::File(sample.clone())));
     assert!(poll_once(&mut fut).await.is_pending());
     drop(fut);
     let runs = wait_runs(&env, &id, 1).await;
@@ -374,7 +383,7 @@ async fn run_queued_behind_test_starts_from_restored_files() {
     let id = save(&env, move_only_wf(&watch, &base), true);
     let wf = env.store.get_workflow(&id).unwrap().workflow;
     let sample = watch.join("a.txt");
-    let mut fut = Box::pin(env.sup.run_test(&id, wf, &sample));
+    let mut fut = Box::pin(env.sup.run_test(&id, wf, TestTrigger::File(sample.clone())));
     assert!(poll_once(&mut fut).await.is_pending());
     // 테스트 바로 뒤에 같은 파일의 감시 실행이 줄을 선다.
     let trigger = json!({"path": sample, "name": "a.txt", "extension": "txt", "size": 5});
@@ -401,7 +410,7 @@ async fn run_test_rejects_sample_outside_roots() {
     let wf = env.store.get_workflow(&id).unwrap().workflow;
     assert!(
         env.sup
-            .run_test(&id, wf, &env.root.join("secret.txt"))
+            .run_test(&id, wf, TestTrigger::File(env.root.join("secret.txt")))
             .await
             .is_err()
     );

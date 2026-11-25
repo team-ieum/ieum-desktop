@@ -398,7 +398,7 @@ pub fn agy_listed_ids(text: &str) -> Vec<String> {
 }
 
 /// 셸 작은따옴표 인용.
-fn sh_quote(s: &str) -> String {
+pub fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
@@ -963,6 +963,116 @@ pub fn shell_output(cmd: &str, limit: Duration) -> Option<String> {
     let mut out = String::new();
     std::io::Read::read_to_string(&mut child.stdout.take()?, &mut out).ok()?;
     Some(out)
+}
+
+/// `shell_run` 결과. 시간 초과·취소면 `code`는 None.
+#[derive(Debug, Clone)]
+pub struct ShellRun {
+    pub code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub timed_out: bool,
+    pub cancelled: bool,
+}
+
+/// `shell_run`이 저장하는 stdout·stderr 각각의 끝부분 상한.
+const RUN_TAIL: usize = 64 * 1024;
+
+fn push_tail(buf: &mut Vec<u8>, bytes: &[u8]) {
+    buf.extend_from_slice(bytes);
+    if buf.len() > RUN_TAIL {
+        let mut cut = buf.len() - RUN_TAIL;
+        // UTF-8 이어지는 바이트(0b10xxxxxx)는 건너뛰어 문자 경계에서 시작한다.
+        while buf.get(cut).is_some_and(|b| b & 0xC0 == 0x80) {
+            cut += 1;
+        }
+        buf.drain(..cut);
+    }
+}
+
+/// 로그인 셸 명령을 돌려 종료 코드·stdout·stderr(각각 마지막 64KB)를 받는다.
+/// stderr는 줄마다 `on_stderr_line`(호출한 스레드에서). 시간 초과·`cancel`이면 그룹째 kill.
+pub fn shell_run(
+    cmd: &str,
+    limit: Duration,
+    cancel: &std::sync::atomic::AtomicBool,
+    on_stderr_line: &mut dyn FnMut(&str),
+) -> std::io::Result<ShellRun> {
+    use std::io::{BufRead, Read};
+    use std::os::unix::process::CommandExt;
+    let mut child = std::process::Command::new(shell())
+        .arg("-lc")
+        .arg(cmd)
+        .current_dir(std::env::temp_dir())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()?;
+    let group = KillGroup(child.id() as i32);
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let stderr = child.stderr.take().expect("piped stderr");
+    let out_thread = std::thread::spawn(move || {
+        let mut tail = Vec::new();
+        let mut chunk = [0u8; 8192];
+        while let Ok(n @ 1..) = stdout.read(&mut chunk) {
+            push_tail(&mut tail, &chunk[..n]);
+        }
+        tail
+    });
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let err_thread = std::thread::spawn(move || {
+        let mut tail = Vec::new();
+        let mut reader = std::io::BufReader::new(stderr);
+        let mut line = Vec::new();
+        while let Ok(1..) = reader.read_until(b'\n', &mut line) {
+            push_tail(&mut tail, &line);
+            let text = String::from_utf8_lossy(&line);
+            let _ = tx.send(text.trim_end_matches(['\n', '\r']).to_string());
+            line.clear();
+        }
+        tail
+    });
+    let deadline = std::time::Instant::now() + limit;
+    let (mut timed_out, mut cancelled) = (false, false);
+    // ponytail: 50ms 폴링 — stderr 줄을 기다리는 동안이 곧 대기 간격.
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break Some(s);
+        }
+        if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            cancelled = true;
+        } else if std::time::Instant::now() >= deadline {
+            timed_out = true;
+        }
+        if cancelled || timed_out {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(l) => on_stderr_line(&l),
+            // stderr가 먼저 닫혔다 — 바로 돌아오므로 직접 쉰다(바쁜 루프 방지).
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                std::thread::sleep(Duration::from_millis(50))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    };
+    // 남은 손자를 죽여 파이프를 닫는다 — 물고 있으면 읽기 스레드가 끝나지 않는다.
+    drop(group);
+    let out = out_thread.join().unwrap_or_default();
+    let err = err_thread.join().unwrap_or_default();
+    for l in rx.try_iter() {
+        on_stderr_line(&l);
+    }
+    Ok(ShellRun {
+        code: status.and_then(|s| s.code()),
+        stdout: String::from_utf8_lossy(&out).into_owned(),
+        stderr: String::from_utf8_lossy(&err).into_owned(),
+        timed_out,
+        cancelled,
+    })
 }
 
 /// 설치된 구독 CLI. 사용자 로그인 셸 PATH로 찾는다. CLI당 5초 상한.

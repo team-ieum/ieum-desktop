@@ -5,7 +5,11 @@ pub mod channel;
 pub mod chat;
 pub mod commands;
 pub mod credentials;
+pub mod github;
+pub mod http_confirm;
+pub mod key_limits;
 pub mod limit_watch;
+pub mod metrics;
 pub mod models;
 pub mod notify;
 pub mod permissions;
@@ -169,11 +173,12 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 "watch-status",
                 json!({"workflowId": workflow_id, "ok": ok, "message": message}),
             ),
-            AppEvent::QueueDropped { workflow_id, path } => {
-                eprintln!("[ieum] 실행 줄이 넘쳐 버렸어요: 워크플로우 {workflow_id}, 파일 {path}");
+            AppEvent::QueueDropped { workflow_id, label } => {
+                eprintln!("[ieum] 실행 줄이 넘쳐 버렸어요: 워크플로우 {workflow_id}, {label}");
+                // 화면 계약은 그대로 `path` 키 — GitHub는 `owner/repo #번호`가 들어간다.
                 handle.emit(
                     "queue-dropped",
-                    json!({"workflowId": workflow_id, "path": path}),
+                    json!({"workflowId": workflow_id, "path": label}),
                 )
             }
             AppEvent::RunNotice(n) => {
@@ -194,6 +199,10 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 "finish-pending",
                 json!({"id": workflow_id, "name": workflow_name}),
             ),
+            AppEvent::HttpTestConfirm { workflow_id, lines } => handle.emit(
+                "http-test-confirm",
+                json!({"id": workflow_id, "lines": lines}),
+            ),
             // 앱 시작 때 실패: 화면이 아직 듣지 않는다(웹뷰 로드 전·로그인 관문) — 여기서 바로 알린다.
             // 그 편집 화면이 떠 있을 수 없으니 화면 표시 여부는 묻지 않는다. 문구에 경로는 없다.
             AppEvent::TestUndoFailed {
@@ -212,6 +221,11 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                 "test-undo-failed",
                 json!({"id": workflow_id, "runId": run_id}),
             ),
+            AppEvent::KeyLimit(n) => {
+                let lang = notify::settings(&handle).language.into();
+                notify::deliver(&handle, &notify::key_limit_notice(&n, lang));
+                Ok(())
+            }
         };
         if let Err(e) = sent {
             eprintln!("[ieum] 이벤트를 보내지 못했어요: {e}");
@@ -263,6 +277,7 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     crate::limit_watch::spawn(app.handle().clone());
     app.manage(pick::system_pick(app.handle().clone()));
     app.manage(terminal::Terms::default());
+    app.manage(github::GithubJobs::default());
     app.manage(channel::app_gate(app.handle()));
     app.manage(channel::app_channel(app.handle()));
     tray::create(app)?;
@@ -305,14 +320,26 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_workflows,
+            github::github_status,
+            github::github_disconnect,
+            github::github_connect,
+            github::github_cancel,
+            github::github_open_device,
+            github::github_install,
+            github::github_job,
+            github::github_options,
             commands::save_workflow,
             commands::delete_workflow,
             commands::validate_workflow,
             commands::run_now,
+            commands::test_node,
+            commands::get_samples,
             commands::list_runs,
             commands::get_run,
             commands::usage_summary,
             commands::usage_report,
+            commands::key_limits,
+            commands::set_key_limit,
             commands::undo_run,
             commands::detect_providers,
             commands::list_credentials,
@@ -359,6 +386,7 @@ pub fn run() {
             commands::get_chat,
             commands::pending_finish,
             commands::confirm_finish,
+            commands::answer_http_confirm,
             // ── 캔버스 채팅 B(통로·동기화) — 여기 아래에 추가 ──
             commands::set_editing,
             commands::finish_notice,
@@ -372,6 +400,8 @@ pub fn run() {
             // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
             chat::chat_send,
             chat::chat_pick_folder,
+            chat::chat_submit_blueprint,
+            chat::chat_pick_slot,
             models::list_models,
         ])
         .build(tauri::generate_context!())
@@ -386,6 +416,9 @@ pub fn run() {
             // 앱이 끝나면 터미널 세션도 전부 끝낸다.
             if let tauri::RunEvent::Exit = e {
                 app.state::<terminal::Terms>().kill_all();
+                // 진행 중 gh 로그인·설치가 고아로 남지 않게.
+                app.state::<github::GithubJobs>()
+                    .cancel_and_wait(std::time::Duration::from_millis(300));
                 app.state::<channel::Channel>().close();
             }
         });

@@ -1,12 +1,14 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use ieum_engine::{Catalog, CatalogError, NodeType, Workflow};
+use ieum_engine::{Catalog, CatalogError, GITHUB_EVENTS, GITHUB_TRIGGERS, NodeType, Workflow};
+use serde_json::{Value, json};
 
 #[test]
-fn stage1_catalog_has_six_events() {
+fn stage1_catalog_has_thirty_events() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let catalog = Catalog::stage1(&root).unwrap();
+    assert_eq!(catalog.events().len(), 59);
     for event in [
         "branch.if",
         "local.folder_new_file",
@@ -38,11 +40,82 @@ fn embedded_catalog_matches_disk() {
             events.push(path.file_stem().unwrap().to_string_lossy().into_owned());
         }
     }
-    assert_eq!(events.len(), 6);
+    for dir in ["transform", "formatter", "http", "schedule", "manual"] {
+        for entry in std::fs::read_dir(root.join("catalog/events").join(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "json") {
+                let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+                events.push(format!("{dir}.{stem}"));
+            }
+        }
+    }
+    events.extend(GITHUB_EVENTS.map(String::from));
+    events.extend(GITHUB_TRIGGERS.map(String::from));
+    assert_eq!(events.len(), 59);
+    assert_eq!(disk.events().len(), 59);
     for event in &events {
         let (d, e) = (disk.get(event).unwrap(), embedded.get(event));
         let e = e.unwrap_or_else(|| panic!("{event} 내장 안 됨"));
         assert_eq!(format!("{d:?}"), format!("{e:?}"), "{event}");
+    }
+}
+
+#[test]
+fn embedded_has_builtin_24() {
+    let c = Catalog::embedded().unwrap();
+    assert_eq!(c.events().len(), 59);
+    assert_eq!(
+        c.get("transform.map").unwrap().node_type,
+        NodeType::Transform
+    );
+    assert_eq!(
+        c.get("formatter.date_format").unwrap().node_type,
+        NodeType::Transform
+    );
+    assert_eq!(c.get("http.request").unwrap().node_type, NodeType::Http);
+    assert_eq!(
+        c.events()
+            .iter()
+            .filter(|e| e.event.starts_with("formatter."))
+            .count(),
+        22
+    );
+    assert_eq!(
+        c.get("transform.map").unwrap().outputs_from.as_deref(),
+        Some("config.mappings")
+    );
+}
+
+#[test]
+fn formatter_catalog_and_runners_match() {
+    let c = Catalog::embedded().unwrap();
+    let cat: BTreeSet<_> = c
+        .events()
+        .iter()
+        .filter(|e| e.event.starts_with("formatter."))
+        .map(|e| e.event.clone())
+        .collect();
+    let run: BTreeSet<_> = ieum_engine::formatter::events()
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(cat, run);
+    assert_eq!(run.len(), 22);
+    // title은 실패 메시지 머리로 확인 — 10만 자 넘는 input은 모든 포맷터가 실패시킨다.
+    let cfg = serde_json::json!({"input": "x".repeat(100_001)});
+    for event in &run {
+        let e = ieum_engine::formatter::apply(
+            event,
+            cfg.as_object().unwrap(),
+            "2026-11-07T04:30:00Z".parse().unwrap(),
+        )
+        .unwrap_err();
+        let title = &c.get(event).unwrap().title;
+        assert!(
+            e.message.starts_with(&format!("{title}: ")),
+            "{event}: {}",
+            e.message
+        );
     }
 }
 
@@ -76,7 +149,7 @@ fn load_errors_do_not_panic() {
     std::fs::create_dir_all(&dir).unwrap();
     let unknown = dir.join("unknown.json");
     let broken = dir.join("broken.json");
-    std::fs::write(&unknown, r#"{"node_type": "HTTP"}"#).unwrap();
+    std::fs::write(&unknown, r#"{"node_type": "DELAY"}"#).unwrap();
     std::fs::write(&broken, "{ not json").unwrap();
     assert!(matches!(
         Catalog::load(&[("x.unknown".into(), unknown)]),
@@ -123,20 +196,194 @@ fn workflow_roundtrip_keeps_unknown_keys() {
 fn events_listed_trigger_first_with_titles() {
     let c = Catalog::embedded().unwrap();
     let ids: Vec<&str> = c.events().iter().map(|e| e.event.as_str()).collect();
+    assert_eq!(ids.len(), 59);
     assert_eq!(
-        ids,
+        ids[..9],
         [
+            "github.new_issue",
+            "github.new_pull_request",
             "local.folder_new_file",
+            "manual.run",
+            "schedule.daily",
+            "schedule.every",
+            "schedule.hourly",
+            "schedule.monthly",
+            "schedule.weekly",
+        ]
+    );
+    assert!(ids[9..].is_sorted(), "{ids:?}");
+    assert_eq!(
+        ids[9..16],
+        [
             "branch.if",
+            "formatter.date_add",
+            "formatter.date_compare",
+            "formatter.date_format",
+            "formatter.list_pick",
+            "formatter.list_to_text",
+            "formatter.lookup_table",
+        ]
+    );
+    assert_eq!(
+        ids[52..],
+        [
+            "github.update_pull_request",
+            "http.request",
             "local.ai",
             "local.file_move",
             "local.file_rename",
-            "local.file_trash"
+            "local.file_trash",
+            "transform.map",
         ]
     );
-    assert_eq!(c.events()[0].title, "폴더에 새 파일");
+    assert_eq!(
+        c.get("local.folder_new_file").unwrap().title,
+        "폴더에 새 파일"
+    );
     assert_eq!(
         c.get("local.file_trash").unwrap().description,
         "파일을 휴지통으로 옮겨요. 영구 삭제하지 않아요."
     );
+}
+
+#[test]
+fn github_issue_events_merge_fields_with_desktop_table() {
+    let c = Catalog::embedded().unwrap();
+    let keys = |e: &str| {
+        c.get(e)
+            .unwrap()
+            .input_fields
+            .iter()
+            .map(|f| f.key.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        keys("github.create_issue"),
+        [
+            "owner",
+            "repo",
+            "title",
+            "body",
+            "labels",
+            "assignees",
+            "milestone"
+        ]
+    );
+    let f = |e: &str, k: &str| {
+        c.get(e)
+            .unwrap()
+            .input_fields
+            .iter()
+            .find(|f| f.key == k)
+            .unwrap()
+            .clone()
+    };
+    assert!(f("github.create_issue", "owner").required);
+    assert_eq!(
+        f("github.create_issue", "owner").title.as_deref(),
+        Some("소유자")
+    );
+    assert_eq!(
+        f("github.create_issue", "body").kind.as_deref(),
+        Some("text")
+    );
+    assert_eq!(f("github.create_issue", "labels").default, Some(json!("")));
+    assert_eq!(
+        f("github.find_issue", "max_results").kind.as_deref(),
+        Some("integer")
+    );
+    assert_eq!(
+        f("github.find_issue", "max_results").default,
+        Some(json!(20))
+    );
+    assert_eq!(f("github.find_issue", "search_by").choices.len(), 6);
+    assert_eq!(
+        f("github.submit_pr_review", "author").default,
+        Some(json!("me"))
+    );
+    assert_eq!(f("github.submit_pr_review", "author").choices.len(), 1);
+    assert!(f("github.get_file", "path").required);
+    assert_eq!(f("github.find_user", "username").default, Some(json!("")));
+    for e in GITHUB_EVENTS {
+        assert_eq!(c.get(e).unwrap().node_type, NodeType::Action);
+    }
+}
+
+#[test]
+fn github_table_keys_match_catalog_fields() {
+    // 서브모듈을 올려 카탈로그 칸이 바뀌면 여기서 깨진다.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let table: serde_json::Map<String, Value> = serde_json::from_str(
+        &std::fs::read_to_string(root.join("crates/ieum-local/github_inputs.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(table.keys().collect::<Vec<_>>().len(), 23);
+    for (event, rows) in &table {
+        let file = root.join(format!(
+            "catalog/events/github/{}.json",
+            event.trim_start_matches("github.")
+        ));
+        let raw: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        // 트리거는 `fields` 대신 `inputFields`(배열)를 쓰고, owner·repo는 데스크톱이 더한 칸이다.
+        let mut catalog: BTreeSet<&str> = match raw.get("fields") {
+            Some(f) => f.as_object().unwrap().keys().map(String::as_str).collect(),
+            None => raw["inputFields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|f| f["key"].as_str().unwrap())
+                .collect(),
+        };
+        let mine: BTreeSet<&str> = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["key"].as_str().unwrap())
+            .collect();
+        if raw.get("fields").is_none() {
+            catalog.extend(["owner", "repo"]);
+        }
+        assert!(mine.is_subset(&catalog), "{event}");
+        if raw.get("fields").is_some() {
+            assert_eq!(mine, catalog, "{event}");
+        }
+    }
+}
+
+#[test]
+fn github_triggers_use_owner_repo_fields() {
+    let c = Catalog::embedded().unwrap();
+    let keys = |e: &str| -> Vec<String> {
+        c.get(e)
+            .unwrap()
+            .input_fields
+            .iter()
+            .map(|f| f.key.clone())
+            .collect()
+    };
+    for e in GITHUB_TRIGGERS {
+        assert_eq!(c.get(e).unwrap().node_type, NodeType::Trigger, "{e}");
+        assert!(!GITHUB_EVENTS.contains(&e), "{e}");
+    }
+    let issue = &c.get("github.new_issue").unwrap().input_fields;
+    assert_eq!(keys("github.new_issue"), ["owner", "repo"]);
+    assert!(issue.iter().all(|f| f.required));
+    assert_eq!(issue[0].title.as_deref(), Some("소유자"));
+    assert_eq!(issue[1].title.as_deref(), Some("저장소"));
+    assert_eq!(
+        keys("github.new_pull_request"),
+        [
+            "owner",
+            "repo",
+            "onOpened",
+            "onSynchronize",
+            "onReopened",
+            "onReadyForReview",
+            "excludeDrafts"
+        ]
+    );
+    for f in &c.get("github.new_pull_request").unwrap().input_fields[2..] {
+        assert_eq!(f.kind.as_deref(), Some("boolean"), "{}", f.key);
+        assert_eq!(f.default, Some(json!(true)), "{}", f.key);
+    }
 }

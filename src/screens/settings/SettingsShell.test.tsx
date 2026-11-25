@@ -2,8 +2,9 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import App from "../../App";
-import { api, type CliAccountMeta, type CredentialsView, type ProviderReport, type UsageProvider, type UsageReport } from "../../api";
+import { api, type CliAccountMeta, type CredentialsView, type KeyLimitsView, type ProviderReport, type UsageProvider, type UsageReport } from "../../api";
 import { setLang } from "../../i18n";
+import { useKeyLimits } from "../../stores/keyLimits";
 import { useSettings } from "../../stores/settings";
 import { useWeb } from "../../stores/web";
 import { SettingsShell, type SettingsSection } from "./SettingsShell";
@@ -28,6 +29,12 @@ const useCreds = (v: CredentialsView) => {
   onTestFinished(() => void spy.mockResolvedValue(creds([])));
   return spy;
 };
+/** 이 테스트 동안만 키 한도·지출을 바꾼다. */
+const useLimits = (v: KeyLimitsView) => {
+  const spy = vi.spyOn(api, "keyLimits").mockClear().mockResolvedValue(v);
+  onTestFinished(() => void spy.mockResolvedValue({ limits: {}, spend: {} }));
+  return spy;
+};
 
 beforeAll(() => {
   setLang("ko");
@@ -47,6 +54,7 @@ beforeAll(() => {
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
   vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
   vi.spyOn(api, "usageReport").mockRejectedValue("no command");
+  vi.spyOn(api, "keyLimits").mockResolvedValue({ limits: {}, spend: {} });
 });
 beforeEach(() => {
   useSettings.setState({ settings: { language: "ko", autostart: false, firstRunDone: true, serverUrl: "https://green.kiacms.co.kr", onboardingDone: true, notifyManualStart: true, notifyManualEnd: true, notifyWatchEnd: true } });
@@ -63,12 +71,12 @@ const menu = () => within(screen.getByRole("navigation")).getAllByRole("button")
 const title = () => screen.getByRole("heading", { level: 2 }).textContent;
 const IDS = ["account", "ai", "usage", "general", "notifications", "shortcuts", "macos", "advanced"];
 const pages = () => IDS.filter((id) => document.getElementById(`settings-${id}`));
-const ALL_MENUS = ["이음 계정", "AI 제공자 계정", "통계 및 사용량", "일반", "알림", "단축키", "macOS 권한", "고급"];
+const ALL_MENUS = ["이음 계정", "AI 제공자 계정", "통계 및 사용량", "연동", "일반", "알림", "단축키", "macOS 권한", "고급"];
 
 test("settings_menu_groups_in_order", async () => {
   await renderShell();
   const nav = screen.getByRole("navigation");
-  expect([...nav.querySelectorAll("[data-group]")].map((g) => g.textContent)).toEqual(["계정", "AI 기능", "일반", "개인정보 보호 및 보안", "고급"]);
+  expect([...nav.querySelectorAll("[data-group]")].map((g) => g.textContent)).toEqual(["계정", "AI 기능", "연동", "일반", "개인정보 보호 및 보안", "고급"]);
   expect(menu()).toEqual(ALL_MENUS);
   expect(nav.textContent).not.toContain("권한·준비");
 });
@@ -254,7 +262,7 @@ test("notifications_page_has_toggles_and_test", async () => {
   await renderShell("notifications");
   expect(title()).toBe("알림");
   const page = within(document.getElementById("settings-notifications")!);
-  expect(page.getAllByRole("switch").map((s) => s.getAttribute("aria-label"))).toEqual(["수동 실행 시작", "수동 실행 끝·실패", "폴더 감시 끝·실패", "구독 한도에 닿으면 다른 계정 권하기"]);
+  expect(page.getAllByRole("switch").map((s) => s.getAttribute("aria-label"))).toEqual(["수동 실행 시작", "수동 실행 끝·실패", "자동 실행(폴더·스케줄) 끝·실패", "구독 한도에 닿으면 다른 계정 권하기"]);
   await act(async () => fireEvent.click(page.getByRole("button", { name: "테스트 알림 보내기" })));
   expect(send).toHaveBeenCalledTimes(1);
   await act(async () => fireEvent.click(page.getByRole("button", { name: "시스템 설정 열기" })));
@@ -264,7 +272,7 @@ test("notifications_page_has_toggles_and_test", async () => {
 test("shortcuts_page_lists_real_shortcuts", async () => {
   await renderShell("shortcuts");
   const page = document.getElementById("settings-shortcuts")!;
-  expect([...page.querySelectorAll("kbd")].map((k) => k.textContent)).toEqual(["⌘K", "⌘N", "⌘F", "Esc", "⌫", "↑", "↓", "↵"]);
+  expect([...page.querySelectorAll("kbd")].map((k) => k.textContent)).toEqual(["⌘K", "⌘N", "/", "⌘F", "Esc", "⌫", "↑", "↓", "↵"]);
   for (const name of ["찾기", "새 캔버스", "설정 검색"]) expect(within(page).getByText(name)).toBeTruthy();
 });
 
@@ -506,6 +514,82 @@ test("api_card_lists_keys_with_last4_and_default", async () => {
   expect(document.getElementById("settings-ai")!.textContent).not.toMatch(/sk-/);
 });
 
+test("key_row_shows_meter_and_saves_limit", async () => {
+  const limits = useLimits({ limits: { "openai:default": 10 }, spend: { "openai:default": 3.2 } });
+  const set = vi.spyOn(api, "setKeyLimit").mockClear().mockResolvedValue();
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const key = row(keys("OpenAI"), "기본");
+  expect(key.getByText("이번 달 $3.20 / $10")).toBeTruthy();
+  expect(key.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("32");
+  const input = key.getByLabelText("월 한도 $");
+  const before = limits.mock.calls.length;
+  await act(async () => fireEvent.change(input, { target: { value: "5" } }));
+  await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+  expect(set).toHaveBeenCalledWith("openai", "default", 5);
+  expect(limits.mock.calls.length).toBeGreaterThan(before);
+});
+
+test("clearing_limit_sends_null", async () => {
+  useLimits({ limits: { "openai:default": 10 }, spend: {} });
+  const set = vi.spyOn(api, "setKeyLimit").mockClear().mockResolvedValue();
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const input = row(keys("OpenAI"), "기본").getByLabelText("월 한도 $") as HTMLInputElement;
+  expect(input.value).toBe("10");
+  await act(async () => fireEvent.change(input, { target: { value: "" } }));
+  await act(async () => fireEvent.blur(input));
+  expect(set).toHaveBeenCalledWith("openai", "default", null);
+});
+
+test("bad_limit_shows_error", async () => {
+  const set = vi.spyOn(api, "setKeyLimit").mockClear().mockResolvedValue();
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const key = row(keys("OpenAI"), "기본");
+  const input = key.getByLabelText("월 한도 $");
+  for (const v of ["0", "-3", "abc", "1e999"]) {
+    await act(async () => fireEvent.change(input, { target: { value: v } }));
+    await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
+    const msg = key.getByText("0보다 큰 금액을 넣어 주세요");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(msg.id);
+  }
+  expect(set).not.toHaveBeenCalled();
+});
+
+test("limit_input_follows_changed_limit", async () => {
+  useLimits({ limits: { "openai:default": 10 }, spend: {} });
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const input = () => row(keys("OpenAI"), "기본").getByLabelText("월 한도 $") as HTMLInputElement;
+  expect(input().value).toBe("10");
+  // 다른 곳(새로 읽기)에서 한도가 바뀌면 칸도 따라간다.
+  await act(async () => useKeyLimits.setState({ view: { limits: { "openai:default": 20 }, spend: {} } }));
+  expect(input().value).toBe("20");
+});
+
+test("limited_unused_key_shows_zero", async () => {
+  useLimits({ limits: { "openai:default": 10 }, spend: {} });
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  expect(row(keys("OpenAI"), "기본").getByText("이번 달 $0.00 / $10")).toBeTruthy();
+});
+
+test("deleting_key_reloads_limits", async () => {
+  const limits = useLimits({ limits: {}, spend: {} });
+  const del = vi.spyOn(api, "deleteCredential").mockClear().mockResolvedValue();
+  onTestFinished(() => void del.mockClear());
+  useCreds(creds([OPENAI_KEY]));
+  await renderShell("ai");
+  const key = row(keys("OpenAI"), "기본");
+  expect(key.getByText("이번 달 $0.00 · 한도 없음")).toBeTruthy();
+  const before = limits.mock.calls.length;
+  await act(async () => fireEvent.click(key.getByRole("button", { name: "삭제" })));
+  await act(async () => fireEvent.click(key.getByRole("button", { name: "정말 삭제" })));
+  expect(limits.mock.calls.length).toBeGreaterThan(before);
+});
+
 test("add_key_then_set_default_and_delete_with_confirm", async () => {
   let finish = () => {};
   const add = vi.spyOn(api, "addApiKey").mockReturnValue(new Promise((r) => (finish = () => r(WORK_KEY))));
@@ -692,8 +776,17 @@ test("permissions_pane_opens_files_settings_without_checking_folders", async () 
 test("notify_toggles_save_settings", async () => {
   const set = vi.spyOn(api, "setSettings").mockResolvedValue();
   await renderShell("notifications");
-  await act(async () => fireEvent.click(screen.getByRole("switch", { name: "폴더 감시 끝·실패" })));
+  await act(async () => fireEvent.click(screen.getByRole("switch", { name: "자동 실행(폴더·스케줄) 끝·실패" })));
   expect(set).toHaveBeenCalledWith(expect.objectContaining({ notifyWatchEnd: false, notifyManualStart: true }));
+});
+
+test("experiment_toggles_save_settings", async () => {
+  const set = vi.spyOn(api, "setSettings").mockResolvedValue();
+  await renderShell("general");
+  await act(async () => fireEvent.click(screen.getByRole("switch", { name: "채팅 설계서(A2UI)" })));
+  expect(set).toHaveBeenCalledWith(expect.objectContaining({ chatBlueprint: true }));
+  await act(async () => fireEvent.click(screen.getByRole("switch", { name: "실측 기록 남기기" })));
+  expect(set).toHaveBeenCalledWith(expect.objectContaining({ chatMetrics: true }));
 });
 
 test("autostart_toggle_lives_only_here", async () => {

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { api, type CredentialsView, type Workflow, type WfNode } from "../api";
 import { setLang } from "../i18n";
@@ -310,6 +311,211 @@ test("ai_node_shows_missing_credential_warning", () => {
   useCredentials.setState({ view: null });
 });
 
+/** 저장값을 다시 받아 그리는 패널 — 실제 편집기처럼. */
+function Live({ start, onChange }: { start: WfNode; onChange: (n: WfNode) => void }) {
+  const [node, setNode] = useState(start);
+  return (
+    <ConfigPanel
+      node={node}
+      workflow={{ nodes: [node], edges: [] }}
+      onChange={(n) => {
+        setNode(n);
+        onChange(n);
+      }}
+    />
+  );
+}
+const typeIn = (el: HTMLElement, v: string) => fireEvent.change(el, { target: { value: v } });
+
+test("dict_field_saves_object", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "t", event: "transform.map", type: "TRANSFORM", config: { mappings: {} } };
+  render(<Live start={node} onChange={onChange} />);
+  const field = within(screen.getByTestId("field-mappings"));
+  fireEvent.click(field.getByRole("button", { name: "줄 추가" }));
+  const key = field.getByRole("textbox", { name: "매핑 1번째 줄 키" });
+  expect(document.activeElement).toBe(key); // 키보드로 추가하면 바로 키를 친다
+  typeIn(key, "a");
+  // 키를 치는 도중 줄이 사라지거나 바뀌지 않는다
+  expect(field.getByRole("textbox", { name: "매핑 1번째 줄 키" })).toBe(key);
+  typeIn(field.getByRole("textbox", { name: "매핑 1번째 줄 값" }), "1");
+  expect(onChange.mock.lastCall![0].config.mappings).toEqual({ a: "1" });
+  // 빈 키 줄은 저장하지 않는다
+  fireEvent.click(field.getByRole("button", { name: "줄 추가" }));
+  typeIn(field.getByRole("textbox", { name: "매핑 2번째 줄 값" }), "x");
+  expect(onChange.mock.lastCall![0].config.mappings).toEqual({ a: "1" });
+  // 같은 키 줄은 표시하고 먼저 나온 줄만 저장
+  typeIn(field.getByRole("textbox", { name: "매핑 2번째 줄 키" }), "a");
+  expect(onChange.mock.lastCall![0].config.mappings).toEqual({ a: "1" });
+  expect(field.getByRole("textbox", { name: "매핑 2번째 줄 키" }).getAttribute("aria-invalid")).toBe("true");
+  expect(field.getByText("위에 같은 키가 있어 이 줄은 저장하지 않아요.")).toBeTruthy();
+  fireEvent.click(field.getByRole("button", { name: "매핑 2번째 줄 빼기" }));
+  fireEvent.click(field.getByRole("button", { name: "매핑 1번째 줄 빼기" }));
+  expect(onChange.mock.lastCall![0].config.mappings).toEqual({});
+});
+
+test("dict_field_keeps_non_string_values_and_text_values", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "t", event: "transform.map", type: "TRANSFORM", config: { mappings: { n: 3, o: { x: 1 }, s: "v" } } };
+  const r = render(<Live start={node} onChange={onChange} />);
+  const field = within(screen.getByTestId("field-mappings"));
+  expect((field.getByRole("textbox", { name: "매핑 1번째 줄 값" }) as HTMLInputElement).value).toBe("3");
+  typeIn(field.getByRole("textbox", { name: "매핑 3번째 줄 값" }), "w");
+  expect(onChange.mock.lastCall![0].config.mappings).toEqual({ n: 3, o: { x: 1 }, s: "w" });
+  r.unmount();
+
+  // 참조식 글로 들어온 대응표는 지우지 않고 글 칸으로
+  const text: WfNode = { id: "l", event: "formatter.lookup_table", type: "TRANSFORM", config: { input: "", table: "{{nodes.a.output.t}}" } };
+  render(<Live start={text} onChange={onChange} />);
+  const table = within(screen.getByTestId("field-table"));
+  expect((table.getByRole("textbox") as HTMLInputElement).value).toBe("{{nodes.a.output.t}}");
+  expect(table.queryByRole("button", { name: "줄 추가" })).toBeNull();
+});
+
+test("same_content_with_new_reference_keeps_draft", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "t", event: "transform.map", type: "TRANSFORM", config: { mappings: { a: "1" } } };
+  const panel = (n: WfNode) => <ConfigPanel node={n} workflow={{ nodes: [n], edges: [] }} onChange={onChange} />;
+  const r = render(panel(node));
+  fireEvent.click(screen.getByRole("button", { name: "줄 추가" }));
+  // 저장 뒤 백엔드에서 받은 것처럼 — 내용은 같고 참조만 새것(키 순서도 다를 수 있다)
+  r.rerender(panel(structuredClone(node)));
+  expect(screen.getByRole("textbox", { name: "매핑 2번째 줄 키" })).toBeTruthy();
+  // 내용이 달라지면(되돌리기 등) 다시 읽는다
+  r.rerender(panel({ ...node, config: { mappings: { b: "2" } } }));
+  expect(screen.queryByRole("textbox", { name: "매핑 2번째 줄 키" })).toBeNull();
+  expect((screen.getByRole("textbox", { name: "매핑 1번째 줄 키" }) as HTMLInputElement).value).toBe("b");
+  r.unmount();
+
+  // 본문은 저장값을 받는 부모 아래서(실제 편집기처럼) 친 뒤, 같은 내용의 새 객체를 내려 준다.
+  let push: (n: WfNode) => void = () => {};
+  function Parent({ start }: { start: WfNode }) {
+    const [n, setN] = useState(start);
+    push = setN;
+    return <ConfigPanel node={n} workflow={{ nodes: [n], edges: [] }} onChange={setN} />;
+  }
+  const http: WfNode = { id: "h", event: "http.request", type: "HTTP", config: { method: "POST", url: "https://x" } };
+  render(<Parent start={http} />);
+  typeIn(screen.getByTestId("field-body").querySelector("textarea")!, '{"b":2,"a":1}');
+  act(() => push({ ...http, config: { ...http.config, body: { a: 1, b: 2 } } }));
+  expect(screen.getByTestId("field-body").querySelector("textarea")!.value).toBe('{"b":2,"a":1}');
+});
+
+test("dict_text_value_rules", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "l", event: "formatter.lookup_table", type: "TRANSFORM", config: { input: "", table: "{{nodes.a.output.t}}" } };
+  render(<Live start={node} onChange={onChange} />);
+  const table = () => within(screen.getByTestId("field-table"));
+  const box = table().getByRole("textbox");
+  // 참조식은 글 그대로
+  typeIn(box, "{{nodes.a.output.u}}");
+  expect(onChange.mock.lastCall![0].config.table).toBe("{{nodes.a.output.u}}");
+  // 일반 글은 저장하지 않고 알린다
+  onChange.mockClear();
+  typeIn(box, "hello");
+  expect(onChange).not.toHaveBeenCalled();
+  expect(box.getAttribute("aria-invalid")).toBe("true");
+  expect((box as HTMLInputElement).value).toBe("hello");
+  // 다 지우면 키를 빼고 줄 화면으로
+  typeIn(box, "");
+  expect("table" in onChange.mock.lastCall![0].config).toBe(false);
+  expect(table().getByRole("button", { name: "줄 추가" })).toBeTruthy();
+  cleanup();
+
+  // JSON 객체 글은 객체로
+  render(<Live start={node} onChange={onChange} />);
+  typeIn(table().getByRole("textbox"), '{"k":"v"}');
+  expect(onChange.mock.lastCall![0].config.table).toEqual({ k: "v" });
+});
+
+test("integer_field_matches_builder", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "x", event: "formatter.text_truncate", type: "TRANSFORM", config: { input: "abc" } };
+  render(<Live start={node} onChange={onChange} />);
+  const box = screen.getByRole("textbox", { name: /^최대 글자 수/ });
+  typeIn(box, "+5");
+  expect(onChange.mock.lastCall![0].config.maxLength).toBe(5);
+  typeIn(box, " 7 ");
+  expect(onChange.mock.lastCall![0].config.maxLength).toBe(7);
+  onChange.mockClear();
+  typeIn(box, "3.0");
+  expect(onChange).not.toHaveBeenCalled();
+  expect(box.getAttribute("aria-invalid")).toBe("true");
+});
+
+test("integer_field_saves_number", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "x", event: "formatter.text_truncate", type: "TRANSFORM", config: { input: "abc" } };
+  render(<Live start={node} onChange={onChange} />);
+  const box = screen.getByRole("textbox", { name: /^최대 글자 수/ });
+  typeIn(box, "5");
+  expect(onChange.mock.lastCall![0].config.maxLength).toBe(5);
+  // 숫자가 아니면 저장하지 않고 알린다
+  onChange.mockClear();
+  typeIn(box, "5a");
+  expect(onChange).not.toHaveBeenCalled();
+  expect(box.getAttribute("aria-invalid")).toBe("true");
+  // 참조식은 글로
+  typeIn(box, "{{nodes.a.output.n}}");
+  expect(onChange.mock.lastCall![0].config.maxLength).toBe("{{nodes.a.output.n}}");
+  // 비우면 키를 뺀다
+  typeIn(box, "");
+  expect("maxLength" in onChange.mock.lastCall![0].config).toBe(false);
+});
+
+test("http_body_json_is_saved_as_object", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "h", event: "http.request", type: "HTTP", config: { method: "POST", url: "https://x" } };
+  const r = render(<Live start={node} onChange={onChange} />);
+  const body = screen.getByTestId("field-body").querySelector("textarea")!;
+  typeIn(body, '{"a":1}');
+  expect(onChange.mock.lastCall![0].config.body).toEqual({ a: 1 });
+  expect(body.value).toBe('{"a":1}'); // 치는 대로 — 다시 포맷하지 않는다
+  typeIn(body, "hi");
+  expect(onChange.mock.lastCall![0].config.body).toBe("hi");
+  typeIn(body, '{"a": {{nodes.b.output.x}}}');
+  expect(onChange.mock.lastCall![0].config.body).toBe('{"a": {{nodes.b.output.x}}}');
+  // 비우면 키를 뺀다 — 빈 글을 본문으로 보내지 않게.
+  typeIn(body, "");
+  expect("body" in onChange.mock.lastCall![0].config).toBe(false);
+  r.unmount();
+
+  render(<Live start={{ ...node, config: { ...node.config, body: { a: [1] } } }} onChange={onChange} />);
+  expect(screen.getByTestId("field-body").querySelector("textarea")!.value).toBe(JSON.stringify({ a: [1] }, null, 2));
+});
+
+test("http_webhook_field_is_hidden", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const node: WfNode = { id: "h", event: "http.request", type: "HTTP", config: { url: "https://x", webhookCredentialId: "w1" } };
+  render(<Live start={node} onChange={onChange} />);
+  expect(screen.queryByTestId("field-webhookCredentialId")).toBeNull();
+  typeIn(screen.getByTestId("field-url").querySelector("input")!, "https://y");
+  expect(onChange.mock.lastCall![0].config.webhookCredentialId).toBe("w1");
+});
+
+test("lookup_table_and_headers_use_dict_field", () => {
+  setLang("ko");
+  const onChange = vi.fn();
+  const lookup: WfNode = { id: "l", event: "formatter.lookup_table", type: "TRANSFORM", config: { input: "", table: { k: "v" } } };
+  const r = render(<Live start={lookup} onChange={onChange} />);
+  expect((screen.getByRole("textbox", { name: "대응표 1번째 줄 키" }) as HTMLInputElement).value).toBe("k");
+  r.unmount();
+  const http: WfNode = { id: "h", event: "http.request", type: "HTTP", config: { url: "https://x" } };
+  render(<Live start={http} onChange={onChange} />);
+  const headers = within(screen.getByTestId("field-headers"));
+  fireEvent.click(headers.getByRole("button", { name: "줄 추가" }));
+  typeIn(headers.getByRole("textbox", { name: "헤더 1번째 줄 키" }), "X-A");
+  expect(onChange.mock.lastCall![0].config.headers).toEqual({ "X-A": "" });
+});
+
 test("ai_node_without_provider_does_not_look_like_claude_is_picked", () => {
   setLang("ko");
   const onChange = vi.fn();
@@ -318,4 +524,45 @@ test("ai_node_without_provider_does_not_look_like_claude_is_picked", () => {
   expect(screen.getByRole("button", { name: "AI 공급원: 공급원을 고르세요" })).toBeTruthy();
   choose(/^AI 공급원/, "Codex (구독)");
   expect(onChange.mock.lastCall![0].config).toEqual({ prompt: "p", provider: "cli:codex" });
+});
+
+const pr = (config: Record<string, unknown>): WfNode => ({ id: "p", event: "github.create_pull_request", type: "ACTION", config });
+const textbox = (key: string) => screen.getByTestId(`field-${key}`).querySelector("input")!;
+
+test("clears_dependents_on_parent_change", () => {
+  setLang("ko");
+  vi.spyOn(api, "githubOptions").mockResolvedValue({ items: [], truncated: false });
+  const onChange = vi.fn();
+  const node = pr({ owner: "hodoon", repo: "GitHubTest", head: "main", title: "t" });
+  render(<ConfigPanel node={node} workflow={{ nodes: [node], edges: [] }} onChange={onChange} />);
+  // 소유자를 바꾸면 소유자를 의존 칸으로 둔 저장소·브랜치를 비운다 — 빈 칸(base)은 그대로 둔다
+  fireEvent.change(textbox("owner"), { target: { value: "team-ieum" } });
+  expect(onChange.mock.lastCall![0].config).toEqual({ owner: "team-ieum", repo: "", head: "", title: "t" });
+  // 저장소를 바꾸면 브랜치가 빈다
+  fireEvent.change(textbox("repo"), { target: { value: "blog" } });
+  expect(onChange.mock.lastCall![0].config).toEqual({ owner: "hodoon", repo: "blog", head: "", title: "t" });
+  // 다른 칸은 아무것도 비우지 않는다
+  fireEvent.change(textbox("title"), { target: { value: "새 제목" } });
+  expect(onChange.mock.lastCall![0].config).toEqual({ owner: "hodoon", repo: "GitHubTest", head: "main", title: "새 제목" });
+});
+
+test("non_github_text_fields_unchanged", () => {
+  setLang("ko");
+  vi.spyOn(api, "githubOptions").mockResolvedValue({ items: [], truncated: false });
+  const trig: WfNode = { id: "t", event: "local.folder_new_file", type: "TRIGGER", config: {} };
+  const node = pr({});
+  const wf: Workflow = { nodes: [trig, node], edges: [{ source: "t", target: "p" }] };
+  const onChange = vi.fn();
+  render(<ConfigPanel node={node} workflow={wf} onChange={onChange} />);
+  // 목록 칸은 콤보, 제목 칸은 그냥 글 칸
+  expect(textbox("owner").getAttribute("role")).toBe("combobox");
+  expect(textbox("head").getAttribute("role")).toBe("combobox");
+  expect(textbox("title").getAttribute("role")).toBeNull();
+  // 칸 이름을 누르면 콤보 글 칸으로 간다
+  expect(screen.getByLabelText(/^소유자/)).toBe(textbox("owner"));
+  // 앞 단계 값 넣기는 콤보 아래 그대로 — 고르면 글 끝에 붙인다
+  const owner = within(screen.getByTestId("field-owner"));
+  fireEvent.click(owner.getByRole("button", { name: /^앞 단계 값 넣기/ }));
+  fireEvent.click(within(screen.getByRole("listbox")).getAllByRole("option")[1]);
+  expect(onChange.mock.lastCall![0].config.owner).toMatch(/^\{\{nodes\.t\.output\.\w+\}\}$/);
 });

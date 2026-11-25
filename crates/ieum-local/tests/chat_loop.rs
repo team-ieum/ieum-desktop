@@ -141,6 +141,7 @@ async fn go(script: Arc<Script>, fake: &Fake, limits: Limits) -> (TurnResult, Ve
         history: &history,
         ai: &ai,
         now: "2026-11-13T09:00:00+09:00",
+        blueprint: None,
     };
     let r = run_turn(&runner, fake, turn, limits, &|s| {
         stages.lock().unwrap().push(s)
@@ -235,6 +236,7 @@ async fn results_and_status_are_wrapped_as_data() {
         history: &[],
         ai: &ai,
         now: "n",
+        blueprint: None,
     };
     run_turn(&r, &Fake::default(), turn, Limits::default(), &|_| {}).await;
     assert!(
@@ -275,6 +277,7 @@ async fn cli_prompt_has_no_at_sign_anywhere() {
             history: &history,
             ai: &ai,
             now: "n",
+            blueprint: None,
         };
         run_turn(&r, &Fake::default(), turn, Limits::default(), &|_| {}).await;
         let seen = script.seen();
@@ -372,12 +375,14 @@ async fn fourth_test_in_turn_is_not_run() {
             Card::Test {
                 node_id: "a".into(),
                 run_id: "r1".into(),
-                status: "success".into()
+                status: "success".into(),
+                http_sent: false
             },
             Card::Test {
                 node_id: "a".into(),
                 run_id: "r1".into(),
-                status: "failed".into()
+                status: "failed".into(),
+                http_sent: false
             },
         ]
     );
@@ -385,6 +390,35 @@ async fn fourth_test_in_turn_is_not_run() {
         script.seen()[1]
             .prompt
             .contains(r#""code":"TURN_TEST_LIMIT""#)
+    );
+}
+
+#[tokio::test]
+async fn http_test_card_carries_sent_and_skip_has_no_card() {
+    let t = |id: &str| json!({"op": "test", "args": {"id": id}});
+    let script = Script::new([
+        ans("", json!([t("h"), t("h")])),
+        ans("테스트했어요", json!([])),
+    ]);
+    let fake = Fake::with([
+        Reply::ok(
+            json!({"runId": "r1", "status": "success", "nodes": [], "undo": {"restored": 0, "failed": 0}, "httpSent": true}),
+        ),
+        Reply::ok(json!({"status": "skipped_by_user", "nodes": ["h"]})),
+    ]);
+    let (r, _) = go(script, &fake, Limits::default()).await;
+    assert_eq!(
+        r.cards,
+        [Card::Test {
+            node_id: "h".into(),
+            run_id: "r1".into(),
+            status: "success".into(),
+            http_sent: true
+        }]
+    );
+    assert_eq!(
+        serde_json::to_value(&r.cards[0]).unwrap(),
+        json!({"kind": "test", "nodeId": "h", "runId": "r1", "status": "success", "httpSent": true})
     );
 }
 
@@ -517,7 +551,7 @@ fn instruction_is_local() {
     for gone in [
         "check_connection",
         "find_events",
-        "manual.run",
+        "schedule.every",
         "pick_model",
         "모델 카드",
         "list_options",
@@ -527,6 +561,11 @@ fn instruction_is_local() {
     }
     for must in [
         "local.folder_new_file",
+        "schedule.daily",
+        "manual.run",
+        "Asia/Seoul",
+        "MON~SUN",
+        r#""1"~"28" 또는 "L""#,
         "{{nodes.<노드 id>.output.<이름>}}",
         "pick-folder",
         "awaiting_user",
@@ -538,4 +577,273 @@ fn instruction_is_local() {
     ] {
         assert!(INSTRUCTION.contains(must), "{must}");
     }
+    assert!(!INSTRUCTION.contains("첫 노드는 항상 local.folder_new_file"));
+}
+
+/// 설계서 모드를 고를 수 있는 한 턴(지난 대화 없음).
+async fn go_bp(
+    script: Arc<Script>,
+    fake: &Fake,
+    limits: Limits,
+    blueprint: Option<BlueprintTurn<'_>>,
+) -> TurnResult {
+    let runner = AiRunner::empty().with_provider("api:anthropic", script);
+    let ai = AiDefault {
+        provider: "api:anthropic".into(),
+        credential: None,
+        model: None,
+        effort: None,
+    };
+    let turn = Turn {
+        text: "정리해 줘",
+        history: &[],
+        ai: &ai,
+        now: "n",
+        blueprint,
+    };
+    run_turn(&runner, fake, turn, limits, &|_| {}).await
+}
+
+fn ui(kind: &str) -> Value {
+    json!({"op": "ui", "args": {"messages": [{kind: {"surfaceId": "blueprint"}}]}})
+}
+
+#[tokio::test]
+async fn blueprint_mode_adds_instruction_and_summary_section() {
+    let summary = "상태: active\n버전: 1\n데이터: {\"name\":\"날짜_가게.pdf\"}";
+    let on = Script::new([ans("끝", json!([]))]);
+    let bp = Some(BlueprintTurn {
+        summary: Some(summary),
+    });
+    go_bp(on.clone(), &Fake::default(), Limits::default(), bp).await;
+    let off = Script::new([ans("끝", json!([]))]);
+    go_bp(off.clone(), &Fake::default(), Limits::default(), None).await;
+    let (b, c) = (&on.seen()[0], &off.seen()[0]);
+    let both = format!("{INSTRUCTION}\n\n{BLUEPRINT_INSTRUCTION}");
+    assert_eq!(b.system.as_deref(), Some(both.as_str()));
+    assert_eq!(c.system.as_deref(), Some(INSTRUCTION));
+    assert!(b.prompt.contains("## 설계서\n") && b.prompt.contains(summary));
+    assert!(!c.prompt.contains("## 설계서"));
+    // 설계서 구역 하나만큼 구분선이 늘었다(Ruling 4).
+    let starts = |p: &str| p.matches("<<<IEUM-DATA-").count();
+    assert_eq!(starts(&b.prompt), starts(&c.prompt) + 1);
+    let at = |s: &str| b.prompt.find(s).unwrap();
+    assert!(at("## 현재 상태") < at("## 설계서") && at("## 설계서") < at("## 대화"));
+    // 아직 설계서가 없으면 지시만 붙는다.
+    let none = Script::new([ans("끝", json!([]))]);
+    let bp = Some(BlueprintTurn { summary: None });
+    go_bp(none.clone(), &Fake::default(), Limits::default(), bp).await;
+    let n = &none.seen()[0];
+    assert_eq!(n.system.as_deref(), Some(both.as_str()));
+    assert!(!n.prompt.contains("## 설계서") && starts(&n.prompt) == starts(&c.prompt));
+}
+
+#[tokio::test]
+async fn classic_mode_rejects_ui_and_bind_folder_without_calling_builder() {
+    let bind =
+        json!({"op": "bind-folder", "args": {"id": "t", "field": "folder", "slot": "watch"}});
+    let script = Script::new([
+        ans("", json!([ui("createSurface"), bind])),
+        ans("끝", json!([])),
+    ]);
+    let fake = Fake::default();
+    let (r, _) = go(script.clone(), &fake, Limits::default()).await;
+    assert!(fake.ops().iter().all(|op| matches!(op, Op::Status {})));
+    let next = &script.seen()[1].prompt;
+    assert_eq!(next.matches(r#""code":"BAD_REQUEST""#).count(), 2);
+    assert!(r.cards.is_empty() && r.error.is_none());
+    let rejected = |op: &str, ui| OpStat {
+        op: op.into(),
+        ok: false,
+        code: Some(Code::BadRequest),
+        rule: None,
+        errors: 0,
+        ui,
+    };
+    assert_eq!(
+        r.ops,
+        [
+            rejected("ui", Some("create")),
+            rejected("bind-folder", None)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn ui_success_becomes_blueprint_card_and_ends_turn() {
+    let script = Script::new([
+        ans(
+            "이렇게 만들어 둘게요",
+            json!([
+                ui("updateDataModel"),
+                {"op": "rename", "args": {"id": "t", "label": "뒤 동작"}},
+            ]),
+        ),
+        ans("불리면 안 됨", json!([])),
+    ]);
+    let fake = Fake::with([Reply::ok(json!({"status": "awaiting_user", "version": 2}))]);
+    let bp = Some(BlueprintTurn { summary: None });
+    let r = go_bp(script.clone(), &fake, Limits::default(), bp).await;
+    assert_eq!(r.cards, [Card::Blueprint { version: 2 }]);
+    assert_eq!(
+        serde_json::to_value(&r.cards[0]).unwrap(),
+        json!({"kind": "blueprint", "version": 2})
+    );
+    assert_eq!(
+        (script.seen().len(), r.say.as_str()),
+        (1, "이렇게 만들어 둘게요")
+    );
+    assert!(fake.ops().iter().any(|op| matches!(op, Op::Ui { .. })));
+    assert!(!fake.ops().iter().any(|op| matches!(op, Op::Rename { .. })));
+    assert_eq!(
+        (r.ops.len(), r.ops[0].ok, r.ops[0].ui),
+        (1, true, Some("update"))
+    );
+}
+
+#[test]
+fn blueprint_instruction_has_no_at_sign() {
+    assert!(!BLUEPRINT_INSTRUCTION.contains('@') && !BLUEPRINT_INSTRUCTION.contains('＠'));
+}
+
+/// 선택 prop(검증 표의 multiple·hint와 FlowPreview 항목의 event)은 안내대로 "[선택]"을 달고, 다른 표기는 쓰지 않는다.
+#[test]
+fn blueprint_instruction_marks_every_optional_prop() {
+    assert!(BLUEPRINT_INSTRUCTION.contains("[선택]이라고 적지 않은 prop은 모두 필수"));
+    for name in ["multiple", "hint", "event"] {
+        assert!(
+            BLUEPRINT_INSTRUCTION.contains(&format!("[선택] {name}(")),
+            "{name}"
+        );
+    }
+    assert!(
+        !BLUEPRINT_INSTRUCTION.contains("[multiple(") && !BLUEPRINT_INSTRUCTION.contains("[hint(")
+    );
+}
+
+/// 지시문의 예시가 실제 검증(Task 2 규칙)을 통과한다 — 틀린 예시는 틀린 답을 가르친다.
+#[test]
+fn blueprint_instruction_example_passes_validation() {
+    let line = BLUEPRINT_INSTRUCTION
+        .lines()
+        .find(|l| l.starts_with(r#"{"op":"ui""#))
+        .expect("ui 예시 줄");
+    let v: Value = serde_json::from_str(line).unwrap();
+    let messages = v["args"]["messages"].as_array().unwrap();
+    let b = ieum_local::builder::apply_ui(None, messages).unwrap();
+    assert_eq!((b.version, b.slots.len()), (1, 1));
+}
+
+#[tokio::test]
+async fn turn_stats_split_outer_and_actions_json() {
+    let script = Script::new(["헛소리".to_string(), ans("끝", json!([]))]);
+    let (r, _) = go(script, &Fake::default(), Limits::default()).await;
+    let outcomes: Vec<_> = r.calls.iter().map(|c| c.outcome.clone()).collect();
+    assert_eq!(outcomes, [CallOutcome::Outer, CallOutcome::Ok]);
+    assert!(r.calls.iter().all(|c| c.usage.is_some()));
+    let script = Script::new([
+        json!({"say": "x", "actions": "{"}).to_string(),
+        ans("끝", json!([])),
+    ]);
+    let (r, _) = go(script, &Fake::default(), Limits::default()).await;
+    assert_eq!(r.calls[0].outcome, CallOutcome::ActionsJson);
+    let script = Script::new(["ERR:키가 없어요".to_string()]);
+    let (r, _) = go(script, &Fake::default(), Limits::default()).await;
+    assert_eq!(r.calls.len(), 1);
+    assert_eq!(
+        r.calls[0].outcome,
+        CallOutcome::AiError("키가 없어요".into())
+    );
+    assert!(r.calls[0].usage.is_none() && !r.cut_short);
+}
+
+#[tokio::test]
+async fn cut_short_is_flagged() {
+    let limits = Limits {
+        calls: 1,
+        ..Limits::default()
+    };
+    let script = Script::new([ans("", json!([{"op": "status"}]))]);
+    let (r, _) = go(script, &Fake::default(), limits).await;
+    assert!(r.cut_short && r.error.is_none());
+    // 시간 상한(호출 도중)도 같다.
+    let slow = Script::slow(200, [ans("늦음", json!([]))]);
+    let limits = Limits {
+        time: Duration::from_millis(30),
+        ..Limits::default()
+    };
+    let (r, _) = go(slow, &Fake::default(), limits).await;
+    assert!(r.cut_short && r.error.is_none());
+    assert_eq!(r.calls[0].outcome, CallOutcome::Timeout);
+    // 상한 안에서 끝난 턴은 아니다.
+    let (r, _) = go(
+        Script::new([ans("끝", json!([]))]),
+        &Fake::default(),
+        Limits::default(),
+    )
+    .await;
+    assert!(!r.cut_short);
+}
+
+#[tokio::test]
+async fn ops_record_codes_only() {
+    let script = Script::new([
+        ans(
+            "",
+            json!([
+                {"op": "set", "args": {"id": "a", "values": {"prompt": "비밀 지시"}}},
+                {"op": "remove", "args": {"id": "a"}},
+            ]),
+        ),
+        ans("끝", json!([])),
+    ]);
+    let fake = Fake::with([
+        Reply::ok(json!({"errors": [{}, {}]})),
+        Reply::err(Code::NodeNotFound),
+    ]);
+    let (r, _) = go(script, &fake, Limits::default()).await;
+    let stat = |op: &str, ok, code, errors| OpStat {
+        op: op.into(),
+        ok,
+        code,
+        rule: None,
+        errors,
+        ui: None,
+    };
+    assert_eq!(
+        r.ops,
+        [
+            stat("set", true, None, 2),
+            stat("remove", false, Some(Code::NodeNotFound), 0)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn op_stat_keeps_only_known_ui_rules() {
+    let script = Script::new([
+        ans("", json!([ui("createSurface"), ui("updateComponents")])),
+        ans("고칠게요", json!([])),
+    ]);
+    let fake = Fake::with([
+        Reply::err_with(
+            Code::UiInvalid,
+            json!({"rule": "limit", "at": "root.children"}),
+        ),
+        Reply::err_with(
+            Code::UiInvalid,
+            json!({"rule": "/Users/me/비밀", "at": null}),
+        ),
+    ]);
+    let bp = Some(BlueprintTurn { summary: None });
+    let r = go_bp(script, &fake, Limits::default(), bp).await;
+    let got: Vec<_> = r.ops.iter().map(|o| (o.rule, o.ui, o.code)).collect();
+    assert_eq!(
+        got,
+        [
+            (Some("limit"), Some("create"), Some(Code::UiInvalid)),
+            (None, Some("update"), Some(Code::UiInvalid)),
+        ]
+    );
+    assert!(r.cards.is_empty());
 }

@@ -1,0 +1,9 @@
+{
+  "source": "ieum-backend/workflow-core/src/main/java/com/ieum/workflowcore/engine/executor/TransformNodeExecutor.java:62-73 (원본 node config의 mappings에서 1단계 문자열 값만 renderVariables로 치환, Map·숫자 값은 그대로 — 중첩 참조식은 글자 그대로 남는다)",
+  "validationErrors": [],
+  "nodes": {
+    "t": {"status": "SUCCEEDED"},
+    "x": {"status": "SUCCEEDED", "output": {"title": "report.pdf", "label": "파일: pdf", "nested": {"k": "{{nodes.t.output.name}}"}, "n": 3}},
+    "c": {"status": "SUCCEEDED", "output": {"branch": "PDF", "branches": ["PDF"], "matched": true, "result": true, "_branchKeys": ["b_00000001"]}}
+  }
+}

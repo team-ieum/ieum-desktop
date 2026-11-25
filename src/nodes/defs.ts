@@ -1,10 +1,64 @@
 // 노드 정의(Task 2와 같은 파일) — 앱 번들에 포함한다.
 import branchIf from "../../catalog/events/branch/if.json";
+import dateAdd from "../../catalog/events/formatter/date_add.json";
+import dateCompare from "../../catalog/events/formatter/date_compare.json";
+import dateFormat from "../../catalog/events/formatter/date_format.json";
+import listPick from "../../catalog/events/formatter/list_pick.json";
+import listToText from "../../catalog/events/formatter/list_to_text.json";
+import lookupTable from "../../catalog/events/formatter/lookup_table.json";
+import numberCurrency from "../../catalog/events/formatter/number_currency.json";
+import numberFormat from "../../catalog/events/formatter/number_format.json";
+import numberMath from "../../catalog/events/formatter/number_math.json";
+import numberPhone from "../../catalog/events/formatter/number_phone.json";
+import textCase from "../../catalog/events/formatter/text_case.json";
+import textDefault from "../../catalog/events/formatter/text_default.json";
+import textExtract from "../../catalog/events/formatter/text_extract.json";
+import textExtractPattern from "../../catalog/events/formatter/text_extract_pattern.json";
+import textLength from "../../catalog/events/formatter/text_length.json";
+import textMarkdownToHtml from "../../catalog/events/formatter/text_markdown_to_html.json";
+import textReplace from "../../catalog/events/formatter/text_replace.json";
+import textSplit from "../../catalog/events/formatter/text_split.json";
+import textStripHtml from "../../catalog/events/formatter/text_strip_html.json";
+import textTrim from "../../catalog/events/formatter/text_trim.json";
+import textTruncate from "../../catalog/events/formatter/text_truncate.json";
+import textUrlEncode from "../../catalog/events/formatter/text_url_encode.json";
+import githubNewIssue from "../../catalog/events/github/new_issue.json";
+import githubNewPullRequest from "../../catalog/events/github/new_pull_request.json";
+import githubCreateIssue from "../../catalog/events/github/create_issue.json";
+import githubUpdateIssue from "../../catalog/events/github/update_issue.json";
+import githubFindIssue from "../../catalog/events/github/find_issue.json";
+import githubFindOrCreateIssue from "../../catalog/events/github/find_or_create_issue.json";
+import githubListIssues from "../../catalog/events/github/list_issues.json";
+import githubAddLabels from "../../catalog/events/github/add_labels.json";
+import githubCreateComment from "../../catalog/events/github/create_comment.json";
+import githubFindBranch from "../../catalog/events/github/find_branch.json";
+import githubFindOrg from "../../catalog/events/github/find_org.json";
+import githubFindRepo from "../../catalog/events/github/find_repo.json";
+import githubFindUser from "../../catalog/events/github/find_user.json";
+import githubGetFile from "../../catalog/events/github/get_file.json";
+import githubCheckOrgMembership from "../../catalog/events/github/check_org_membership.json";
+import githubCreatePullRequest from "../../catalog/events/github/create_pull_request.json";
+import githubUpdatePullRequest from "../../catalog/events/github/update_pull_request.json";
+import githubRequestReviewers from "../../catalog/events/github/request_reviewers.json";
+import githubFindPullRequest from "../../catalog/events/github/find_pull_request.json";
+import githubFindOrCreatePullRequest from "../../catalog/events/github/find_or_create_pull_request.json";
+import githubGetPrFiles from "../../catalog/events/github/get_pr_files.json";
+import githubGetPrReviews from "../../catalog/events/github/get_pr_reviews.json";
+import githubSubmitPrReview from "../../catalog/events/github/submit_pr_review.json";
+import httpRequest from "../../catalog/events/http/request.json";
+import manualRun from "../../catalog/events/manual/run.json";
+import scheduleDaily from "../../catalog/events/schedule/daily.json";
+import scheduleEvery from "../../catalog/events/schedule/every.json";
+import scheduleHourly from "../../catalog/events/schedule/hourly.json";
+import scheduleMonthly from "../../catalog/events/schedule/monthly.json";
+import scheduleWeekly from "../../catalog/events/schedule/weekly.json";
+import transformMap from "../../catalog/events/transform/map.json";
 import localAi from "../../crates/ieum-local/defs/local.ai.json";
 import fileMove from "../../crates/ieum-local/defs/local.file_move.json";
 import fileRename from "../../crates/ieum-local/defs/local.file_rename.json";
 import fileTrash from "../../crates/ieum-local/defs/local.file_trash.json";
 import folderNewFile from "../../crates/ieum-local/defs/local.folder_new_file.json";
+import githubInputs from "../../crates/ieum-local/github_inputs.json";
 import type { Workflow, WfNode } from "../api";
 
 export interface Field {
@@ -18,27 +72,98 @@ export interface Field {
   description?: string;
   choices?: { id: string; name: string }[];
   children?: Field[];
+  /** 카탈로그 목록 공급원(예: "github.repos") — 그 목록에서 고르는 칸. */
+  optionsSource?: string;
+  /** 목록을 부를 때 넘길 같은 노드의 칸 key들. */
+  optionsInputs?: string[];
 }
 
 export interface NodeDef {
   event: string;
-  node_type: "TRIGGER" | "AI" | "ACTION" | "CONDITION";
+  node_type: "TRIGGER" | "AI" | "ACTION" | "CONDITION" | "TRANSFORM" | "HTTP";
   inputFields: Field[];
   outputFields?: { key: string }[];
+  /** 출력 칸을 설정에서 읽는 노드 — `config.mappings`면 그 키들. */
+  outputsFrom?: string;
+}
+
+/** 입력 표 칸 + 카탈로그 칸 합치기 — 엔진(`catalog.rs`)과 같은 순서: `{key, type:"string"} ← 표(desktop 뺀 것) ← fields[key] ← desktop`. */
+export function mergeGithubFields(rows: (Partial<Field> & { desktop?: Partial<Field> })[], fields: Record<string, Partial<Field>>): Field[] {
+  return rows.map(({ desktop, ...row }) => ({ key: row.key, type: "string", ...row, ...fields[row.key!], ...desktop }) as Field);
+}
+
+/** 카탈로그 github 정의에 입력 표(`github_inputs.json`)를 합친다. */
+function githubDef(event: string, d: { fields?: Record<string, Partial<Field>>; inputFields?: Field[] }) {
+  const table = (githubInputs as Record<string, (Partial<Field> & { desktop?: Partial<Field> })[]>)[event];
+  const fields = d.fields ?? Object.fromEntries((d.inputFields ?? []).map((f) => [f.key, f]));
+  return { ...d, inputFields: mergeGithubFields(table, fields) };
 }
 
 const raw: [string, unknown][] = [
   ["local.folder_new_file", folderNewFile],
+  ["schedule.hourly", scheduleHourly],
+  ["schedule.daily", scheduleDaily],
+  ["schedule.weekly", scheduleWeekly],
+  ["schedule.monthly", scheduleMonthly],
+  ["schedule.every", scheduleEvery],
+  ["manual.run", manualRun],
+  ["github.new_issue", githubDef("github.new_issue", githubNewIssue)],
+  ["github.new_pull_request", githubDef("github.new_pull_request", githubNewPullRequest)],
   ["local.ai", localAi],
   ["local.file_move", fileMove],
   ["local.file_rename", fileRename],
   ["local.file_trash", fileTrash],
   ["branch.if", branchIf],
+  ["transform.map", transformMap],
+  ["formatter.date_add", dateAdd],
+  ["formatter.date_compare", dateCompare],
+  ["formatter.date_format", dateFormat],
+  ["formatter.list_pick", listPick],
+  ["formatter.list_to_text", listToText],
+  ["formatter.lookup_table", lookupTable],
+  ["formatter.number_currency", numberCurrency],
+  ["formatter.number_format", numberFormat],
+  ["formatter.number_math", numberMath],
+  ["formatter.number_phone", numberPhone],
+  ["formatter.text_case", textCase],
+  ["formatter.text_default", textDefault],
+  ["formatter.text_extract", textExtract],
+  ["formatter.text_extract_pattern", textExtractPattern],
+  ["formatter.text_length", textLength],
+  ["formatter.text_markdown_to_html", textMarkdownToHtml],
+  ["formatter.text_replace", textReplace],
+  ["formatter.text_split", textSplit],
+  ["formatter.text_strip_html", textStripHtml],
+  ["formatter.text_trim", textTrim],
+  ["formatter.text_truncate", textTruncate],
+  ["formatter.text_url_encode", textUrlEncode],
+  ["http.request", httpRequest],
+  ["github.create_issue", githubDef("github.create_issue", githubCreateIssue)],
+  ["github.update_issue", githubDef("github.update_issue", githubUpdateIssue)],
+  ["github.find_issue", githubDef("github.find_issue", githubFindIssue)],
+  ["github.find_or_create_issue", githubDef("github.find_or_create_issue", githubFindOrCreateIssue)],
+  ["github.list_issues", githubDef("github.list_issues", githubListIssues)],
+  ["github.add_labels", githubDef("github.add_labels", githubAddLabels)],
+  ["github.create_comment", githubDef("github.create_comment", githubCreateComment)],
+  ["github.find_branch", githubDef("github.find_branch", githubFindBranch)],
+  ["github.find_org", githubDef("github.find_org", githubFindOrg)],
+  ["github.find_repo", githubDef("github.find_repo", githubFindRepo)],
+  ["github.find_user", githubDef("github.find_user", githubFindUser)],
+  ["github.get_file", githubDef("github.get_file", githubGetFile)],
+  ["github.check_org_membership", githubDef("github.check_org_membership", githubCheckOrgMembership)],
+  ["github.create_pull_request", githubDef("github.create_pull_request", githubCreatePullRequest)],
+  ["github.update_pull_request", githubDef("github.update_pull_request", githubUpdatePullRequest)],
+  ["github.request_reviewers", githubDef("github.request_reviewers", githubRequestReviewers)],
+  ["github.find_pull_request", githubDef("github.find_pull_request", githubFindPullRequest)],
+  ["github.find_or_create_pull_request", githubDef("github.find_or_create_pull_request", githubFindOrCreatePullRequest)],
+  ["github.get_pr_files", githubDef("github.get_pr_files", githubGetPrFiles)],
+  ["github.get_pr_reviews", githubDef("github.get_pr_reviews", githubGetPrReviews)],
+  ["github.submit_pr_review", githubDef("github.submit_pr_review", githubSubmitPrReview)],
 ];
 
-/** 팔레트 순서 그대로. */
+/** 팔레트 순서 그대로. 입력 칸 없는 정의(`manual.run`)는 빈 목록. */
 export const DEFS: Record<string, NodeDef> = Object.fromEntries(
-  raw.map(([event, d]) => [event, { ...(d as Omit<NodeDef, "event">), event }]),
+  raw.map(([event, d]) => [event, { ...(d as Omit<NodeDef, "event">), inputFields: (d as Partial<NodeDef>).inputFields ?? [], event }]),
 );
 export const PALETTE = raw.map(([e]) => e);
 
@@ -60,6 +185,8 @@ export function defaultValue(f: Field): unknown {
   if (f.default !== undefined) return f.default;
   if (f.list) return [];
   if (f.type === "boolean") return false;
+  if (f.type === "dict") return {};
+  if (f.type === "integer") return undefined;
   return "";
 }
 
@@ -110,6 +237,10 @@ export function outputKeys(node: WfNode): string[] {
     const of = node.config.outputFields;
     const keys = Array.isArray(of) ? of.map((f) => f?.key).filter((k): k is string => typeof k === "string" && !!k) : [];
     return keys.length ? keys : ["output"];
+  }
+  if (DEFS[node.event]?.outputsFrom === "config.mappings") {
+    const m = node.config.mappings;
+    return m && typeof m === "object" && !Array.isArray(m) ? Object.keys(m) : [];
   }
   return DEFS[node.event]?.outputFields?.map((f) => f.key) ?? [];
 }

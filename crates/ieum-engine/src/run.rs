@@ -27,6 +27,8 @@ pub struct NodeCtx<'a> {
     pub node: &'a Node,
     /// 참조식을 치환한 사본.
     pub config: Map<String, Value>,
+    /// 치환 전 상류 출력 — `transform.map`이 원본 설정을 직접 치환할 때 쓴다.
+    pub outputs: &'a Outputs,
     pub events: &'a EventSink,
     pub cancel: &'a CancellationToken,
 }
@@ -76,6 +78,9 @@ pub struct NodeRecord {
     /// 실패한 노드의 `NodeError.code`. 옛 기록에는 없다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
+    /// 저장한 기록에서 출력 일부(HTTP 응답 본문)를 줄였다. 실행 중에는 늘 거짓, 옛 기록에는 없다.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub output_clipped: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +166,45 @@ fn has_cycle(
     processed < indeg.len()
 }
 
+/// 노드 하나 실행 — config를 `outputs`로 치환하고 러너를 돌린다. 패닉은 내부 오류로 바꾼다.
+/// 전체 실행과 노드 테스트(앞 노드 샘플을 `outputs`로 심는다)가 함께 쓴다. TRIGGER는 호출자가 다룬다.
+pub async fn run_node(
+    node: &Node,
+    runners: &Runners,
+    outputs: &Outputs,
+    events: &EventSink,
+    cancel: &CancellationToken,
+) -> (Result<Map<String, Value>, NodeError>, Option<Value>) {
+    let Some(runner) = runners.get(&node.event) else {
+        let e = NodeError {
+            message: format!("실행할 수 없는 노드 종류예요: {}", node.event),
+            code: None,
+        };
+        return (Err(e), None);
+    };
+    let config = node
+        .config
+        .iter()
+        .map(|(k, v)| (k.clone(), render_deep(v, outputs)))
+        .collect();
+    let ctx = NodeCtx {
+        node,
+        config,
+        outputs,
+        events,
+        cancel,
+    };
+    catch_panic(runner.run_metered(ctx))
+        .await
+        .unwrap_or_else(|| {
+            let e = NodeError {
+                message: "노드 실행 중 내부 오류가 났습니다.".into(),
+                code: None,
+            };
+            (Err(e), None)
+        })
+}
+
 pub async fn run_workflow(
     wf: &Workflow,
     catalog: &Catalog,
@@ -186,6 +230,7 @@ pub async fn run_workflow(
                 error: None,
                 usage: None,
                 error_code: None,
+                output_clipped: false,
             };
             (n.id.clone(), rec)
         })
@@ -262,26 +307,7 @@ pub async fn run_workflow(
         let (result, usage) = if is_type(node, "TRIGGER") {
             (Ok(trigger_output.clone()), None)
         } else {
-            let config = node
-                .config
-                .iter()
-                .map(|(k, v)| (k.clone(), render_deep(v, &outputs)))
-                .collect();
-            let ctx = NodeCtx {
-                node,
-                config,
-                events: &events,
-                cancel: &cancel,
-            };
-            catch_panic(runners[&node.event].run_metered(ctx))
-                .await
-                .unwrap_or_else(|| {
-                    let e = NodeError {
-                        message: "노드 실행 중 내부 오류가 났습니다.".into(),
-                        code: None,
-                    };
-                    (Err(e), None)
-                })
+            run_node(node, runners, &outputs, &events, &cancel).await
         };
         let rec = records.get_mut(&node.id).unwrap();
         rec.usage = usage;
@@ -289,10 +315,11 @@ pub async fn run_workflow(
             Err(e) => {
                 rec.status = NodeStatus::Failed;
                 rec.error = Some(e.message.clone());
-                rec.error_code = e.code;
+                rec.error_code = e.code.clone();
                 send(ExecEvent::NodeFailed {
                     node_id: node.id.clone(),
                     message: e.message,
+                    code: e.code,
                 });
                 status = if cancel.is_cancelled() {
                     RunStatus::Cancelled

@@ -42,6 +42,7 @@ export function useSettingsUpdate() {
 
 const BASIC = () => [t("settings.language"), t("settings.lang.system"), t("settings.lang.ko"), t("settings.lang.en")];
 const CONFIRM = () => [t("settings.confirmDeleteWorkflow"), t("settings.confirmDeleteWorkflowDesc"), t("settings.confirmDiscard"), t("settings.confirmDiscardDesc")];
+const EXPERIMENT = () => [t("settings.chatBlueprint"), t("settings.chatBlueprintDesc"), t("settings.chatMetrics"), t("settings.chatMetricsDesc")];
 const appName = (version: string) => `IEUM desktop${version && ` v${version}`}`;
 const ABOUT = (version: string) => [appName(version), t("settings.checkUpdate"), t("settings.updateAuto"), t("settings.help"), t("settings.helpDesc"), t("settings.openHelp")];
 
@@ -51,6 +52,8 @@ export const generalTexts = (version: string) => [
   ...BASIC(),
   t("settings.section.confirm"),
   ...CONFIRM(),
+  t("settings.section.experiment"),
+  ...EXPERIMENT(),
   t("settings.section.about"),
   ...ABOUT(version),
 ];
@@ -109,6 +112,24 @@ export function GeneralPane({ version }: { version: string }) {
             label={t("settings.confirmDiscard")}
             disabled={!settings}
             onChange={(v) => void update({ confirmDiscardUnsaved: v })}
+          />
+        </Row>
+      </Group>
+      <Group title={t("settings.section.experiment")} texts={EXPERIMENT()}>
+        <Row title={t("settings.chatBlueprint")} desc={t("settings.chatBlueprintDesc")}>
+          <Switch
+            on={settings?.chatBlueprint === true}
+            label={t("settings.chatBlueprint")}
+            disabled={!settings}
+            onChange={(v) => void update({ chatBlueprint: v })}
+          />
+        </Row>
+        <Row title={t("settings.chatMetrics")} desc={t("settings.chatMetricsDesc")}>
+          <Switch
+            on={settings?.chatMetrics === true}
+            label={t("settings.chatMetrics")}
+            disabled={!settings}
+            onChange={(v) => void update({ chatMetrics: v })}
           />
         </Row>
       </Group>

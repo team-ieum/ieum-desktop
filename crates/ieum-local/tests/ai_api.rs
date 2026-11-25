@@ -195,6 +195,7 @@ async fn run_with(
         .run(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
+            outputs: &Default::default(),
             events: &tx,
             cancel,
         })

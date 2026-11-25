@@ -28,6 +28,8 @@ fn type_name(t: NodeType) -> &'static str {
         NodeType::Ai => "AI",
         NodeType::Action => "ACTION",
         NodeType::Condition => "CONDITION",
+        NodeType::Transform => "TRANSFORM",
+        NodeType::Http => "HTTP",
     }
 }
 
@@ -114,10 +116,19 @@ pub(super) fn status(doc: &Doc, state: &ChatState, errors: Vec<ValidationError>)
     })
 }
 
+/// cron을 직접 쓰는 트리거 — 편집기 전용(클라우드 계약대로 채팅 빌더 메뉴에 없다).
+const EDITOR_ONLY: &str = "schedule.every";
+
+/// 빌더가 쓸 수 있는 정의. 편집기 전용은 모르는 노드와 같다.
+fn builder_def<'a>(catalog: &'a Catalog, event: &str) -> Option<&'a EventDef> {
+    catalog.get(event).filter(|_| event != EDITOR_ONLY)
+}
+
 pub(super) fn events(catalog: &Catalog) -> Value {
     let list: Vec<Value> = catalog
         .events()
         .into_iter()
+        .filter(|e| e.event != EDITOR_ONLY)
         .map(|e| {
             json!({
                 "event": e.event,
@@ -148,7 +159,7 @@ pub(super) fn add(
     branch: Option<String>,
     ai: Option<AiDefault>,
 ) -> Result<Value, Code> {
-    let def = catalog.get(event).ok_or(Code::EventUnknown)?;
+    let def = builder_def(catalog, event).ok_or(Code::EventUnknown)?;
     // 첫 노드는 트리거뿐이고, 트리거는 하나뿐이다.
     if wf.nodes.is_empty() != (def.node_type == NodeType::Trigger) {
         return Err(Code::TriggerRule);
@@ -266,9 +277,17 @@ pub(super) fn pick_title(catalog: &Catalog, node: &Node, field: &str) -> String 
         .filter(|l| !l.is_empty())
         .or(def.map(|d| d.title.as_str()))
         .unwrap_or(&node.event);
-    let field_title = def
+    format!(
+        "IEUM — '{name}'의 {} 고르기",
+        field_title(catalog, &node.event, field)
+    )
+}
+
+/// 칸 제목(카탈로그 title, 없으면 key) — 노드가 없는 설계서 슬롯 창 제목도 이것을 쓴다.
+pub(super) fn field_title(catalog: &Catalog, event: &str, field: &str) -> String {
+    catalog
+        .get(event)
         .and_then(|d| d.input_fields.iter().find(|f| f.key == field))
-        .and_then(|f| f.title.as_deref())
-        .unwrap_or(field);
-    format!("IEUM — '{name}'의 {field_title} 고르기")
+        .and_then(|f| f.title.clone())
+        .unwrap_or_else(|| field.to_string())
 }

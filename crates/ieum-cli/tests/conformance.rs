@@ -33,8 +33,8 @@ fn all_conformance_cases_pass() {
         .unwrap()
         .filter(|e| e.as_ref().unwrap().path().is_dir())
         .count();
-    // 계획 목록: 실행 9개 + 검증 코드 9개
-    assert!(cases >= 18, "케이스 {cases}개");
+    // 실행 9개 + 검증 코드 10개 + 포맷터·변환 3개
+    assert!(cases >= 22, "케이스 {cases}개");
     let out = ieum(&["conformance", dir.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
     let out = ieum(&["conformance", dir.to_str().unwrap(), "--json"]);

@@ -39,6 +39,8 @@ export interface StoredWorkflow {
 export interface WorkflowEntry extends StoredWorkflow {
   watch: "off" | "watching" | "watch_error";
   watchMessage: string | null;
+  /** 다음 스케줄 차례(Asia/Seoul "YYYY-MM-DDTHH:MM:SS"). 꺼짐·스케줄 아님이면 null. */
+  nextRun?: string | null;
 }
 
 // validate.rs
@@ -58,6 +60,8 @@ export interface NodeRecord {
   error: string | null;
   /** AI에게 보여도 되는 오류 코드(`<CODE>` 또는 `<CODE> <칸 key>`). 옛 기록에는 없다. */
   errorCode?: string | null;
+  /** 응답이 길어 기록에는 앞부분만 남겼다. 옛 기록에는 없다. */
+  outputClipped?: boolean;
 }
 export type RejectReason =
   | { kind: "TOO_LARGE" }
@@ -76,7 +80,7 @@ export type ExecEvent =
   | { kind: "nodeStarted"; nodeId: string }
   | { kind: "nodeChunk"; nodeId: string; text: string }
   | { kind: "nodeSucceeded"; nodeId: string; output: Obj }
-  | { kind: "nodeFailed"; nodeId: string; message: string }
+  | { kind: "nodeFailed"; nodeId: string; message: string; code?: string }
   | { kind: "nodeSkipped"; nodeId: string }
   | { kind: "runFinished"; runId: string; status: RunStatus };
 /** lib.rs가 내보내는 `exec-event` 모양 */
@@ -110,9 +114,11 @@ export interface StoredRun {
   allowedRoots: string[];
   undo: UndoReport | null;
   trigger?: RunTrigger | null;
+  /** 스케줄 실행의 차례(Asia/Seoul "YYYY-MM-DDTHH:MM:SS"). */
+  scheduledFor?: string | null;
 }
-/** 폴더 감시·수동. 옛 기록은 없음. */
-export type RunTrigger = "watch" | "manual" | "test";
+/** 폴더 감시·수동·스케줄·GitHub. 옛 기록은 없음. */
+export type RunTrigger = "watch" | "manual" | "test" | "schedule" | "github";
 export interface RunSummary {
   runId: string;
   workflowId: string;
@@ -141,6 +147,9 @@ export interface Settings {
   confirmDiscardUnsaved?: boolean;
   /** 한도 도달 시 다른 계정 권하기 — 옛 설정·테스트엔 없을 수 있어 `!== false`로 읽는다. */
   notifyAccountSuggest?: boolean;
+  /** 실험 기능 — 옛 설정·테스트엔 없을 수 있어 `=== true`로 읽는다(기본 꺼짐). */
+  chatBlueprint?: boolean;
+  chatMetrics?: boolean;
 }
 /** 기본 계정이 한도에 닿아 권하는 다른 계정(Rust `limit_watch::Suggestion`). */
 export interface Suggestion {
@@ -165,7 +174,13 @@ export type OpenTarget =
   | { kind: "run"; runId: string }
   | { kind: "history" }
   | { kind: "suggest" }
-  | { kind: "workflow"; id: string };
+  | { kind: "workflow"; id: string }
+  | { kind: "aiSettings" };
+/** 키별 월 한도와 이번 달 지출(Rust `KeyLimitsView`) — 키는 `"<source>:<id>"`. spend에는 이번 달 쓴 키만 있다. */
+export interface KeyLimitsView {
+  limits: Record<string, number>;
+  spend: Record<string, number>;
+}
 /** 계정 = 서버 + 이메일. */
 export interface AccountId {
   email: string;
@@ -382,10 +397,33 @@ export interface BuilderReply {
 
 export interface PendingFinish {
   hash: string;
-  folder: string;
-  actions: { nodeId: string; event: string; label: string; target: string | null }[];
+  /** 폴더 트리거일 때만. */
+  folder: string | null;
+  /** 끝내는 버튼 — `save`(수동 실행 워크플로우)면 [저장]. 옛 확인 대기에는 없다(= enable). */
+  button?: "enable" | "save";
+  /** `http`는 HTTP 줄만 — 이 칸이 생기기 전에 저장된 확인 대기에는 없다. */
+  actions: { nodeId: string; event: string; label: string; target: string | null; http?: HttpLine }[];
   /** AI 노드마다 한 줄. 이 칸이 생기기 전에 저장된 확인 대기에는 없다. */
   ai?: { nodeId: string; label: string; provider: string; sendContent: boolean }[];
+}
+
+/** HTTP 테스트 확인 카드의 한 줄 — `url`은 참조식 그대로(치환한 값은 오지 않는다). `method`는 대문자. */
+export interface HttpLine {
+  nodeId: string;
+  label: string;
+  method: string;
+  url: string;
+  /** 머리말 이름(이름순). 값은 오지 않는다. */
+  headerKeys: string[];
+  /** url·headers·body의 참조식이 가리키는 앞 노드 출력 — 값은 오지 않는다. */
+  sends: { nodeId: string; nodeLabel: string; output: string }[];
+  hasBody: boolean;
+  /** GitHub 쓰기 노드 줄 — 있으면 method·url 대신 노드 제목·저장소·요약을 보인다. */
+  github?: { event: string; repo: string; summary: string };
+}
+export interface HttpTestConfirm {
+  id: string;
+  lines: HttpLine[];
 }
 
 /** 앱 안 터미널에 띄울 수 있는 CLI. */
@@ -418,15 +456,17 @@ export interface ChatFile {
     baseline: Record<string, string> | null;
     tests: Record<string, { hash: string; status: "success" | "failed" | "skipped" }>;
     pendingFinish: PendingFinish | null;
+    blueprint?: Blueprint | null;
   };
   usage: { at: string; usage: unknown }[];
 }
 
 /** 채팅 턴 응답에만 실리는 카드. 테스트 값은 없다 — 화면이 `runId`로 실행 기록을 읽는다. */
 export type ChatCard =
-  | { kind: "test"; nodeId: string; runId: string; status: string }
+  | { kind: "test"; nodeId: string; runId: string; status: string; httpSent?: boolean }
   | { kind: "pickFolder"; nodeId: string; field: string }
-  | { kind: "finish" };
+  | { kind: "finish" }
+  | { kind: "blueprint"; version: number };
 export interface ChatTurn {
   say: string;
   cards: ChatCard[];
@@ -439,6 +479,78 @@ export interface ChatAi {
   effort: string | null;
 }
 export type ChatStage = { id: string; stage: "designing" | "testing" };
+export interface BlueprintSlot {
+  event: string;
+  field: string;
+  path: string | null;
+  pickedVersion: number | null;
+  boundNode: string | null;
+}
+export interface Blueprint {
+  status: "active" | "submitted" | "cancelled";
+  version: number;
+  components: Record<string, unknown>[];
+  dataModel: Record<string, unknown>;
+  slots: Record<string, BlueprintSlot>;
+  buildPending: boolean;
+  buildAttempts: number;
+}
+
+/** GitHub 칸 목록 한 항목(소유자·저장소·브랜치·마일스톤). */
+export interface OptionItem {
+  id: string;
+  name: string;
+  /** "내 계정"·"조직"·"공개"·"비공개" */
+  hint: string | null;
+  updatedAt: string | null;
+}
+export interface OptionList {
+  items: OptionItem[];
+  /** 300개를 다 채워 더 있을 수 있다. */
+  truncated: boolean;
+}
+/** 목록 조회 실패 — 그대로 던져진다. */
+export interface OptionError {
+  code?: string | null;
+  message: string;
+}
+
+/** 설정 > 연동의 GitHub 줄 상태(Rust `GithubStatus`). */
+export type GithubStatus =
+  | { kind: "notInstalled" }
+  | { kind: "outdated"; version: string }
+  /** relogin = [연결]이 gh 로그인을 새로 돌린다(활성 계정 토큰이 죽음) — 누르기 전에 경고. */
+  | { kind: "notConnected"; relogin: boolean }
+  | { kind: "needsLogin"; recorded: string }
+  | { kind: "accountChanged"; recorded: string; current: string }
+  | { kind: "connected"; login: string; envToken: boolean }
+  | { kind: "unreachable"; error: string };
+export type GithubJob = { kind: "login" | "install"; code: string | null };
+
+/** 노드별 마지막 테스트 결과 — 러스트 `store::Sample`. */
+export interface Sample {
+  status: "succeeded" | "failed";
+  output: Obj | null;
+  error: string | null;
+  errorCode: string | null;
+  /** RFC3339. */
+  testedAt: string;
+  /** 테스트한 때의 `{event, config}`. */
+  node: { event: string; config: Obj };
+}
+/** 노드 패널 테스트 결과 — 러스트 `supervisor::NodeTestResult`. */
+export interface NodeTestResult {
+  status: "succeeded" | "failed" | "invalid" | "missing";
+  output: Obj | null;
+  error: string | null;
+  errorCode: string | null;
+  testedAt: string | null;
+  /** `missing`일 때 성공 샘플이 없는 앞 노드 id. */
+  missing: string[];
+  undone: boolean;
+  undoFailed: number;
+  runId: string | null;
+}
 
 export const api = {
   listWorkflows: () => invoke<WorkflowEntry[]>("list_workflows"),
@@ -446,7 +558,12 @@ export const api = {
   deleteWorkflow: (id: string) => invoke<void>("delete_workflow", { id }),
   validateWorkflow: (wf: Workflow) => invoke<ValidationError[]>("validate_workflow", { wf }),
   /** 실행이 끝나면 run id를 돌려준다. */
-  runNow: (id: string, filePath: string) => invoke<string>("run_now", { id, filePath }),
+  /** 폴더 트리거는 `filePath` 필수, 스케줄·수동은 없이. */
+  runNow: (id: string, filePath?: string) => invoke<string>("run_now", { id, filePath: filePath ?? null }),
+  /** 편집본의 노드 하나만 돌린다. 앞 노드 값은 앞 노드의 샘플. 폴더 트리거 이후 노드는 `filePath` 선택. */
+  testNode: (id: string, workflow: Workflow, nodeId: string, filePath?: string) =>
+    invoke<NodeTestResult>("test_node", { id, workflow, nodeId, filePath: filePath ?? null }),
+  getSamples: (id: string) => invoke<Record<string, Sample>>("get_samples", { id }),
   listRuns: (workflowId?: string) => invoke<RunSummary[]>("list_runs", { workflowId: workflowId ?? null }),
   getRun: (runId: string) => invoke<StoredRun>("get_run", { runId }),
   undoRun: (runId: string) => invoke<UndoReport>("undo_run", { runId }),
@@ -459,6 +576,9 @@ export const api = {
   renameCredential: (kind: CredentialKind, id: string, label: string) => invoke<void>("rename_credential", { kind, id, label }),
   setDefaultCredential: (kind: CredentialKind, id: string) => invoke<void>("set_default_credential", { kind, id }),
   deleteCredential: (kind: CredentialKind, id: string) => invoke<void>("delete_credential", { kind, id }),
+  keyLimits: () => invoke<KeyLimitsView>("key_limits"),
+  /** `usd`가 null이면 한도를 푼다. */
+  setKeyLimit: (source: ApiProvider, id: string, usd: number | null) => invoke<void>("set_key_limit", { source, id, usd }),
   webLogin: (email: string, password: string) => invoke<WebAccount>("web_login", { email, password }),
   webLogout: () => invoke<void>("web_logout"),
   webAccount: () => invoke<WebAccount | null>("web_account"),
@@ -493,6 +613,24 @@ export const api = {
   openSystemSettings: (pane: SystemSettingsPane) => invoke<void>("open_system_settings", { pane }),
   /** 공급자 키 발급 화면을 기본 브라우저로 — 주소는 Rust의 고정값. */
   openProviderConsole: (provider: ApiProvider) => invoke<void>("open_provider_console", { provider }),
+  githubStatus: () => invoke<GithubStatus>("github_status"),
+  /** 이미 로그인돼 있으면 바로 기록, 아니면 device 로그인(코드는 github-login-code 이벤트)이 끝날 때까지 기다린다. */
+  githubConnect: () => invoke<GithubStatus>("github_connect"),
+  /** IEUM 기록만 지운다 — gh 로그인은 그대로. */
+  githubDisconnect: () => invoke<GithubStatus>("github_disconnect"),
+  githubInstall: () => invoke<GithubStatus>("github_install"),
+  githubCancel: () => invoke<void>("github_cancel"),
+  githubOpenDevice: () => invoke<void>("github_open_device"),
+  /** source 예: "github.repos". 실패는 {code?, message}를 그대로 던진다. */
+  githubOptions: (source: string, inputs: Record<string, string>) =>
+    invoke<OptionList>("github_options", { source, inputs }),
+  /** 진행 중인 로그인·설치(없으면 null) — 다시 들어온 화면이 [취소]·코드 카드를 보이게. */
+  githubJob: () => invoke<GithubJob | null>("github_job"),
+  onGithubLoginCode: (cb: (p: { code: string }) => void): Promise<UnlistenFn> =>
+    listen<{ code: string }>("github-login-code", (e) => cb(e.payload)),
+  /** 로그인·설치 공용 출력 줄. */
+  onGithubProgress: (cb: (p: { line: string }) => void): Promise<UnlistenFn> =>
+    listen<{ line: string }>("github-progress", (e) => cb(e.payload)),
   /** 앞 여부·알림 토글과 무관하게 "알림이 켜졌어요". */
   sendTestNotification: () => invoke<void>("send_test_notification"),
   checkUpdateNow: () => invoke<UpdateCheck>("check_update_now"),
@@ -552,8 +690,13 @@ export const api = {
     listen<{ id: string; updatedAt: string }>("workflow-changed", (e) => cb(e.payload)),
   onFinishPending: (cb: (p: { id: string; name: string }) => void): Promise<UnlistenFn> =>
     listen<{ id: string; name: string }>("finish-pending", (e) => cb(e.payload)),
+  /** 빌더 테스트가 HTTP 요청을 보내기 전 사람 확인을 기다린다. */
+  onHttpTestConfirm: (cb: (p: HttpTestConfirm) => void): Promise<UnlistenFn> =>
+    listen<HttpTestConfirm>("http-test-confirm", (e) => cb(e.payload)),
+  /** [보내기]/[테스트 없이 넘어가기]. 기다리는 대기가 없으면(시간 초과·덮어씀) false. */
+  answerHttpConfirm: (workflowId: string, send: boolean) => invoke<boolean>("answer_http_confirm", { workflowId, send }),
   // ── 채팅 패널 ──
-  chatSend: (workflowId: string, text: string, ai: ChatAi) =>
+  chatSend: (workflowId: string, text: string, ai: ChatAi, blueprint?: { data: Record<string, unknown>; touched: boolean }) =>
     invoke<ChatTurn>("chat_send", {
       workflowId,
       text,
@@ -561,7 +704,13 @@ export const api = {
       credential: ai.credential,
       model: ai.model,
       effort: ai.effort,
+      blueprintData: blueprint?.data ?? null,
+      blueprintTouched: blueprint?.touched ?? null,
     }),
+  chatSubmitBlueprint: (workflowId: string, version: number, data: Record<string, unknown>) =>
+    invoke<BuilderReply>("chat_submit_blueprint", { workflowId, version, data }),
+  chatPickSlot: (workflowId: string, slot: string, version: number) =>
+    invoke<BuilderReply>("chat_pick_slot", { workflowId, slot, version }),
   /** 폴더 고르기 카드의 버튼 — 시스템 폴더 창을 연다. */
   chatPickFolder: (workflowId: string, nodeId: string, field: string) =>
     invoke<BuilderReply>("chat_pick_folder", { workflowId, nodeId, field }),

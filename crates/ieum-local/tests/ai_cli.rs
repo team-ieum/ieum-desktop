@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use ieum_engine::{ExecEvent, Node, NodeCtx, NodeError, NodeRunner};
 use ieum_local::AllowedRoots;
 use ieum_local::ai::{
-    AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn, CliKind, CliProvider, Skip,
-    file_text, parse_stream, read_file_text,
+    AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn, CliKind, CliProvider, KeyGate,
+    Skip, file_text, parse_stream, read_file_text,
 };
 use serde_json::{Map, Value, json};
 use tokio_util::sync::CancellationToken;
@@ -133,6 +133,7 @@ async fn run_with(
         .run(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
+            outputs: &Default::default(),
             events: &tx,
             cancel,
         })
@@ -1191,6 +1192,7 @@ async fn run_with_usage(
         .run_metered(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
+            outputs: &Default::default(),
             events: &tx,
             cancel: &CancellationToken::new(),
         })
@@ -1243,6 +1245,32 @@ async fn claude_node_runs_with_account_config_dir() {
         let out = run(&runner, cfg).await.unwrap();
         assert_eq!(out["output"], "unset");
     }
+}
+
+/// 항상 막고 부른 횟수를 센다.
+struct Wall(AtomicUsize);
+
+#[async_trait]
+impl KeyGate for Wall {
+    async fn check(&self, _source: &str, _credential: &str) -> Result<(), String> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Err("막힘".into())
+    }
+}
+
+#[tokio::test]
+async fn cli_provider_skips_gate() {
+    let fake = Fake::new(vec!["파랑"]);
+    let wall = Arc::new(Wall(AtomicUsize::new(0)));
+    let runner = AiRunner::empty()
+        .with_provider("cli:claude", fake.clone())
+        .with_resolver(Arc::new(DirResolver))
+        .with_gate(wall.clone());
+    let out = run(&runner, json!({"provider": "cli:claude", "prompt": "p"}))
+        .await
+        .unwrap();
+    assert_eq!(out["output"], "파랑");
+    assert_eq!(wall.0.load(Ordering::SeqCst), 0);
 }
 
 /// 이 PC의 claude 구독으로 한 번 실제 호출한다: `cargo test -p ieum-local --test ai_cli -- --ignored`

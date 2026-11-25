@@ -1,8 +1,8 @@
 import { Boxes, FolderOpen, History, Rocket, Webhook, Zap, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
-import type { WebWorkflowSummary, WorkflowEntry } from "../api";
-import { t } from "../i18n";
-import { ago } from "../shell/Sidebar";
+import type { WebWorkflowSummary, WfNode, WorkflowEntry } from "../api";
+import { choiceLabel, t } from "../i18n";
+import { ago, localOn } from "../shell/Sidebar";
 import { MoreMenu, type MoreItem } from "./MoreMenu";
 import { ServiceIcons } from "./ServiceIcons";
 
@@ -16,8 +16,10 @@ export type CardData = {
   services: string[];
   nodeCount: number | null;
   trigger: Trigger | null;
-  /** 트리거 옆 덧붙임(감시 폴더). */
+  /** 트리거 옆 덧붙임(감시 폴더·스케줄 요약). */
   triggerDetail?: string;
+  /** 다음 스케줄 차례("다음 11/17 09:00"). */
+  nextRun?: string;
   /** 상태 알약에 마우스를 올리면 보이는 설명(감시 오류). */
   statusHint?: string;
   updatedAt: string | null;
@@ -25,20 +27,54 @@ export type CardData = {
 
 const FOLDER_TRIGGER = "local.folder_new_file";
 
+/** 스케줄 한 줄 요약 — 시각·요일·날은 카탈로그 선택지 이름. */
+function scheduleSummary(n: WfNode): string {
+  const c = n.config;
+  const pick = (field: string) => choiceLabel(n.event, field, String(c[field] ?? "")) ?? String(c[field] ?? "");
+  const weekdays = c.weekends === false || c.weekends === "false";
+  switch (n.event) {
+    case "schedule.hourly":
+      return t(weekdays ? "list.schedule.hourlyWeekdays" : "list.schedule.hourly");
+    case "schedule.daily":
+      return t(weekdays ? "list.schedule.dailyWeekdays" : "list.schedule.daily").replace("{h}", pick("hour"));
+    case "schedule.weekly":
+      return t("list.schedule.weekly").replace("{w}", pick("weekday")).replace("{h}", pick("hour"));
+    case "schedule.monthly":
+      return t("list.schedule.monthly").replace("{d}", pick("day")).replace("{h}", pick("hour"));
+    default:
+      return t("list.schedule.every").replace("{cron}", String(c.cron ?? ""));
+  }
+}
+
+/** "2026-11-17T09:00:00" → "11/17 09:00". */
+const nextLabel = (at: string) => t("list.nextRun").replace("{t}", `${+at.slice(5, 7)}/${+at.slice(8, 10)} ${at.slice(11, 16)}`);
+
 export function localCard(w: WorkflowEntry): CardData {
   const nodes = w.workflow.nodes;
   const watch = nodes.find((n) => n.event === FOLDER_TRIGGER);
-  // 서비스 = 노드 event 앱(local.ai만 AI로 따로). 분기 같은 흐름 노드는 서비스가 아니다.
-  const services = [...new Set(nodes.map((n) => (n.event === "local.ai" ? "ai" : n.event.split(".")[0])))].filter((s) => s === "local" || s === "ai");
+  const schedule = nodes.find((n) => n.event.startsWith("schedule."));
+  const github = nodes.find((n) => n.event.startsWith("github.new_"));
+  const repo = [github?.config.owner, github?.config.repo].every((v) => typeof v === "string" && v) ? `${github?.config.owner}/${github?.config.repo}` : undefined;
+  // 서비스 = 노드 event 앱(local.ai만 AI로 따로, GitHub는 웹과 같은 이름). 분기 같은 흐름 노드는 서비스가 아니다.
+  const services = [...new Set(nodes.map((n) => (n.event === "local.ai" ? "ai" : n.event.startsWith("github.") ? "GITHUB" : n.event.split(".")[0])))].filter(
+    (s) => s === "local" || s === "ai" || s === "GITHUB",
+  );
   return {
     id: w.id,
     name: w.name,
     source: "local",
-    status: w.enabled ? (w.watch === "watch_error" ? "error" : "active") : "paused",
+    status: localOn(w) ? (w.watch === "watch_error" ? "error" : "active") : "paused",
     services,
     nodeCount: nodes.length,
-    trigger: watch ? "watch" : "manual",
-    triggerDetail: typeof watch?.config.folder === "string" && watch.config.folder ? watch.config.folder : undefined,
+    trigger: watch ? "watch" : schedule ? "schedule" : github ? "event" : "manual",
+    triggerDetail: schedule
+      ? scheduleSummary(schedule)
+      : github
+        ? repo
+        : typeof watch?.config.folder === "string" && watch.config.folder
+        ? watch.config.folder
+        : undefined,
+    nextRun: w.nextRun ? nextLabel(w.nextRun) : undefined,
     statusHint: w.watchMessage ?? undefined,
     updatedAt: w.updatedAt,
   };
@@ -107,6 +143,7 @@ export function WorkflowCard({ data, onOpen, menu, children }: { data: CardData;
               )}
             </div>
           )}
+          {data.nextRun && <p className="-mt-2 pl-1 typo-caption1_regular text-neutral-400">{data.nextRun}</p>}
           <div className="flex flex-wrap items-center gap-2 border-t border-neutral-200 pt-3">
             {data.updatedAt && <span className="typo-caption1_regular text-neutral-400">{t("list.edited").replace("{t}", ago(data.updatedAt))}</span>}
             <span className="flex-1" />

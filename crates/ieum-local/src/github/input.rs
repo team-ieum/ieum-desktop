@@ -1,0 +1,224 @@
+//! 칸 값 해석 — agent `tools/github.py`의 도우미와 1:1. 참조식이 숫자·문자열 어느 쪽을 줘도 같은 뜻이 되게.
+
+use ieum_engine::NodeError;
+use serde_json::{Map, Value};
+
+use super::api::input_error;
+
+/// URL 경로 조각(owner·repo). `/`·`..`·공백이 들어가면 다른 GitHub API 경로로 샌다.
+pub fn is_path_name(v: &Value) -> bool {
+    v.as_str().is_some_and(|s| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+            && !s.trim_matches('.').is_empty()
+    })
+}
+
+/// 이슈·마일스톤 번호. 사람이 친 `#12`·앞뒤 공백, 참조식이 준 정수를 받는다. bool·1 미만은 None.
+pub(crate) fn issue_no(v: &Value) -> Option<u64> {
+    let n = match v {
+        Value::Number(n) => n.as_u64()?,
+        Value::String(s) => {
+            let s = s.trim();
+            let s = s.strip_prefix('#').unwrap_or(s).trim();
+            if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            s.parse().ok()?
+        }
+        _ => return None,
+    };
+    (n >= 1).then_some(n)
+}
+
+/// 정수 또는 숫자 문자열(참조식 결과) → 정수. bool·그 밖은 None.
+pub(crate) fn to_int(v: &Value) -> Option<i64> {
+    match v {
+        Value::Number(n) => n.as_i64(),
+        Value::String(s) => {
+            let s = s.trim();
+            if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            s.parse().ok()
+        }
+        _ => None,
+    }
+}
+
+/// 쉼표 구분 → 순서 유지 중복 제거 목록.
+pub(crate) fn csv(v: &Value) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in v.as_str().unwrap_or("").split(',').map(str::trim) {
+        if !p.is_empty() && !out.iter().any(|o| o == p) {
+            out.push(p.to_string());
+        }
+    }
+    out
+}
+
+pub(crate) fn text(v: &Value) -> String {
+    v.as_str().map(|s| s.trim().to_string()).unwrap_or_default()
+}
+
+/// 제목 비교용 — 앞뒤·연속 공백을 하나로, 대소문자 무시.
+pub(crate) fn same_title(a: &str, b: &str) -> bool {
+    let norm = |s: &str| {
+        s.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    norm(a) == norm(b)
+}
+
+/// GitHub login(사용자·조직).
+pub(crate) fn is_login(v: &Value) -> bool {
+    v.as_str().is_some_and(|s| {
+        (1..=39).contains(&s.len())
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+    })
+}
+
+/// 비어 있지 않은 라벨·담당자·마일스톤만. 라벨·담당자는 보내면 통째 교체라 빈 값은 넣지 않는다.
+pub(crate) fn issue_fields(
+    labels: &Value,
+    assignees: &Value,
+    milestone: &Value,
+) -> Result<Map<String, Value>, NodeError> {
+    let mut f = Map::new();
+    let names = csv(labels);
+    if !names.is_empty() {
+        f.insert("labels".into(), names.into());
+    }
+    let logins = csv(assignees);
+    if !logins.is_empty() {
+        f.insert("assignees".into(), logins.into());
+    }
+    // agent `str(milestone).strip()`처럼 참조식이 준 숫자도 빈 값이 아니다.
+    let empty = match milestone {
+        Value::Null => true,
+        Value::String(s) => s.trim().is_empty(),
+        _ => false,
+    };
+    if !empty {
+        let n =
+            issue_no(milestone).ok_or_else(|| input_error("milestone은 양의 정수여야 합니다."))?;
+        f.insert("milestone".into(), n.into());
+    }
+    Ok(f)
+}
+
+/// 보냈는데 응답에 없는 라벨·담당자·마일스톤(권한 없음·없는 이름은 GitHub가 조용히 버린다).
+pub(crate) fn dropped(sent: &Map<String, Value>, issue: &Value) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for (key, name, what) in [("labels", "name", "라벨"), ("assignees", "login", "담당자")] {
+        let got: Vec<String> = issue[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|x| x[name].as_str().unwrap_or("").to_lowercase())
+            .collect();
+        let missing: Vec<&str> = sent
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|n| !got.contains(&n.to_lowercase()))
+            .collect();
+        if !missing.is_empty() {
+            warnings.push(format!("반영되지 않은 {what}: {}", missing.join(", ")));
+        }
+    }
+    if let Some(m) = sent.get("milestone")
+        && issue["milestone"]["number"] != *m
+    {
+        warnings.push(format!("반영되지 않은 마일스톤: {m}"));
+    }
+    warnings
+}
+
+/// 경로 조각 하나를 퍼센트 인코딩 — 비예약 문자(`A-Za-z0-9-._~`)만 그대로 둔다.
+pub(crate) fn encode_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// 브랜치·파일 경로 → URL 경로 조각. `/`는 두고 조각마다 인코딩해 다른 API 경로로 새지 않게 한다.
+pub(crate) fn ref_path(v: &Value) -> Option<String> {
+    let s = v.as_str()?;
+    // 제어 문자는 트림 전에 본다 — 앞뒤 `\n`도 거부.
+    if s.chars()
+        .any(|c| c.is_control() && c.is_ascii() || c == '\\')
+    {
+        return None;
+    }
+    let s = s.trim();
+    if s.is_empty() || s.chars().count() > 1024 {
+        return None;
+    }
+    let segs: Vec<&str> = s.split('/').collect();
+    if segs.iter().any(|p| matches!(*p, "" | "." | "..")) {
+        return None;
+    }
+    Some(
+        segs.into_iter()
+            .map(encode_segment)
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+/// 파일 ref(브랜치·태그·SHA). 쿼리로 보내므로 인코딩 전 트림한 원문을 돌려준다. `user:branch`는 받지 않는다.
+pub(crate) fn base_ref(v: &Value) -> Option<String> {
+    let s = v.as_str()?.trim();
+    if s.contains(':') {
+        return None;
+    }
+    ref_path(v)?;
+    Some(s.to_string())
+}
+
+/// PR head/base — `user:branch`(포크) 또는 브랜치. JSON·쿼리로 보내므로 트림한 원문을 돌려준다.
+pub(crate) fn head_ref(v: &Value) -> Option<String> {
+    let s = v.as_str()?.trim();
+    match s.split_once(':') {
+        Some((user, branch)) => {
+            let ok = is_login(&Value::from(user))
+                && branch == branch.trim()
+                && !branch.contains(':')
+                && ref_path(&Value::from(branch)).is_some();
+            ok.then(|| s.to_string())
+        }
+        None => ref_path(&Value::from(s)).map(|_| s.to_string()),
+    }
+}
+
+/// (head, base). head를 먼저 검사한다. base는 `user:branch`를 받지 않는다.
+pub(crate) fn pr_refs(head: &Value, base: &Value) -> Result<(String, String), NodeError> {
+    let head =
+        head_ref(head).ok_or_else(|| input_error("head 브랜치 형식이 올바르지 않습니다."))?;
+    let base = head_ref(base)
+        .filter(|b| !b.contains(':'))
+        .ok_or_else(|| input_error("base 브랜치 형식이 올바르지 않습니다."))?;
+    Ok((head, base))
+}
+
+/// PR 목록 API의 head 필터는 `owner:branch` 형식이어야 한다.
+pub(crate) fn head_query(owner: &str, head: &str) -> String {
+    if head.contains(':') {
+        head.to_string()
+    } else {
+        format!("{owner}:{head}")
+    }
+}

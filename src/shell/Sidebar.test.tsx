@@ -101,7 +101,7 @@ test("recent_mixes_local_and_web_by_time", () => {
   const items = screen.getAllByRole("button", { name: /^(local|web) / });
   expect(items.map((b) => b.textContent?.match(/^(local|web) \w/)?.[0])).toEqual(["local b", "web c", "local a", "web d"]);
   expect(within(items[0]).getByText("내 PC")).toBeTruthy();
-  expect(within(items[1]).getByText("웹 이음")).toBeTruthy();
+  expect(within(items[1]).getByText("이음 클라우드")).toBeTruthy();
 });
 
 test("recent_shows_only_five_with_status_text", () => {
@@ -130,4 +130,10 @@ test("sidebar_brand_mark_is_svg_logo", () => {
   const mark = container.querySelector('[data-logo="ieum"] svg path');
   expect(mark?.getAttribute("d")).toBeTruthy();
   expect(container.querySelector("img")).toBeNull();
+});
+
+test("recent_manual_workflow_is_active_even_when_disabled", () => {
+  const manual = { ...local("m", "2026-11-13T00:00:00Z"), enabled: false, watch: "off", workflow: { nodes: [{ id: "t", event: "manual.run", config: {} }], edges: [] } } as WorkflowEntry;
+  const folder = { ...local("f", "2026-11-12T00:00:00Z"), enabled: false, watch: "off" } as WorkflowEntry;
+  expect(recentItems([manual, folder], []).map((r) => r.dot)).toEqual(["active", "paused"]);
 });

@@ -130,7 +130,7 @@ fn chat_file_shape() {
             "outline": ["새 파일", "옮기기"],
             "baseline": {"t": "h0"},
             "tests": {"t": {"hash": "h0", "status": "success"}},
-            "pendingFinish": {"hash": "w", "folder": "/h/in", "actions": [{"nodeId": "m", "event": "local.file_move", "label": "옮기기", "target": "/h/out"}],
+            "pendingFinish": {"hash": "w", "folder": "/h/in", "button": "enable", "actions": [{"nodeId": "m", "event": "local.file_move", "label": "옮기기", "target": "/h/out"}],
                 "ai": [{"nodeId": "a", "label": "요약", "provider": "cli:claude", "sendContent": true}]}
         },
         "usage": []
@@ -235,5 +235,13 @@ fn ai_model_list_failed_code_is_known() {
     let c: Code = serde_json::from_value(serde_json::json!("AI_MODEL_LIST_FAILED")).unwrap();
     assert_eq!(c, Code::AiModelListFailed);
     assert!(c.message().contains("Antigravity"));
+    assert_eq!(c.exit_code(), 1);
+}
+
+#[test]
+fn ai_key_limit_code_is_known() {
+    let c: Code = serde_json::from_value(serde_json::json!("AI_KEY_LIMIT")).unwrap();
+    assert_eq!(c, Code::AiKeyLimit);
+    assert!(!c.message().is_empty());
     assert_eq!(c.exit_code(), 1);
 }

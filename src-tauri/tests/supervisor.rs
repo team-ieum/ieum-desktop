@@ -1,5 +1,7 @@
 //! 실행 감독. 모든 파일은 임시 폴더 안, AI는 가짜 러너.
 
+mod github_support;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,19 +9,22 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use github_support::{no_github, no_watch};
 use ieum_desktop_lib::store::{RunTrigger, Store, StoredWorkflow};
 use ieum_desktop_lib::supervisor::{
-    AppEvent, Deps, NoticeKind, QUEUE_CAP, RunNotice, Supervisor, WatchState,
+    AppEvent, Deps, GITHUB_POLL, NoticeKind, QUEUE_CAP, RunNotice, Supervisor, WatchState,
 };
 use ieum_engine::{ExecEvent, NodeStatus, RunStatus, Workflow};
 use ieum_local::WatchTiming;
-use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, ChunkFn};
+use ieum_local::ai::{AiAnswer, AiError, AiProvider, AiRequest, AiRunner, AiUsage, ChunkFn};
+use ieum_local::github::watch::CreatedIssues;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::sync::Semaphore;
 
 /// 가짜 AI 공급원(`fake`): `{"folder": "sorted"}`. 동시 실행 수를 재고, `gate`가 있으면 허가를 하나씩 받는다.
-/// 받은 프롬프트를 남긴다(파일 내용이 갔는지 확인).
+/// 받은 프롬프트를 남긴다(파일 내용이 갔는지 확인). `usage`가 있으면 답마다 그 사용량을 낸다.
 #[derive(Default)]
 struct FakeAi {
     calls: AtomicUsize,
@@ -27,6 +32,7 @@ struct FakeAi {
     max_active: AtomicUsize,
     gate: Option<Semaphore>,
     prompts: Mutex<Vec<String>>,
+    usage: Option<AiUsage>,
 }
 
 #[async_trait]
@@ -44,7 +50,7 @@ impl AiProvider for FakeAi {
         self.active.fetch_sub(1, Ordering::SeqCst);
         Ok(AiAnswer {
             text: r#"{"folder": "sorted"}"#.into(),
-            usage: None,
+            usage: self.usage.clone(),
         })
     }
 }
@@ -56,6 +62,8 @@ struct Env {
     store: Store,
     ai: Arc<FakeAi>,
     events: Arc<Mutex<Vec<AppEvent>>>,
+    /// 가짜 시계(`Deps.now`).
+    clock: Arc<Mutex<DateTime<Utc>>>,
 }
 
 impl Env {
@@ -79,12 +87,18 @@ fn env_full(ai: FakeAi, recheck: Duration, repeat_window: Duration) -> Env {
     let ai = Arc::new(ai);
     let events = Arc::new(Mutex::new(Vec::new()));
     let ev = events.clone();
+    let clock = Arc::new(Mutex::new(utc("2026-11-16T01:30:00Z")));
+    let c = clock.clone();
     let sup = Supervisor::start(Deps {
         store: store.clone(),
         app_data: root.join("data"),
         home: root.clone(),
         trash_dir: root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", ai.clone())),
+        github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming {
             stable_interval: Duration::from_millis(100),
@@ -92,6 +106,7 @@ fn env_full(ai: FakeAi, recheck: Duration, repeat_window: Duration) -> Env {
             recent_window: Duration::from_secs(10),
         },
         recheck,
+        now: Arc::new(move || *c.lock().unwrap()),
     })
     .unwrap();
     Env {
@@ -101,7 +116,12 @@ fn env_full(ai: FakeAi, recheck: Duration, repeat_window: Duration) -> Env {
         store,
         ai,
         events,
+        clock,
     }
+}
+
+fn utc(s: &str) -> DateTime<Utc> {
+    s.parse().unwrap()
 }
 
 fn env() -> Env {
@@ -304,7 +324,11 @@ async fn run_now_records_manual_trigger() {
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
 
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     let run = env.store.get_run(&run_id).unwrap();
     assert_eq!(run.trigger, Some(RunTrigger::Manual));
     assert_eq!(
@@ -320,7 +344,11 @@ async fn undo_run_twice_errors() {
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
 
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     assert!(out.join("sorted/a.pdf").exists());
 
     let report = env.sup.undo_run(&run_id).unwrap();
@@ -336,7 +364,11 @@ async fn undo_uses_stored_roots_not_current() {
     let (inbox, out) = (env.dir("in"), env.dir("out"));
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
 
     // 실행 뒤 워크플로우의 폴더를 전혀 다른 곳으로 바꾼다.
     let mut wf = env.store.get_workflow(&id).unwrap();
@@ -403,7 +435,11 @@ async fn run_now_outside_roots_rejected() {
     std::os::unix::fs::symlink(&key, inbox.join("innocent.pdf")).unwrap();
 
     for f in [key.clone(), inbox.join("innocent.pdf")] {
-        assert!(env.sup.run_now(&id, &f).await.is_err(), "{}", f.display());
+        assert!(
+            env.sup.run_now(&id, Some(&f)).await.is_err(),
+            "{}",
+            f.display()
+        );
     }
     assert_eq!(runs(&env, &id), 0);
     assert_eq!(env.ai.calls.load(Ordering::SeqCst), 0);
@@ -427,7 +463,11 @@ async fn ai_file_outside_roots_rejected() {
     let id = save(&env, wf, false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
 
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     let run = env.store.get_run(&run_id).unwrap();
     assert_eq!(run.run.nodes["a"].status, NodeStatus::Failed);
     assert_eq!(
@@ -475,7 +515,7 @@ async fn save_rejects_bad_folders_and_provider() {
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
     assert!(
         env.sup
-            .run_now(&planted.id, &inbox.join("a.pdf"))
+            .run_now(&planted.id, Some(&inbox.join("a.pdf")))
             .await
             .is_err()
     );
@@ -553,7 +593,9 @@ async fn journal_not_shared_between_runs() {
             let f = inbox.join(format!("f{n}.pdf"));
             fs::write(&f, "pdf").unwrap();
             let (sup, id) = (env.sup.clone(), id.clone());
-            jobs.push(tokio::spawn(async move { sup.run_now(&id, &f).await }));
+            jobs.push(tokio::spawn(
+                async move { sup.run_now(&id, Some(&f)).await },
+            ));
         }
     }
     for j in jobs {
@@ -578,9 +620,14 @@ fn restart(env: &Env) -> Supervisor {
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty()),
+        github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(|_| {}),
         timing: WatchTiming::default(),
         recheck: Duration::from_secs(30),
+        now: Arc::new(Utc::now),
     })
     .unwrap()
 }
@@ -608,7 +655,7 @@ async fn file_op_recorded_while_run_in_flight() {
     let id = save(&env, wf, false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
     let (sup, wid, f) = (env.sup.clone(), id.clone(), inbox.join("a.pdf"));
-    tokio::spawn(async move { sup.run_now(&wid, &f).await });
+    tokio::spawn(async move { sup.run_now(&wid, Some(&f)).await });
     assert!(
         wait_until(Duration::from_secs(5), || env
             .ai
@@ -619,7 +666,17 @@ async fn file_op_recorded_while_run_in_flight() {
     );
     assert!(inbox.join("renamed.pdf").exists());
 
-    // AI가 도는 동안에도 파일 작업이 기록에 있다.
+    // AI가 도는 동안에도 파일 작업이 기록에 있다. 도중 기록은 AI 호출과 따로 써지니 기다린다.
+    let recorded = || {
+        env.store.list_runs(Some(&id)).is_ok_and(|l| {
+            l.first().is_some_and(|r| {
+                env.store
+                    .get_run(&r.run_id)
+                    .is_ok_and(|run| run.file_ops.len() == 1)
+            })
+        })
+    };
+    assert!(wait_until(Duration::from_secs(5), recorded).await);
     let list = env.store.list_runs(Some(&id)).unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].finished_at.is_empty());
@@ -652,6 +709,10 @@ async fn run_finished_emitted_after_final_save() {
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty().with_provider("fake", env.ai.clone())),
+        github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| {
             if let AppEvent::Exec {
                 event: ExecEvent::RunFinished { .. },
@@ -667,9 +728,10 @@ async fn run_finished_emitted_after_final_save() {
         }),
         timing: WatchTiming::default(),
         recheck: Duration::from_secs(30),
+        now: Arc::new(Utc::now),
     })
     .unwrap();
-    sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    sup.run_now(&id, Some(&inbox.join("a.pdf"))).await.unwrap();
     assert_eq!(*seen.lock().unwrap(), [(RunStatus::Succeeded, false)]);
 }
 
@@ -736,7 +798,11 @@ async fn undo_ignores_tampered_roots_outside_policy() {
     let (inbox, out) = (env.dir("in"), env.dir("out"));
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
 
     // 기록의 허용 폴더를 홈 자체로 바꿔 심는다.
     let mut run = env.store.get_run(&run_id).unwrap();
@@ -768,7 +834,11 @@ async fn run_notice_emitted_with_trigger_and_name() {
     let (inbox, out) = (env.dir("in"), env.dir("out"));
     let id = save(&env, move_wf(&inbox, &out), false);
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
-    let run_id = env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     let manual = notices(&env, &id);
     assert_eq!(manual.len(), 2, "{manual:?}");
     assert!(matches!(manual[0].kind, NoticeKind::Started));
@@ -814,7 +884,10 @@ async fn run_notice_failed_node_is_label_not_error() {
     fs::write(inbox.join("a.pdf"), "pdf").unwrap();
     // 옮길 폴더 자리에 파일을 두어 옮기기 노드를 실패시킨다.
     fs::write(out.join("sorted"), "not a folder").unwrap();
-    env.sup.run_now(&id, &inbox.join("a.pdf")).await.unwrap();
+    env.sup
+        .run_now(&id, Some(&inbox.join("a.pdf")))
+        .await
+        .unwrap();
     let n = notices(&env, &id);
     match &n[1].kind {
         NoticeKind::Finished {
@@ -859,7 +932,7 @@ async fn unfinished_test_run_undone_on_next_start() {
         );
         async move {
             fs::write(&file, "pdf").unwrap();
-            let run_id = sup.run_now(&id, &file).await.unwrap();
+            let run_id = sup.run_now(&id, Some(&file)).await.unwrap();
             let mut run = store.get_run(&run_id).unwrap();
             assert_eq!(run.file_ops.len(), 1);
             run.finished_at = String::new();
@@ -883,9 +956,14 @@ async fn unfinished_test_run_undone_on_next_start() {
         home: env.root.clone(),
         trash_dir: env.root.join("trash"),
         ai: Arc::new(AiRunner::empty()),
+        github: no_github(),
+        github_watch: no_watch(),
+        github_created: Arc::new(CreatedIssues::in_memory()),
+        github_poll: GITHUB_POLL,
         emit: Arc::new(move |e| ev.lock().unwrap().push(e)),
         timing: WatchTiming::default(),
         recheck: Duration::from_secs(30),
+        now: Arc::new(Utc::now),
     })
     .unwrap();
 
@@ -917,4 +995,563 @@ async fn unfinished_test_run_undone_on_next_start() {
     // 테스트가 아닌 실행은 닫기만 한다 — 사람이 실행 기록에서 되돌린다.
     assert!(env.store.get_run(&manual).unwrap().undo.is_none());
     assert!(out.join("sorted/c.pdf").exists());
+}
+
+/// 127.0.0.1 가짜 서버 — GET에는 `get_body`, 그 밖에는 `{}`. 받은 요청 본문을 남긴다.
+async fn http_server(get_body: Vec<u8>) -> (String, Arc<Mutex<Vec<Vec<u8>>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", l.local_addr().unwrap());
+    let seen: Arc<Mutex<Vec<Vec<u8>>>> = Arc::default();
+    let log = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut s, _) = l.accept().await.unwrap();
+            let (mut buf, mut tmp) = (Vec::new(), [0u8; 65536]);
+            let (head_end, len) = loop {
+                let n = s.read(&mut tmp).await.unwrap();
+                buf.extend_from_slice(&tmp[..n]);
+                if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..i]).to_ascii_lowercase();
+                    let len = head
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length:"))
+                        .map_or(0, |v| v.trim().parse().unwrap());
+                    break (i + 4, len);
+                }
+            };
+            while buf.len() < head_end + len {
+                let n = s.read(&mut tmp).await.unwrap();
+                buf.extend_from_slice(&tmp[..n]);
+            }
+            let body = match buf.starts_with(b"GET") {
+                true => get_body.clone(),
+                false => b"{}".to_vec(),
+            };
+            log.lock().unwrap().push(buf[head_end..].to_vec());
+            let head = format!(
+                "HTTP/1.1 200 X\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            s.write_all(head.as_bytes()).await.unwrap();
+            s.write_all(&body).await.unwrap();
+        }
+    });
+    (base, seen)
+}
+
+/// 기록 파일에는 큰 응답 본문을 줄여 쓴다 — 실행 중 뒤 노드와 화면 이벤트는 전체를 받는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn large_http_body_is_clipped_only_in_stored_run() {
+    let env = env();
+    let inbox = env.dir("in");
+    let big = json!({"data": "x".repeat(300_000)});
+    let full = serde_json::to_string(&big).unwrap();
+    let full_units = full.encode_utf16().count();
+    let (base, seen) = http_server(full.clone().into_bytes()).await;
+    let wf: Workflow = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "local.folder_new_file", "config": {"folder": inbox}},
+            {"id": "g", "type": "HTTP", "event": "http.request", "config": {"method": "GET", "url": base}},
+            {"id": "p", "type": "HTTP", "event": "http.request", "config": {"method": "POST", "url": base, "body": {"echo": "{{nodes.g.output.body}}"}}}
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "g"}, {"id": "e2", "source": "g", "target": "p"}]
+    }))
+    .unwrap();
+    let id = save(&env, wf, false);
+    fs::write(inbox.join("a.txt"), "a").unwrap();
+    let run_id = env
+        .sup
+        .run_now(&id, Some(&inbox.join("a.txt")))
+        .await
+        .unwrap();
+
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.run.status, RunStatus::Succeeded, "{:?}", run.run.nodes);
+    let g = &run.run.nodes["g"];
+    let body = g.output.as_ref().unwrap()["body"].as_str().unwrap();
+    let marker = format!("…(잘림, 전체 {full_units}자)");
+    assert!(body.ends_with(&marker), "{}", &body[body.len() - 40..]);
+    let kept = &body[..body.len() - marker.len()];
+    assert_eq!(kept.encode_utf16().count(), 100_000);
+    assert!(full.starts_with(kept));
+    assert!(g.output_clipped);
+    // 작은 응답은 그대로.
+    let p = &run.run.nodes["p"];
+    assert_eq!(p.output.as_ref().unwrap()["body"], json!({}));
+    assert!(!p.output_clipped);
+    // 파일에 표시가 남고, 작은 노드에는 칸이 없다.
+    let raw: serde_json::Value = serde_json::to_value(&run).unwrap();
+    assert_eq!(raw["run"]["nodes"]["g"]["outputClipped"], json!(true));
+    assert_eq!(raw["run"]["nodes"]["p"].get("outputClipped"), None);
+
+    // 실행 중 뒤 노드가 받은 값은 전체다.
+    let posted = seen.lock().unwrap()[1].clone();
+    let posted: serde_json::Value = serde_json::from_slice(&posted).unwrap();
+    assert_eq!(posted["echo"].as_str().unwrap(), full);
+    // 화면 이벤트도 전체다.
+    let shown = env.events.lock().unwrap().iter().find_map(|e| match e {
+        AppEvent::Exec {
+            event: ExecEvent::NodeSucceeded { node_id, output },
+            ..
+        } if node_id == "g" => Some(output["body"].clone()),
+        _ => None,
+    });
+    assert_eq!(shown, Some(big));
+}
+
+/// 줄임 표시 칸이 생기기 전 기록도 읽힌다.
+#[test]
+fn old_node_record_without_clip_flag_reads() {
+    let rec: ieum_engine::NodeRecord = serde_json::from_value(
+        json!({"status": "succeeded", "output": {"statusCode": 200, "body": "x"}, "error": null}),
+    )
+    .unwrap();
+    assert!(!rec.output_clipped);
+}
+
+// ── 스케줄 트리거 ─────────────────────────────────────────────
+
+/// 스케줄 트리거 → AI(가짜). 시계 기본값 2026-11-16 10:30 KST.
+fn sched_wf(event: &str, config: serde_json::Value) -> Workflow {
+    serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": event, "config": config},
+            {"id": "a", "type": "AI", "event": "local.ai", "config": {"provider": "fake", "prompt": "요약", "outputFields": [{"key": "folder", "type": "text"}]}}
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "a"}]
+    }))
+    .unwrap()
+}
+
+fn set_clock(env: &Env, s: &str) {
+    *env.clock.lock().unwrap() = utc(s);
+}
+
+fn slot(env: &Env, id: &str) -> Option<DateTime<Utc>> {
+    env.store.get_schedule_slots().unwrap().get(id).copied()
+}
+
+fn set_enabled(env: &Env, id: &str, enabled: bool) {
+    let mut wf = env.store.get_workflow(id).unwrap();
+    wf.enabled = enabled;
+    env.sup.save_workflow(wf).unwrap();
+}
+
+/// 끝난(끝 시각 있는) 실행 수.
+fn finished_runs(env: &Env, id: &str) -> usize {
+    env.store
+        .list_runs(Some(id))
+        .unwrap()
+        .iter()
+        .filter(|r| !r.finished_at.is_empty())
+        .count()
+}
+
+/// 큐에 들어갔다면 끝날 만큼 기다린 뒤 실행 수.
+async fn settle(env: &Env, id: &str) -> usize {
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    runs(env, id)
+}
+
+fn hourly(env: &Env) -> String {
+    save(env, sched_wf("schedule.hourly", json!({})), true)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn first_enable_no_backfill() {
+    let env = env();
+    let id = hourly(&env);
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 0);
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-16T01:30:00Z")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runs_on_slot() {
+    let env = env();
+    let id = hourly(&env);
+    set_clock(&env, "2026-11-16T02:00:10Z"); // 11:00:10 KST
+    env.sup.tick_for_test();
+    assert!(wait_until(Duration::from_secs(5), || finished_runs(&env, &id) == 1).await);
+    let summary = &env.store.list_runs(Some(&id)).unwrap()[0];
+    let run = env.store.get_run(&summary.run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Schedule));
+    assert_eq!(run.scheduled_for.as_deref(), Some("2026-11-16T11:00:00"));
+    assert_eq!(
+        run.run.nodes["t"].output.as_ref().unwrap()["triggeredAt"],
+        json!("2026-11-16T11:00:10")
+    );
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-16T02:00:00Z")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn missed_within_grace_once() {
+    let env = env();
+    let id = hourly(&env);
+    set_clock(&env, "2026-11-16T05:30:00Z"); // 14:30 KST — 11·12·13·14시 놓침
+    env.sup.tick_for_test();
+    assert!(wait_until(Duration::from_secs(5), || finished_runs(&env, &id) == 1).await);
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    let run = env.store.list_runs(Some(&id)).unwrap()[0].run_id.clone();
+    assert_eq!(
+        env.store.get_run(&run).unwrap().scheduled_for.as_deref(),
+        Some("2026-11-16T14:00:00")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn missed_beyond_grace_none() {
+    let env = env();
+    let id = save(&env, sched_wf("schedule.daily", json!({"hour": "9"})), true);
+    env.store
+        .set_schedule_slot(&id, utc("2026-11-15T00:00:00Z"))
+        .unwrap();
+    set_clock(&env, "2026-11-16T02:01:00Z"); // 오늘 11:01 KST — 9시 차례가 2시간 넘게 지남
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 0);
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-16T00:00:00Z")));
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 0);
+    set_clock(&env, "2026-11-17T00:00:00Z"); // 내일 9시
+    env.sup.tick_for_test();
+    assert!(wait_until(Duration::from_secs(5), || finished_runs(&env, &id) == 1).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restart_no_duplicate() {
+    let env = env();
+    let id = hourly(&env);
+    set_clock(&env, "2026-11-16T02:00:10Z");
+    env.sup.tick_for_test();
+    assert!(wait_until(Duration::from_secs(5), || finished_runs(&env, &id) == 1).await);
+    env.sup.stop();
+    let c = env.clock.clone();
+    let sup2 = Supervisor::start_with(
+        Deps {
+            store: env.store.clone(),
+            app_data: env.root.join("data"),
+            home: env.root.clone(),
+            trash_dir: env.root.join("trash"),
+            ai: Arc::new(AiRunner::empty().with_provider("fake", env.ai.clone())),
+            github: no_github(),
+            github_watch: no_watch(),
+            github_created: Arc::new(CreatedIssues::in_memory()),
+            github_poll: GITHUB_POLL,
+            emit: Arc::new(|_| {}),
+            timing: WatchTiming::default(),
+            recheck: Duration::from_secs(30),
+            now: Arc::new(move || *c.lock().unwrap()),
+        },
+        false,
+    )
+    .unwrap();
+    sup2.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    sup2.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn overlap_skips() {
+    let env = env_with(
+        FakeAi {
+            gate: Some(Semaphore::new(0)),
+            ..Default::default()
+        },
+        Duration::from_secs(30),
+    );
+    let id = hourly(&env);
+    set_clock(&env, "2026-11-16T02:00:10Z");
+    env.sup.tick_for_test();
+    assert!(
+        wait_until(Duration::from_secs(5), || env
+            .ai
+            .calls
+            .load(Ordering::SeqCst)
+            == 1)
+        .await
+    );
+    set_clock(&env, "2026-11-16T03:00:10Z"); // 다음 차례 — 첫 실행이 아직 도는 중
+    env.sup.tick_for_test();
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-16T03:00:00Z")));
+    env.ai.gate.as_ref().unwrap().add_permits(5);
+    assert!(wait_until(Duration::from_secs(5), || finished_runs(&env, &id) == 1).await);
+    assert_eq!(settle(&env, &id).await, 1);
+    assert_eq!(env.ai.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reenable_starts_now() {
+    let env = env();
+    let id = hourly(&env);
+    set_enabled(&env, &id, false);
+    set_clock(&env, "2026-11-16T06:30:00Z"); // +5시간
+    set_enabled(&env, &id, true);
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 0);
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-16T06:30:00Z")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn trigger_change_starts_now() {
+    let env = env();
+    let id = hourly(&env);
+    set_clock(&env, "2026-11-16T02:30:00Z"); // 11시 차례 놓침(유예 안)
+    let mut wf = env.store.get_workflow(&id).unwrap();
+    wf.workflow = sched_wf("schedule.daily", json!({"hour": "11"}));
+    env.sup.save_workflow(wf).unwrap();
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 0);
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-16T02:30:00Z")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn clock_back_resets_slot() {
+    let env = env();
+    let id = hourly(&env);
+    set_clock(&env, "2026-11-15T22:30:00Z"); // 시계가 3시간 뒤로 — 기록을 지금으로
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 0);
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-15T22:30:00Z")));
+}
+
+/// 2시간 안으로 조금 뒤로 간 시계는 기록을 그대로 둔다 — 같은 차례를 다시 돌지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn clock_back_small_keeps_slot() {
+    let env = env();
+    let id = hourly(&env);
+    set_clock(&env, "2026-11-16T02:00:10Z"); // 11:00:10 KST — 11시 차례
+    env.sup.tick_for_test();
+    assert!(wait_until(Duration::from_secs(5), || finished_runs(&env, &id) == 1).await);
+    set_clock(&env, "2026-11-16T01:59:55Z"); // -15초
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-16T02:00:00Z")));
+    set_clock(&env, "2026-11-16T02:00:30Z");
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    set_clock(&env, "2026-11-15T23:00:30Z"); // -3시간
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    assert_eq!(slot(&env, &id), Some(utc("2026-11-15T23:00:30Z")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn bad_cron_watch_error() {
+    let env = env();
+    let id = save(
+        &env,
+        sched_wf("schedule.every", json!({"cron": "0 9 1 * 1"})),
+        true,
+    );
+    env.sup.tick_for_test();
+    let entry = env
+        .sup
+        .list_workflows()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.workflow.id == id)
+        .unwrap();
+    assert_eq!(entry.watch, WatchState::WatchError);
+    assert!(
+        entry
+            .watch_message
+            .as_deref()
+            .unwrap()
+            .starts_with("스케줄을 계산하지 못했어요"),
+        "{:?}",
+        entry.watch_message
+    );
+    assert!(status_events(&env, &id, false) >= 1);
+    assert_eq!(entry.next_run, None);
+    assert_eq!(settle(&env, &id).await, 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn next_run_listed() {
+    let env = env();
+    let on = save(&env, sched_wf("schedule.daily", json!({"hour": "9"})), true);
+    let off = save(
+        &env,
+        sched_wf("schedule.daily", json!({"hour": "9"})),
+        false,
+    );
+    let list = env.sup.list_workflows().unwrap();
+    let get = |id: &str| list.iter().find(|e| e.workflow.id == id).unwrap();
+    assert_eq!(get(&on).next_run.as_deref(), Some("2026-11-17T09:00:00"));
+    assert_eq!(get(&on).watch, WatchState::Watching);
+    assert_eq!(get(&off).next_run, None);
+    assert_eq!(get(&off).watch, WatchState::Off);
+}
+
+/// 연도가 든 식의 마지막 차례도 돈다 — 다음 차례가 없다는 오류는 그 차례를 처리한 뒤에.
+#[tokio::test(flavor = "multi_thread")]
+async fn last_slot_of_year_runs_then_error() {
+    let env = env();
+    let id = save(
+        &env,
+        sched_wf("schedule.every", json!({"cron": "0 0 9 17 11 ? 2026"})),
+        true,
+    );
+    set_clock(&env, "2026-11-17T00:00:10Z"); // 11/17 09:00:10 KST
+    env.sup.tick_for_test();
+    assert!(wait_until(Duration::from_secs(5), || finished_runs(&env, &id) == 1).await);
+    env.sup.tick_for_test();
+    assert_eq!(settle(&env, &id).await, 1);
+    let entry = env
+        .sup
+        .list_workflows()
+        .unwrap()
+        .into_iter()
+        .find(|e| e.workflow.id == id)
+        .unwrap();
+    assert_eq!(entry.watch, WatchState::WatchError);
+    assert!(status_events(&env, &id, false) >= 1);
+}
+
+/// 폴더 워크플로우는 파일이 있어야, 스케줄·수동은 파일 없이 돈다(기록 trigger = Manual).
+#[tokio::test(flavor = "multi_thread")]
+async fn run_now_by_kind() {
+    let env = env();
+    let inbox = env.dir("in");
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    let folder = save(&env, ai_only_wf(&inbox), false);
+    assert_eq!(
+        env.sup.run_now(&folder, None).await.unwrap_err(),
+        "파일을 골라 주세요"
+    );
+    assert!(
+        env.sup
+            .run_now(&folder, Some(&inbox.join("a.pdf")))
+            .await
+            .is_ok()
+    );
+
+    let daily = save(&env, sched_wf("schedule.daily", json!({"hour": "9"})), true);
+    let run_id = env.sup.run_now(&daily, None).await.unwrap();
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Manual));
+    assert_eq!(run.scheduled_for, None);
+    assert_eq!(
+        run.run.nodes["t"].output.as_ref().unwrap()["triggeredAt"],
+        json!("2026-11-16T10:30:00")
+    );
+
+    let manual = save(&env, sched_wf("manual.run", json!({})), true);
+    let run_id = env.sup.run_now(&manual, None).await.unwrap();
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.trigger, Some(RunTrigger::Manual));
+    assert_eq!(run.run.nodes["t"].output.as_ref().unwrap().len(), 0);
+}
+
+/// 차례 기록(schedule.json)을 못 써도 같은 프로세스에선 같은 차례를 다시 돌리지 않는다.
+#[tokio::test(flavor = "multi_thread")]
+async fn slot_write_failure_runs_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = env();
+    let id = hourly(&env);
+    let data = env.root.join("data");
+    fs::create_dir_all(data.join("runs")).unwrap();
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o555)).unwrap();
+    set_clock(&env, "2026-11-16T02:00:10Z");
+    for _ in 0..5 {
+        env.sup.tick_for_test();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let got = settle(&env, &id).await;
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(got, 1);
+}
+
+/// 지운 워크플로우의 차례 기록은 schedule.json에서 빠진다.
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_removes_slot() {
+    let env = env();
+    let id = hourly(&env);
+    assert!(slot(&env, &id).is_some());
+    env.sup.delete_workflow(&id).unwrap();
+    assert_eq!(slot(&env, &id), None);
+}
+
+/// GitHub 노드는 앱 러너에 등록돼 토큰 공급까지 간다(테스트 토큰은 늘 실패).
+#[tokio::test(flavor = "multi_thread")]
+async fn github_node_reaches_token() {
+    let env = env();
+    let wf: Workflow = serde_json::from_value(json!({
+        "nodes": [
+            {"id": "t", "type": "TRIGGER", "event": "manual.run", "config": {}},
+            {"id": "g", "type": "ACTION", "event": "github.find_issue", "config": {"owner": "o", "repo": "r", "search_by": "number", "value": "1"}}
+        ],
+        "edges": [{"id": "e1", "source": "t", "target": "g"}]
+    }))
+    .unwrap();
+    let id = save(&env, wf, true);
+    let run_id = env.sup.run_now(&id, None).await.unwrap();
+    let run = env.store.get_run(&run_id).unwrap();
+    assert_eq!(run.run.nodes["g"].status, NodeStatus::Failed);
+    assert_eq!(
+        run.run.nodes["g"].error.as_deref(),
+        Some("GitHub 연결이 필요해요. 설정 > 연동에서 연결해 주세요.")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn run_over_limit_emits_key_limit_once() {
+    let env = env_with(
+        FakeAi {
+            usage: Some(AiUsage {
+                source: "anthropic".into(),
+                model: Some("claude-opus-5-5".into()),
+                input_tokens: 1000,
+                output_tokens: 1000,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                credential: Some("k1".into()),
+            }),
+            ..Default::default()
+        },
+        Duration::from_secs(30),
+    );
+    env.store
+        .set_key_limit("anthropic:k1", Some(0.000001))
+        .unwrap();
+    let inbox = env.dir("in");
+    // 기록되는 키 id는 노드의 `credential` 칸에서 온다(러너가 덮어쓴다).
+    let mut wf = ai_only_wf(&inbox);
+    wf.nodes[1].config.insert("credential".into(), json!("k1"));
+    let id = save(&env, wf, false);
+    fs::write(inbox.join("a.pdf"), "pdf").unwrap();
+    for _ in 0..2 {
+        env.sup
+            .run_now(&id, Some(&inbox.join("a.pdf")))
+            .await
+            .unwrap();
+    }
+    let got: Vec<_> = env
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            AppEvent::KeyLimit(n) => Some(n.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!((got[0].source.as_str(), got[0].level), ("anthropic", 100));
+    // 한도 알림은 실행 끝 이벤트 뒤 — 화면의 끝 표시가 한도 확인을 기다리지 않는다.
+    let events = env.events.lock().unwrap();
+    let at = |f: &dyn Fn(&AppEvent) -> bool| events.iter().position(f).unwrap();
+    let finished = at(&|e| {
+        matches!(
+            e,
+            AppEvent::Exec {
+                event: ExecEvent::RunFinished { .. },
+                ..
+            }
+        )
+    });
+    let limit = at(&|e| matches!(e, AppEvent::KeyLimit(_)));
+    assert!(finished < limit, "끝 {finished}, 한도 {limit}");
 }

@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use ieum_engine::Workflow;
-use ieum_local::builder::{AiDefault, ChatFile, Doc, Host, SaveError, TestRun};
+use ieum_local::builder::{
+    AiDefault, ChatFile, Doc, Host, HttpConfirm, HttpLine, SaveError, TestRun, TestTrigger,
+};
 use ieum_local::user_folders;
 
 type OnPick = Box<dyn FnMut(&MemHost) + Send>;
@@ -28,7 +30,7 @@ pub struct MemHost {
     pub ai: Mutex<Option<AiDefault>>,
     pub ai_ok: AtomicBool,
     pub test_runs: Mutex<VecDeque<Result<TestRun, String>>>,
-    pub tested: Mutex<Vec<(Workflow, PathBuf)>>,
+    pub tested: Mutex<Vec<(Workflow, TestTrigger)>>,
     /// `finish_pending`이 받은 워크플로우 id.
     pub pending_notices: Mutex<Vec<String>>,
     /// 성공한 `Host::save` 수(`put_doc`은 세지 않는다).
@@ -38,6 +40,12 @@ pub struct MemHost {
     pub editing: Mutex<HashSet<String>>,
     /// `pick_folder`가 받은 창 제목.
     pub pick_titles: Mutex<Vec<String>>,
+    /// `confirm_http`의 답. None = Cancelled(무응답).
+    pub http_answer: Mutex<Option<HttpConfirm>>,
+    /// `confirm_http`가 받은 줄들.
+    pub http_asked: Mutex<Vec<Vec<HttpLine>>>,
+    /// 확인을 기다리는 사이의 편집 흉내 — `confirm_http`가 답하기 전에 한 번 부른다.
+    pub on_http: Mutex<Option<OnPick>>,
     /// `updated_at` = `"v<n>"`.
     version: AtomicUsize,
 }
@@ -121,11 +129,23 @@ impl MemHost {
         self.pick_titles.lock().unwrap().clone()
     }
 
+    pub fn set_http_answer(&self, answer: HttpConfirm) {
+        *self.http_answer.lock().unwrap() = Some(answer);
+    }
+
+    pub fn http_asked(&self) -> Vec<Vec<HttpLine>> {
+        self.http_asked.lock().unwrap().clone()
+    }
+
+    pub fn on_http(&self, f: impl FnMut(&MemHost) + Send + 'static) {
+        *self.on_http.lock().unwrap() = Some(Box::new(f));
+    }
+
     pub fn push_test_run(&self, run: Result<TestRun, String>) {
         self.test_runs.lock().unwrap().push_back(run);
     }
 
-    pub fn tested(&self) -> Vec<(Workflow, PathBuf)> {
+    pub fn tested(&self) -> Vec<(Workflow, TestTrigger)> {
         self.tested.lock().unwrap().clone()
     }
 
@@ -205,6 +225,18 @@ impl Host for MemHost {
         picked
     }
 
+    async fn confirm_http(&self, _workflow_id: &str, lines: &[HttpLine]) -> HttpConfirm {
+        self.http_asked.lock().unwrap().push(lines.to_vec());
+        let hook = self.on_http.lock().unwrap().take();
+        if let Some(mut f) = hook {
+            f(self);
+        }
+        self.http_answer
+            .lock()
+            .unwrap()
+            .unwrap_or(HttpConfirm::Cancelled)
+    }
+
     async fn ai_default(&self) -> Option<AiDefault> {
         self.ai.lock().unwrap().clone()
     }
@@ -217,9 +249,9 @@ impl Host for MemHost {
         &self,
         _workflow_id: &str,
         wf: Workflow,
-        sample: &Path,
+        trigger: TestTrigger,
     ) -> Result<TestRun, String> {
-        self.tested.lock().unwrap().push((wf, sample.to_path_buf()));
+        self.tested.lock().unwrap().push((wf, trigger));
         let next = self.test_runs.lock().unwrap().pop_front();
         next.unwrap_or_else(|| Err("준비된 테스트 결과가 없음".into()))
     }

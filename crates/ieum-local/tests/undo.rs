@@ -24,6 +24,7 @@ async fn run(runner: &dyn NodeRunner, config: Value) -> Map<String, Value> {
         .run(NodeCtx {
             node: &node,
             config: config.as_object().unwrap().clone(),
+            outputs: &Default::default(),
             events: &tx,
             cancel: &cancel,
         })

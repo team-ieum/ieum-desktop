@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import App from "../App";
 import { api, type Settings } from "../api";
 import { AuthScreen } from "../auth/AuthScreen";
@@ -33,6 +33,7 @@ beforeAll(() => {
   vi.spyOn(api, "subscriptionUsage").mockRejectedValue("no command");
   vi.spyOn(api, "antigravityPlanUsage").mockRejectedValue("no command");
   vi.spyOn(api, "usageSummary").mockRejectedValue("no command");
+  vi.spyOn(api, "keyLimits").mockResolvedValue({ limits: {}, spend: {} });
 });
 beforeEach(() => {
   vi.spyOn(api, "setSettings").mockReset().mockResolvedValue();
@@ -64,6 +65,17 @@ test("onboarding_ai_step_uses_provider_cards", async () => {
   const google = within(screen.getByRole("article", { name: "Google" }));
   expect(google.getByRole("region", { name: "구독" })).toBeTruthy();
   expect(within(google.getByRole("region", { name: "API 키" })).getByLabelText("Gemini API 키")).toBeTruthy();
+});
+
+test("onboarding_hides_limit_input", async () => {
+  const key = { id: "default", label: "기본", isDefault: true, createdAt: "", last4: "1234" };
+  const spy = vi.spyOn(api, "listCredentials").mockResolvedValue({ apiKeys: { anthropic: [], openai: [key], gemini: [] }, claudeAccounts: [], codexAccounts: [], keychainError: null });
+  onTestFinished(() => void spy.mockResolvedValue({ apiKeys: { anthropic: [], openai: [], gemini: [] }, claudeAccounts: [], codexAccounts: [], keychainError: null }));
+  await act(async () => {
+    render(<Onboarding onDone={() => {}} />);
+  });
+  expect(screen.getByText("…1234")).toBeTruthy();
+  expect(screen.queryByLabelText("월 한도 $")).toBeNull();
 });
 
 test("onboarding_not_shown_after_done_even_for_other_account", async () => {

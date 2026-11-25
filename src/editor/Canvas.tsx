@@ -26,7 +26,7 @@ import { branchHandles, DEFS, isLocal } from "../nodes/defs";
 import { nodeMeta, toneStyle } from "../nodes/meta";
 import { credLabel } from "../screens/settings/AiPane";
 import { choicesFor, useCredentials } from "../stores/credentials";
-import type { NodeRunStatus } from "../stores/runs";
+import { type NodeRunStatus, opensAiSettings, opensIntegrations } from "../stores/runs";
 import { AnimatedEdge, type EdgeData } from "./AnimatedEdge";
 import { shownModel } from "./models";
 
@@ -102,7 +102,17 @@ export function techRows(wf: WfNode, kind: string, view?: CredentialsView | null
   return rows.filter(([, v]) => v);
 }
 
-type Data = { wf: WfNode; step: number; errors: string[]; status?: NodeRunStatus; techInfo?: boolean };
+type Data = {
+  wf: WfNode;
+  step: number;
+  errors: string[];
+  status?: NodeRunStatus;
+  techInfo?: boolean;
+  runError?: string;
+  runCode?: string;
+  onOpenIntegrations?: () => void;
+  onOpenAiSettings?: () => void;
+};
 type IeumNode = Node<Data, "ieum">;
 
 // 웹 WorkflowNode HANDLE_CLASS.
@@ -117,7 +127,8 @@ function handleLabel(h: { id: string; name: string }) {
 
 /** 웹 이음 WorkflowNode와 같은 카드. */
 function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
-  const { wf, step, errors, status, techInfo } = data;
+  const { wf, step, errors, status, techInfo, runCode, onOpenIntegrations, onOpenAiSettings } = data;
+  const runError = status === "failed" ? data.runError : undefined;
   const kind = DEFS[wf.event]?.node_type ?? wf.type ?? "";
   const meta = nodeMeta(wf.event, wf.type);
   const branches = kind === "CONDITION" ? branchHandles(wf) : null;
@@ -126,7 +137,11 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
   return (
     <article
       style={toneStyle(meta)}
-      className={`relative w-66 rounded-[1.2rem] border-2 border-(--node-color) bg-white shadow-[0.5rem_0.6rem_0_var(--node-tint),0_14px_30px_rgba(65,52,139,0.1)] ${
+      className={`relative w-66 rounded-[1.2rem] border-2 bg-white ${
+        runError
+          ? "border-[#c2412d] shadow-[0.5rem_0.6rem_0_#f6d3cb,0_0_0_4px_rgba(194,65,45,.12)]"
+          : "border-(--node-color) shadow-[0.5rem_0.6rem_0_var(--node-shadow),0_14px_30px_rgba(65,52,139,0.1)]"
+      } ${
         selected ? "outline-2 outline-offset-4 outline-main-blue" : ""
       }`}
     >
@@ -138,8 +153,8 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
         </ul>
       )}
       {kind !== "TRIGGER" && <Handle type="target" position={Position.Left} className={HANDLE} isConnectable={isConnectable} />}
-      <header className="flex min-h-[2.9rem] items-center gap-[0.45rem] rounded-t-[1rem] border-b border-b-[color-mix(in_srgb,var(--node-color)_28%,white)] bg-(--node-tint) px-[0.65rem] py-[0.45rem] text-[0.72rem] font-bold text-(--node-color)">
-        <span className="grid size-8 shrink-0 place-items-center rounded-[0.65rem] bg-(--node-color) text-white [box-shadow:0_4px_0_color-mix(in_srgb,var(--node-color)_78%,black)]">
+      <header className="flex min-h-[2.9rem] items-center gap-[0.45rem] rounded-t-[1rem] border-b border-b-(--node-head-line) bg-(--node-head) px-[0.65rem] py-[0.45rem] text-[0.72rem] font-bold text-(--node-head-fg)">
+        <span className="grid size-8 shrink-0 place-items-center rounded-[0.65rem] bg-(--node-icon-bg) text-(--node-icon-fg) [box-shadow:var(--node-icon-shadow)]">
           {meta.icon}
         </span>
         <span className="min-w-0 truncate">{meta.label}</span>
@@ -165,6 +180,37 @@ function NodeCard({ data, selected, isConnectable }: NodeProps<IeumNode>) {
           </span>
         )}
         {techInfo && <TechInfo rows={techRows(wf, kind, creds)} />}
+        {runError && (
+          <div className="ieum-unfold flex flex-col gap-1 rounded-[0.65rem] border border-[#f3c2b6] bg-[#fff0ec] px-[0.6rem] py-1.5 text-[0.67rem] text-[#8f3424]">
+            <strong className="font-bold">{t("editor.runError.title")}</strong>
+            <p className="m-0 break-words leading-[1.45]">{runError}</p>
+            {opensIntegrations(runCode) && onOpenIntegrations && (
+              <button
+                type="button"
+                className="nodrag self-start font-bold underline"
+                onClick={(e) => {
+                  // 노드 선택으로 번지지 않게.
+                  e.stopPropagation();
+                  onOpenIntegrations();
+                }}
+              >
+                {t("editor.runError.openIntegrations")}
+              </button>
+            )}
+            {opensAiSettings(runCode) && onOpenAiSettings && (
+              <button
+                type="button"
+                className="nodrag self-start font-bold underline"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenAiSettings();
+                }}
+              >
+                {t("editor.runError.openAiSettings")}
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {branches ? (
         <ul className="flex flex-col gap-1 border-t border-neutral-200 px-[0.85rem] py-2">
@@ -234,6 +280,14 @@ export interface CanvasProps {
   techInfo?: boolean;
   /** 오른쪽에 떠 있는 패널이 가리는 폭(px). 0보다 크면 노드가 늘 때 새 노드가 가리지 않게 보기를 옮긴다. */
   rightCover?: number;
+  /** 노드별 실행 실패 문구 — 상태가 실패인 노드에 오류 띠로 보인다. */
+  runErrors?: Record<string, string>;
+  /** 노드별 오류 코드 — GitHub 연결 오류면 띠에 [설정 › 연동 열기], 키 한도 초과면 [설정 › AI 열기]. */
+  runCodes?: Record<string, string>;
+  onOpenIntegrations?: () => void;
+  onOpenAiSettings?: () => void;
+  /** nonce가 바뀌면 이 노드로 보기를 옮긴다. right는 오른쪽 패널이 가리는 폭(px). */
+  focus?: { id: string; nonce: number; right: number };
 }
 
 /** 사용자가 캔버스 조작을 끝낸 뒤 이 시간 안에는 보기를 뺏지 않는다. */
@@ -266,9 +320,27 @@ function Follow({ count, cover, move }: { count: number; cover: number; move: Re
   return null;
 }
 
+/** `focus`가 바뀌면(nonce) 그 노드가 오른쪽 패널에 가리지 않게 보기를 옮긴다. ReactFlow 안에서 그린다. */
+function Focus({ focus, move }: { focus?: CanvasProps["focus"]; move: RefObject<MoveState> }) {
+  const { fitView } = useReactFlow();
+  useEffect(() => {
+    const f = focus;
+    if (!f) return;
+    move.current.self = true;
+    void fitView({
+      nodes: [{ id: f.id }],
+      padding: { top: "48px", bottom: "48px", left: "48px", right: `${f.right + 48}px` },
+      maxZoom: 1,
+      duration: 300,
+    }).finally(() => (move.current.self = false));
+    // nonce가 바뀔 때만 — 같은 요청에 다시 옮기지 않는다.
+  }, [focus?.nonce, fitView, move]);
+  return null;
+}
+
 const edgeId = (e: Workflow["edges"][number]) => e.id ?? `${e.source}-${e.target}-${e.conditionType ?? ""}`;
 
-export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect, onNodeClick, techInfo = false, rightCover = 0 }: CanvasProps) {
+export function Canvas({ workflow, readOnly = false, errors, statuses, selectedId, onChange, onSelect, onNodeClick, techInfo = false, rightCover = 0, runErrors, runCodes, onOpenIntegrations, onOpenAiSettings, focus }: CanvasProps) {
   const [nodes, setNodes] = useState<IeumNode[]>([]);
   // 사람의 캔버스 조작 상태. 확대 버튼·미니맵은 이벤트가 null로 오므로, 따라가기 자신의 이동만 빼고 모두 사람 조작으로 본다.
   const move = useRef<MoveState>({ active: false, endedAt: 0, self: false });
@@ -308,10 +380,14 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
           errors: (errors ?? []).filter((e) => e.nodeId === n.id).map((e) => e.message),
           status: statuses?.[n.id],
           techInfo,
+          runError: runErrors?.[n.id],
+          runCode: runCodes?.[n.id],
+          onOpenIntegrations,
+          onOpenAiSettings,
         },
       }));
     });
-  }, [workflow.nodes, errors, statuses, selectedId, readOnly, techInfo]);
+  }, [workflow.nodes, errors, statuses, selectedId, readOnly, techInfo, runErrors, runCodes, onOpenIntegrations, onOpenAiSettings]);
 
   useEffect(() => {
     setEdges((prev) => {
@@ -394,8 +470,9 @@ export function Canvas({ workflow, readOnly = false, errors, statuses, selectedI
       <Background variant={BackgroundVariant.Dots} gap={22} size={1.5} color="rgba(74, 101, 124, 0.18)" />
       <Controls showInteractive={false} />
       <Follow count={workflow.nodes.length} cover={rightCover} move={move} />
+      <Focus focus={focus} move={move} />
       {/* 오른쪽은 떠 있는 패널 자리 — 미니맵은 왼쪽 아래, 줌 버튼 옆. */}
-      <MiniMap position="bottom-left" style={{ marginLeft: 56 }} pannable zoomable nodeStrokeWidth={3} nodeColor={(n) => minimapMeta(n).tint} nodeStrokeColor={(n) => minimapMeta(n).color} />
+      <MiniMap position="bottom-left" style={{ marginLeft: 56 }} pannable zoomable nodeStrokeWidth={3} nodeColor={(n) => minimapMeta(n).head ?? minimapMeta(n).tint} nodeStrokeColor={(n) => minimapMeta(n).color} />
     </ReactFlow>
   );
 }

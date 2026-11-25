@@ -1,14 +1,17 @@
-//! 앱 데이터 폴더 저장: `workflows/<id>.json`, `runs/<run_id>.json`, `settings.json`.
+//! 앱 데이터 폴더 저장: `workflows/<id>.json`, `runs/<run_id>.json`, `settings.json`, `schedule.json`.
 //! id는 UUID(소문자 하이픈 형식)만 — 파일 이름이 되므로 `../` 같은 값으로 폴더 밖에 쓰지 못하게.
 
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use chrono::{DateTime, Utc};
 use ieum_engine::{RunResult, RunStatus, Workflow};
 use ieum_local::ai::AiUsage;
 use ieum_local::builder::{ChatFile, UsageEntry};
+use ieum_local::github::watch::WatchEntry;
 use ieum_local::{FileOp, UndoReport};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -42,6 +45,75 @@ pub struct StoredRun {
     /// 옛 기록에는 없다.
     #[serde(default)]
     pub trigger: Option<RunTrigger>,
+    /// 스케줄 실행의 차례(Asia/Seoul 로컬 "YYYY-MM-DDTHH:MM:SS"). 그 밖의 실행은 없다.
+    #[serde(default)]
+    pub scheduled_for: Option<String>,
+}
+
+/// 기록 파일에 남기는 HTTP 응답 본문 상한(UTF-16 단위) — 기록을 지우는 정책이 없어 실행마다 최대 1MB씩 쌓이지 않게.
+pub const MAX_STORED_BODY_UNITS: usize = 100_000;
+
+/// 저장할 기록에서만 큰 `http.request` 응답 본문을 앞 10만 자 글 + 줄임 표시로 바꾼다(객체였어도 글이 된다).
+/// 실행 중 뒤 노드가 쓰는 값과 화면 이벤트는 이 복사본과 무관하다.
+pub fn clip_http_bodies(run: &mut RunResult, wf: &Workflow) {
+    for n in wf.nodes.iter().filter(|n| n.event == "http.request") {
+        let Some(rec) = run.nodes.get_mut(&n.id) else {
+            continue;
+        };
+        let Some(body) = rec.output.as_mut().and_then(|o| o.get_mut("body")) else {
+            continue;
+        };
+        if clip_body(body) {
+            rec.output_clipped = true;
+        }
+    }
+}
+
+/// 본문 값이 상한을 넘으면 앞부분 글 + 줄임 표시로 바꾸고 true.
+fn clip_body(body: &mut serde_json::Value) -> bool {
+    let text = match &*body {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let total = text.encode_utf16().count();
+    if total <= MAX_STORED_BODY_UNITS {
+        return false;
+    }
+    // 대리쌍을 가르지 않게 글자 단위로 센다.
+    let mut units = 0;
+    let end = text
+        .char_indices()
+        .find(|(_, c)| {
+            units += c.len_utf16();
+            units > MAX_STORED_BODY_UNITS
+        })
+        .map_or(text.len(), |(i, _)| i);
+    *body = format!("{}…(잘림, 전체 {total}자)", &text[..end]).into();
+    true
+}
+
+/// 노드 테스트 결과 한 건(마지막 것만 둔다) — 뒤 노드 테스트가 앞 노드 값으로 쓴다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SampleStatus {
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Sample {
+    pub status: SampleStatus,
+    #[serde(default)]
+    pub output: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub error_code: Option<String>,
+    /// RFC3339.
+    pub tested_at: String,
+    /// 테스트한 때의 `{event, config}` 스냅숏.
+    pub node: serde_json::Value,
 }
 
 /// 채팅 패널의 AI 호출 한 건(채팅 파일의 `usage` 항목 + 어느 워크플로우의 채팅인지).
@@ -52,7 +124,7 @@ pub struct ChatUsage {
     pub usage: AiUsage,
 }
 
-/// 폴더 감시로 돌았는지, 지금 실행(수동)인지, 채팅 빌더의 노드 테스트인지.
+/// 폴더 감시로 돌았는지, 지금 실행(수동)인지, 채팅 빌더의 노드 테스트인지, 스케줄 차례인지.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RunTrigger {
@@ -60,6 +132,10 @@ pub enum RunTrigger {
     Manual,
     /// 끝나면 바로 되돌린다. 대시보드 실행 건수·알림에서 뺀다.
     Test,
+    /// 알림·집계는 `Watch`와 같게.
+    Schedule,
+    /// GitHub 새 이슈·새 PR 트리거. 알림·집계는 `Watch`와 같게.
+    Github,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,6 +184,10 @@ pub struct Settings {
     /// 확인 창 토글. 옛 설정엔 없어 `Default`의 true.
     pub confirm_delete_workflow: bool,
     pub confirm_discard_unsaved: bool,
+    /// 실험: 채팅 설계서(A2UI). 옛 설정엔 없어 꺼짐.
+    pub chat_blueprint: bool,
+    /// 실험: 채팅 실측 기록(`<앱 데이터>/metrics/chat.jsonl`). 옛 설정엔 없어 꺼짐.
+    pub chat_metrics: bool,
 }
 
 pub const DEFAULT_SERVER_URL: &str = "https://green.kiacms.co.kr";
@@ -128,6 +208,8 @@ impl Default for Settings {
             notifications_seen_at: String::new(),
             confirm_delete_workflow: true,
             confirm_discard_unsaved: true,
+            chat_blueprint: false,
+            chat_metrics: false,
         }
     }
 }
@@ -150,6 +232,29 @@ fn check_id(id: &str) -> Result<(), String> {
 
 /// 채팅 상태 파일 읽기·쓰기를 한 프로세스 안에서 차례로.
 static CHAT_LOCK: Mutex<()> = Mutex::new(());
+/// `schedule.json` 읽기-고치기-쓰기를 차례로.
+static SCHEDULE_LOCK: Mutex<()> = Mutex::new(());
+static GITHUB_WATCH_LOCK: Mutex<()> = Mutex::new(());
+/// `key-limits.json` 읽기-고치기-쓰기를 차례로.
+static KEY_LIMITS_LOCK: Mutex<()> = Mutex::new(());
+/// `samples/<id>.json` 읽기-덮기-쓰기와 삭제를 차례로.
+static SAMPLES_LOCK: Mutex<()> = Mutex::new(());
+
+/// 키별 월 한도(USD)와 이미 보낸 알림 기록(`key-limits.json`). 키는 `"anthropic:3fa9c1d2"` 꼴.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+pub struct KeyLimitsFile {
+    #[serde(default)]
+    pub limits: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub notified: BTreeMap<String, Notified>,
+}
+
+/// 그 달에 마지막으로 알린 단계(%) — 재시작해도 같은 달 알림이 되풀이되지 않게.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Notified {
+    pub month: String,
+    pub level: u8,
+}
 
 /// 임시 파일에 쓰고 rename — 쓰다 죽어도 이전 파일이 남는다.
 pub(crate) fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
@@ -224,6 +329,40 @@ impl Store {
     fn chat_path(&self, id: &str) -> Result<PathBuf, String> {
         check_id(id)?;
         Ok(self.root.join("chats").join(format!("{id}.json")))
+    }
+
+    fn samples_path(&self, id: &str) -> Result<PathBuf, String> {
+        check_id(id)?;
+        Ok(self.root.join("samples").join(format!("{id}.json")))
+    }
+
+    /// 노드별 마지막 테스트 결과(`samples/<워크플로우 id>.json`). 없으면 빈 맵.
+    pub fn get_samples(&self, workflow_id: &str) -> Result<BTreeMap<String, Sample>, String> {
+        let path = self.samples_path(workflow_id)?;
+        if !path.exists() {
+            return Ok(BTreeMap::new());
+        }
+        read_json(&path)
+    }
+
+    /// 기존 샘플을 읽어 노드 id별로 덮어 쓴다. HTTP 응답 본문은 기록과 같은 규칙으로 자른다.
+    pub fn put_samples(
+        &self,
+        workflow_id: &str,
+        samples: BTreeMap<String, Sample>,
+    ) -> Result<(), String> {
+        let path = self.samples_path(workflow_id)?;
+        let _g = SAMPLES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all = self.get_samples(workflow_id)?;
+        for (id, mut s) in samples {
+            if s.node["event"] == "http.request"
+                && let Some(body) = s.output.as_mut().and_then(|o| o.get_mut("body"))
+            {
+                clip_body(body);
+            }
+            all.insert(id, s);
+        }
+        write_atomic(&path, &all)
     }
 
     /// 채팅 상태 파일(`chats/<워크플로우 id>.json`). 없으면 빈 값.
@@ -344,6 +483,15 @@ impl Store {
             }
             return Err(format!("{}: {e}", chat.display()));
         }
+        {
+            let _s = SAMPLES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let samples = self.samples_path(id)?;
+            if let Err(e) = fs::remove_file(&samples)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(format!("{}: {e}", samples.display()));
+            }
+        }
         fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
@@ -391,6 +539,151 @@ impl Store {
             .collect();
         list.sort_by(|a, b| b.started_at.cmp(&a.started_at));
         Ok(list)
+    }
+
+    /// 워크플로우별 마지막으로 처리한 스케줄 차례(`schedule.json`). 없으면 빈 맵.
+    /// 파일에는 RFC3339 글로 둔다. 읽지 못하는 값은 건너뛴다(그 워크플로우는 처음 켠 것처럼 시작).
+    pub fn get_schedule_slots(&self) -> Result<HashMap<String, DateTime<Utc>>, String> {
+        Ok(self
+            .read_schedule_file()?
+            .into_iter()
+            .filter_map(|(id, at)| Some((id, DateTime::parse_from_rfc3339(&at).ok()?.to_utc())))
+            .collect())
+    }
+
+    pub fn set_schedule_slot(&self, workflow_id: &str, slot: DateTime<Utc>) -> Result<(), String> {
+        let _g = SCHEDULE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slots = self.read_schedule_file()?;
+        slots.insert(workflow_id.to_string(), slot.to_rfc3339());
+        write_atomic(&self.root.join("schedule.json"), &slots)
+    }
+
+    /// 지운 워크플로우의 차례 기록을 뺀다. 없으면 그대로.
+    pub fn remove_schedule_slot(&self, workflow_id: &str) -> Result<(), String> {
+        let _g = SCHEDULE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut slots = self.read_schedule_file()?;
+        if slots.remove(workflow_id).is_none() {
+            return Ok(());
+        }
+        write_atomic(&self.root.join("schedule.json"), &slots)
+    }
+
+    fn read_schedule_file(&self) -> Result<HashMap<String, String>, String> {
+        let path = self.root.join("schedule.json");
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        // 깨진 파일에 막혀 스케줄이 영영 멈추지 않게 — 비우고 다시 쓴다(처음 켠 것처럼 now부터).
+        Ok(read_json(&path)
+            .inspect_err(|e| eprintln!("[ieum] 스케줄 기록을 읽지 못해 새로 시작해요: {e}"))
+            .unwrap_or_default())
+    }
+
+    /// 워크플로우별 GitHub 트리거 상태(`github_watch.json`). 없거나 깨졌으면 빈 맵 —
+    /// 기준점이 없으면 다음 확인이 처음 켠 것처럼 새로 시작한다.
+    pub fn get_github_watch(&self) -> Result<HashMap<String, WatchEntry>, String> {
+        let path = self.root.join("github_watch.json");
+        if !path.exists() {
+            return Ok(HashMap::new());
+        }
+        Ok(read_json(&path)
+            .inspect_err(|e| eprintln!("[ieum] GitHub 트리거 상태를 읽지 못해 새로 시작해요: {e}"))
+            .unwrap_or_default())
+    }
+
+    pub fn set_github_watch(&self, workflow_id: &str, e: &WatchEntry) -> Result<(), String> {
+        let _g = GITHUB_WATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all = self.get_github_watch()?;
+        all.insert(workflow_id.to_string(), e.clone());
+        write_atomic(&self.root.join("github_watch.json"), &all)
+    }
+
+    /// 지운 워크플로우의 상태를 뺀다. 없으면 그대로.
+    pub fn remove_github_watch(&self, workflow_id: &str) -> Result<(), String> {
+        let _g = GITHUB_WATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut all = self.get_github_watch()?;
+        if all.remove(workflow_id).is_none() {
+            return Ok(());
+        }
+        write_atomic(&self.root.join("github_watch.json"), &all)
+    }
+
+    /// 이 앱이 만든 이슈 번호 기억 파일 경로(`CreatedIssues::open`에 넘긴다).
+    pub fn created_issues_path(&self) -> PathBuf {
+        self.root.join("github_created.json")
+    }
+
+    /// 키별 월 한도 파일. 없거나 깨졌으면 빈 값(깨졌을 땐 로그만).
+    pub fn key_limits(&self) -> KeyLimitsFile {
+        let path = self.root.join("key-limits.json");
+        if !path.exists() {
+            return KeyLimitsFile::default();
+        }
+        read_json(&path)
+            .inspect_err(|e| eprintln!("[ieum] 키 한도 기록을 읽지 못해 새로 시작해요: {e}"))
+            .unwrap_or_default()
+    }
+
+    /// 한도를 정하거나(`Some`) 없앤다(`None`). 한도가 바뀌면 그 키의 알림 기록은 지운다.
+    pub fn set_key_limit(&self, key: &str, usd: Option<f64>) -> Result<(), String> {
+        if usd.is_some_and(|v| !(v.is_finite() && v > 0.0)) {
+            return Err("한도는 0보다 큰 금액이어야 해요.".into());
+        }
+        let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut f = self.key_limits();
+        match usd {
+            Some(v) => f.limits.insert(key.to_string(), v),
+            None => f.limits.remove(key),
+        };
+        f.notified.remove(key);
+        write_atomic(&self.root.join("key-limits.json"), &f)
+    }
+
+    pub fn set_notified(&self, key: &str, n: Notified) -> Result<(), String> {
+        let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut f = self.key_limits();
+        f.notified.insert(key.to_string(), n);
+        write_atomic(&self.root.join("key-limits.json"), &f)
+    }
+
+    /// 알림 단계를 올린다 — 비교와 기록을 같은 잠금 안에서 해 알림이 두 번 가지 않게.
+    /// 한도가 `limit` 그대로이고 그 달 기록 단계가 `level`보다 낮을 때만 쓰고 `true`.
+    /// 그새 한도가 바뀌었으면(옛 한도로 계산한 단계) 쓰지 않는다.
+    pub fn raise_notified(
+        &self,
+        key: &str,
+        month: &str,
+        level: u8,
+        limit: f64,
+    ) -> Result<bool, String> {
+        let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut f = self.key_limits();
+        let sent = f
+            .notified
+            .get(key)
+            .filter(|n| n.month == month)
+            .map_or(0, |n| n.level);
+        if f.limits.get(key) != Some(&limit) || level <= sent {
+            return Ok(false);
+        }
+        let n = Notified {
+            month: month.to_string(),
+            level,
+        };
+        f.notified.insert(key.to_string(), n);
+        write_atomic(&self.root.join("key-limits.json"), &f)?;
+        Ok(true)
+    }
+
+    /// 지운 키의 한도·알림 기록을 뺀다. 지울 게 없으면 쓰지 않는다.
+    pub fn remove_key_limit(&self, key: &str) -> Result<(), String> {
+        let _g = KEY_LIMITS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut f = self.key_limits();
+        let had = f.limits.remove(key).is_some();
+        if !(f.notified.remove(key).is_some() || had) {
+            return Ok(());
+        }
+        write_atomic(&self.root.join("key-limits.json"), &f)
     }
 
     pub fn get_settings(&self) -> Result<Settings, String> {

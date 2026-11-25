@@ -8,7 +8,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use ieum_engine::Workflow;
 use ieum_local::ai::detect_clis;
-use ieum_local::builder::{AiDefault, Builder, ChatFile, Doc, Host, SaveError, TestRun};
+use ieum_local::builder::{
+    AiDefault, Builder, ChatFile, Doc, Host, HttpConfirm, HttpLine, SaveError, TestRun, TestTrigger,
+};
 
 use crate::active::Active;
 use crate::credentials::AccountCredentials;
@@ -187,6 +189,16 @@ impl Host for AppHost {
         (self.pick.0)(workflow_id.to_string(), title.to_string()).await
     }
 
+    async fn confirm_http(&self, workflow_id: &str, lines: &[HttpLine]) -> HttpConfirm {
+        // 대기를 먼저 등록해야 화면의 빠른 답을 놓치지 않는다.
+        let answer = self.sup.http_gate().ask(workflow_id);
+        self.sup.emit(AppEvent::HttpTestConfirm {
+            workflow_id: workflow_id.to_string(),
+            lines: lines.to_vec(),
+        });
+        answer.await
+    }
+
     async fn ai_default(&self) -> Option<AiDefault> {
         let (sup, creds, clis) = (self.sup.clone(), self.creds.clone(), self.clis.clone());
         tokio::task::spawn_blocking(move || pick_ai_default(&sup, &creds, &clis))
@@ -209,9 +221,9 @@ impl Host for AppHost {
         &self,
         workflow_id: &str,
         wf: Workflow,
-        sample: &Path,
+        trigger: TestTrigger,
     ) -> Result<TestRun, String> {
-        self.sup.run_test(workflow_id, wf, sample).await
+        self.sup.run_test(workflow_id, wf, trigger).await
     }
 
     fn finish_pending(&self, workflow_id: &str, workflow_name: &str) {

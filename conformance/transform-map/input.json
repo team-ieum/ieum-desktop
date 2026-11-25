@@ -1,0 +1,4 @@
+{
+  "trigger": {"path": "/Users/me/Downloads/report.pdf", "name": "report.pdf", "extension": "pdf", "size": 2048},
+  "nodeOutputs": {}
+}

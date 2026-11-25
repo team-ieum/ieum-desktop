@@ -10,6 +10,8 @@ use serde_json::{Map, Value, json};
 
 use super::Code;
 use super::edit::{AI_EVENT, AI_LOCKED_FIELDS, find, find_mut, is_folder_field};
+use super::test::type_name;
+use reqwest::Url;
 
 /// 정적 검증 + 필수 칸·선택지. Builder는 늘 둘을 합쳐 쓴다.
 pub(crate) fn all_errors(wf: &Workflow, catalog: &Catalog) -> Vec<ValidationError> {
@@ -18,12 +20,104 @@ pub(crate) fn all_errors(wf: &Workflow, catalog: &Catalog) -> Vec<ValidationErro
     errors
 }
 
+/// 데스크톱에서 숨기는 칸 — 클라우드 웹훅은 여기서 쓸 수 없다. fields에 안 보이고 set은 FIELD_UNKNOWN.
+fn hidden(event: &str, key: &str) -> bool {
+    event == "http.request" && key == "webhookCredentialId"
+}
+
 /// `set`으로 못 채우는 칸 — 폴더 칸은 사람이 고르고, AI 연결 칸은 앱이 채운다.
 fn locked(event: &str, key: &str) -> bool {
     is_folder_field(event, key) || (event == AI_EVENT && AI_LOCKED_FIELDS.contains(&key))
 }
 
-fn field_json(event: &str, f: &InputField, path: String, value: Option<&Value>) -> Value {
+/// AI에게 값 대신 보이는 표시. set이 이 표시를 받으면 기존 값을 지킨다.
+const HIDDEN: &str = "(숨김)";
+
+fn hidden_body(v: &Value) -> String {
+    format!("(숨김: {})", type_name(v))
+}
+
+fn is_hidden_body(s: &str) -> bool {
+    s.starts_with("(숨김: ") && s.ends_with(')')
+}
+
+/// 스킴·호스트(포트)까지만 — 웹훅은 경로 자체가 비밀이다. 호스트 자리의 참조식은 보인다.
+fn url_shown(s: &str) -> String {
+    let rest = |more: bool| {
+        if more {
+            format!("/{HIDDEN}")
+        } else {
+            String::new()
+        }
+    };
+    if let Some(end) = s.starts_with("{{").then(|| s.find("}}")).flatten() {
+        return format!("{}{}", &s[..end + 2], rest(end + 2 < s.len()));
+    }
+    let Ok(url) = Url::parse(s) else {
+        return HIDDEN.into();
+    };
+    let Some(host) = url.host_str() else {
+        return HIDDEN.into();
+    };
+    let user = if url.username().is_empty() && url.password().is_none() {
+        String::new()
+    } else {
+        format!("{HIDDEN}@")
+    };
+    let port = url.port().map(|p| format!(":{p}")).unwrap_or_default();
+    let more = url.path() != "/" || url.query().is_some() || url.fragment().is_some();
+    format!("{}://{user}{host}{port}{}", url.scheme(), rest(more))
+}
+
+/// HTTP 노드에는 사람이 편집기에서 넣은 비밀(머리말 값·주소의 경로·쿼리·계정·본문)이 있다 — AI에게 주지 않는다.
+fn shown(event: &str, key: &str, value: Option<&Value>) -> Option<Value> {
+    let value = value?;
+    if event != "http.request" || value.is_null() {
+        return Some(value.clone());
+    }
+    Some(match (key, value) {
+        ("url", Value::String(s)) => url_shown(s).into(),
+        ("headers", Value::Object(m)) => m.keys().map(|k| (k.clone(), json!(HIDDEN))).collect(),
+        ("url" | "headers", _) => HIDDEN.into(),
+        // 본문은 있다는 것과 모양만.
+        ("body", v) => hidden_body(v).into(),
+        _ => value.clone(),
+    })
+}
+
+/// 두 표시((숨김)·(숨김: 모양))가 모두 이 글로 시작한다.
+fn has_mark(v: &Value) -> bool {
+    v.to_string().contains("(숨김")
+}
+
+/// AI는 숨긴 값을 모르니 fields에서 본 표시를 그대로 돌려준다 — 그 자리는 사람이 넣은 값을 지킨다.
+/// 표시를 섞은 새 값은 거절 — 옛 값을 조용히 지키거나 표시 글자를 저장하면 둘 다 조용한 실패다.
+fn keep_hidden(key: &str, value: Value, old: Option<&Value>) -> Result<Value, Code> {
+    let old = old.filter(|v| !v.is_null());
+    match (key, value) {
+        ("url", v) if shown("http.request", "url", old).as_ref() == Some(&v) => {
+            old.cloned().ok_or(Code::FieldInvalid)
+        }
+        ("body", Value::String(s)) if is_hidden_body(&s) => old.cloned().ok_or(Code::FieldInvalid),
+        ("headers", Value::Object(mut m)) => {
+            for (k, v) in m.iter_mut() {
+                if v == HIDDEN {
+                    *v = old
+                        .and_then(|o| o.get(k))
+                        .cloned()
+                        .ok_or(Code::FieldInvalid)?;
+                } else if has_mark(v) {
+                    return Err(Code::FieldInvalid);
+                }
+            }
+            Ok(Value::Object(m))
+        }
+        ("url" | "body", v) if has_mark(&v) => Err(Code::FieldInvalid),
+        (_, value) => Ok(value),
+    }
+}
+
+fn field_json(event: &str, f: &InputField, path: String, value: Option<Value>) -> Value {
     let children: Vec<Value> = f
         .children
         .iter()
@@ -49,13 +143,15 @@ pub(super) fn fields(catalog: &Catalog, wf: &Workflow, id: &str) -> Result<Value
     let fields: Vec<Value> = defs
         .unwrap_or_default()
         .iter()
+        .filter(|f| !hidden(&node.event, &f.key))
         .map(|f| {
             let path = f
                 .path
                 .clone()
                 .filter(|p| !p.is_empty())
                 .unwrap_or_else(|| format!("config.{}", f.key));
-            field_json(&node.event, f, path, node.config.get(&f.key))
+            let value = shown(&node.event, &f.key, node.config.get(&f.key));
+            field_json(&node.event, f, path, value)
         })
         .collect();
     let up = upstream_ids(wf, id);
@@ -75,8 +171,33 @@ pub(super) fn fields(catalog: &Catalog, wf: &Workflow, id: &str) -> Result<Value
     Ok(json!({"fields": fields, "upstream": upstream}))
 }
 
-/// CLI는 값을 글자로만 준다 — 불리언·목록 칸은 칸 타입에 맞춘다.
+/// HTTP 본문 — 글이 JSON 객체·배열이면 그 값, 아니면 글 그대로.
+fn json_or_text(value: Value) -> Value {
+    match &value {
+        Value::String(s) => match serde_json::from_str(s) {
+            Ok(v @ (Value::Object(_) | Value::Array(_))) => v,
+            _ => value,
+        },
+        _ => value,
+    }
+}
+
+/// CLI는 값을 글자로만 준다 — 불리언·목록·정수·객체 칸은 칸 타입에 맞춘다.
+/// 못 읽어도 참조식(`{{`)이 든 글은 실행 때 치환되므로 글 그대로 둔다.
 fn coerce(f: &InputField, value: Value) -> Result<Value, Code> {
+    if let (Some(kind @ ("integer" | "dict")), Value::String(s), false) =
+        (f.kind.as_deref(), &value, f.list)
+    {
+        let parsed = match kind {
+            "integer" => s.trim().parse::<i64>().ok().map(Value::from),
+            _ => serde_json::from_str(s).ok().filter(Value::is_object),
+        };
+        return match parsed {
+            Some(v) => Ok(v),
+            None if s.contains("{{") => Ok(value),
+            None => Err(Code::FieldInvalid),
+        };
+    }
     if f.list {
         return match value {
             Value::Array(_) | Value::Null => Ok(value),
@@ -148,15 +269,29 @@ pub(super) fn set(
         let f = defs
             .unwrap_or_default()
             .iter()
-            .find(|f| f.key == key)
+            .find(|f| f.key == key && !hidden(&node.event, &key))
             .ok_or(Code::FieldUnknown)?;
         if locked(&node.event, &key) {
             return Err(Code::FieldLocked);
         }
         let mut value = coerce(f, value)?;
+        if node.event == "http.request" {
+            value = keep_hidden(&key, value, node.config.get(&key))?;
+            if key == "body" {
+                value = json_or_text(value);
+            }
+        }
         match (node.event.as_str(), key.as_str()) {
             ("local.file_move", "destination") if !destination_ok(&value) => {
                 return Err(Code::FolderNotAllowed);
+            }
+            // BE는 머리말을 `Map<String,String>`으로 읽는다 — 글이 아닌 값은 거기서 실패한다.
+            ("http.request", "headers")
+                if value
+                    .as_object()
+                    .is_some_and(|m| m.values().any(|v| !v.is_string())) =>
+            {
+                return Err(Code::FieldInvalid);
             }
             ("branch.if", "branches") => branches = Some(fill_branch_keys(&mut value)),
             _ => {}

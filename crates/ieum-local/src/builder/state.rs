@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 
 use ieum_engine::{Node, Workflow};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use super::{Blueprint, HttpLine};
 use crate::ai::AiUsage;
 
 /// `accounts/<계정>/chats/<workflowId>.json`. `state`는 두 입구(터미널·채팅 패널)가 공유한다.
@@ -49,6 +50,18 @@ pub struct ChatState {
     pub baseline: Option<BTreeMap<String, String>>,
     pub tests: BTreeMap<String, TestEntry>,
     pub pending_finish: Option<PendingFinish>,
+    /// 마지막 설계서 하나. 깨진 값은 버린다 — 칸 하나 때문에 채팅 파일 전체를 못 읽지 않게.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient"
+    )]
+    pub blueprint: Option<Blueprint>,
+}
+
+/// 값으로 받은 뒤 설계서로 바꾸고, 안 되면 None.
+fn lenient<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Blueprint>, D::Error> {
+    Ok(serde_json::from_value(Value::deserialize(d)?).ok())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,10 +103,22 @@ impl NodeState {
 #[serde(rename_all = "camelCase", default)]
 pub struct PendingFinish {
     pub hash: String,
-    pub folder: String,
+    /// 폴더 트리거일 때만.
+    pub folder: Option<String>,
+    /// 끝내는 버튼. 이 칸이 생기기 전 파일에는 없다(= enable).
+    pub button: FinishButton,
     pub actions: Vec<FinishAction>,
     /// AI 노드마다 한 줄. 이 칸이 생기기 전 파일에는 없다(빈 목록).
     pub ai: Vec<FinishAi>,
+}
+
+/// 확인 카드의 끝내는 버튼 — 수동 실행 워크플로우는 켤 것이 없어 [저장](누르면 enabled = true로 저장).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FinishButton {
+    #[default]
+    Enable,
+    Save,
 }
 
 /// 확인 카드의 AI 노드 한 줄 — 사람이 켜기 전에 어느 공급원으로 파일 내용이 가는지 본다.
@@ -114,6 +139,9 @@ pub struct FinishAction {
     pub event: String,
     pub label: String,
     pub target: Option<String>,
+    /// HTTP 줄만 — 테스트 확인 카드와 같은 내용. 이 칸이 생기기 전 파일·다른 동작 줄에는 없다.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http: Option<HttpLine>,
 }
 
 /// 객체 키를 재귀로 정렬한다(배열 순서는 유지). `serde_json`의 `preserve_order` 여부와 무관하게 같은 글자가 나온다.
