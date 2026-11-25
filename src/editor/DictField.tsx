@@ -84,7 +84,7 @@ function DictText({
         aria-label={label}
         aria-invalid={invalid || undefined}
         aria-describedby={invalid ? errId : undefined}
-        className={`${INPUT} ${invalid ? "border-danger-600" : ""}`}
+        className={INPUT}
         value={text}
         onChange={(e) => set(e.target.value)}
       />
@@ -139,7 +139,7 @@ export function DictField({
                 aria-describedby={dup.has(r.id) ? dupId : undefined}
                 placeholder={t("editor.dictKeyHint")}
                 autoFocus={r.id === focusId}
-                className={`${INPUT} w-1/3 ${dup.has(r.id) ? "border-danger-600" : ""}`}
+                className={`${INPUT} basis-1/3 min-w-0`}
                 value={r.key}
                 onChange={(e) => set(r.id, { key: e.target.value })}
               />

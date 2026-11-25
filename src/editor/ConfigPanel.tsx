@@ -18,7 +18,7 @@ type Obj = Record<string, unknown>;
 
 const MAX_ITEMS = 10;
 export const INPUT =
-  "w-full rounded-brand-sm border border-neutral-300 bg-white px-3 py-2 typo-body3_regular text-neutral-800 outline-none focus:border-main-blue";
+  "w-full rounded-brand-sm border border-neutral-300 bg-white px-3 py-2 typo-body3_regular text-neutral-800 outline-none focus:border-main-blue aria-invalid:border-danger-600";
 export const SMALL_BUTTON =
   "inline-flex items-center gap-1 rounded-brand-sm border border-neutral-300 bg-white px-2.5 py-1.5 typo-caption1_semibold text-neutral-700 hover:bg-neutral-100 disabled:opacity-40";
 
@@ -123,7 +123,7 @@ function IntegerInput({ id, value, onChange, allowRef, refs }: { id: string; val
         inputMode="numeric"
         aria-invalid={invalid || undefined}
         aria-describedby={invalid ? errId : undefined}
-        className={`${INPUT} ${invalid ? "border-danger-600" : ""}`}
+        className={INPUT}
         value={text}
         onChange={(e) => set(e.target.value)}
       />
