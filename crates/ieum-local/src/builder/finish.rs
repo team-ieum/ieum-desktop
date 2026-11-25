@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 use super::edit::{AI_EVENT, FOLDER_FIELDS};
 use super::{
     Builder, ChatState, Code, Doc, FinishAction, FinishAi, FinishButton, GithubTarget, HttpLine,
-    HttpSend, NodeState, PendingFinish, Reply, SaveError, node_state, workflow_hash,
+    HttpSend, NodeState, PendingFinish, Reply, SaveError, clear_slot_paths, node_state,
+    workflow_hash,
 };
 use crate::github::GITHUB_WRITE_EVENTS;
 
@@ -310,6 +311,15 @@ impl Builder {
             SaveError::Stale => Code::Stale,
             SaveError::Rejected(_) => Code::SaveRejected,
         })?;
+        // 다 만들었다 — 쓰지 않고 남은 슬롯 경로를 들고 있지 않는다. 켜기는 이미 저장됐으니
+        // 이 갱신이 실패해도 확인 결과는 바꾸지 않는다.
+        if state.blueprint.is_some() {
+            let _ = self.update_chat(id, |s| {
+                if let Some(b) = s.blueprint.as_mut() {
+                    clear_slot_paths(b);
+                }
+            });
+        }
         Ok(())
     }
 }

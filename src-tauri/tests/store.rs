@@ -140,6 +140,12 @@ fn account_suggest_defaults_on() {
 }
 
 #[test]
+fn old_settings_default_experiments_off() {
+    let s: Settings = serde_json::from_str("{}").unwrap();
+    assert!(!s.chat_blueprint && !s.chat_metrics);
+}
+
+#[test]
 fn chat_file_default_update_and_deleted_with_workflow() {
     let t = tempfile::tempdir().unwrap();
     let store = Store::new(t.path().to_path_buf());

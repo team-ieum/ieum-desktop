@@ -5,7 +5,7 @@ import { type Key, t } from "../../i18n";
 
 export const CARD =
   "rounded-xl border border-[#cde9f4] bg-white px-3 py-2.5 text-xs max-w-[280px] shadow-[0_4px_14px_-10px_rgba(41,83,124,.35)]";
-const CARD_BUTTON =
+export const CARD_BUTTON =
   "inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-main-blue px-3 py-2 text-xs font-semibold text-main-blue transition-colors hover:bg-main-blue/5 disabled:opacity-40";
 /** 상태 점 색 — 상태 글이 같이 있어 색만으로 전하지 않는다. */
 const DOT: Record<string, string> = { succeeded: "bg-[#2f9e6e]", success: "bg-[#2f9e6e]", failed: "bg-[#d0573b]" };

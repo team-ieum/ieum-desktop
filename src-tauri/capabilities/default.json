@@ -77,6 +77,8 @@
     "allow-term-tools",
     "allow-chat-send",
     "allow-chat-pick-folder",
+    "allow-chat-submit-blueprint",
+    "allow-chat-pick-slot",
     "allow-list-models",
     "allow-answer-http-confirm",
     "allow-github-status",

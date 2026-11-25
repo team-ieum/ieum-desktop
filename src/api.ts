@@ -147,6 +147,9 @@ export interface Settings {
   confirmDiscardUnsaved?: boolean;
   /** 한도 도달 시 다른 계정 권하기 — 옛 설정·테스트엔 없을 수 있어 `!== false`로 읽는다. */
   notifyAccountSuggest?: boolean;
+  /** 실험 기능 — 옛 설정·테스트엔 없을 수 있어 `=== true`로 읽는다(기본 꺼짐). */
+  chatBlueprint?: boolean;
+  chatMetrics?: boolean;
 }
 /** 기본 계정이 한도에 닿아 권하는 다른 계정(Rust `limit_watch::Suggestion`). */
 export interface Suggestion {
@@ -453,6 +456,7 @@ export interface ChatFile {
     baseline: Record<string, string> | null;
     tests: Record<string, { hash: string; status: "success" | "failed" | "skipped" }>;
     pendingFinish: PendingFinish | null;
+    blueprint?: Blueprint | null;
   };
   usage: { at: string; usage: unknown }[];
 }
@@ -461,7 +465,8 @@ export interface ChatFile {
 export type ChatCard =
   | { kind: "test"; nodeId: string; runId: string; status: string; httpSent?: boolean }
   | { kind: "pickFolder"; nodeId: string; field: string }
-  | { kind: "finish" };
+  | { kind: "finish" }
+  | { kind: "blueprint"; version: number };
 export interface ChatTurn {
   say: string;
   cards: ChatCard[];
@@ -474,6 +479,23 @@ export interface ChatAi {
   effort: string | null;
 }
 export type ChatStage = { id: string; stage: "designing" | "testing" };
+export interface BlueprintSlot {
+  event: string;
+  field: string;
+  path: string | null;
+  pickedVersion: number | null;
+  boundNode: string | null;
+}
+export interface Blueprint {
+  status: "active" | "submitted" | "cancelled";
+  version: number;
+  components: Record<string, unknown>[];
+  dataModel: Record<string, unknown>;
+  slots: Record<string, BlueprintSlot>;
+  buildPending: boolean;
+  buildAttempts: number;
+}
+
 /** GitHub 칸 목록 한 항목(소유자·저장소·브랜치·마일스톤). */
 export interface OptionItem {
   id: string;
@@ -674,7 +696,7 @@ export const api = {
   /** [보내기]/[테스트 없이 넘어가기]. 기다리는 대기가 없으면(시간 초과·덮어씀) false. */
   answerHttpConfirm: (workflowId: string, send: boolean) => invoke<boolean>("answer_http_confirm", { workflowId, send }),
   // ── 채팅 패널 ──
-  chatSend: (workflowId: string, text: string, ai: ChatAi) =>
+  chatSend: (workflowId: string, text: string, ai: ChatAi, blueprint?: { data: Record<string, unknown>; touched: boolean }) =>
     invoke<ChatTurn>("chat_send", {
       workflowId,
       text,
@@ -682,7 +704,13 @@ export const api = {
       credential: ai.credential,
       model: ai.model,
       effort: ai.effort,
+      blueprintData: blueprint?.data ?? null,
+      blueprintTouched: blueprint?.touched ?? null,
     }),
+  chatSubmitBlueprint: (workflowId: string, version: number, data: Record<string, unknown>) =>
+    invoke<BuilderReply>("chat_submit_blueprint", { workflowId, version, data }),
+  chatPickSlot: (workflowId: string, slot: string, version: number) =>
+    invoke<BuilderReply>("chat_pick_slot", { workflowId, slot, version }),
   /** 폴더 고르기 카드의 버튼 — 시스템 폴더 창을 연다. */
   chatPickFolder: (workflowId: string, nodeId: string, field: string) =>
     invoke<BuilderReply>("chat_pick_folder", { workflowId, nodeId, field }),

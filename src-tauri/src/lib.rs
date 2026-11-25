@@ -9,6 +9,7 @@ pub mod github;
 pub mod http_confirm;
 pub mod key_limits;
 pub mod limit_watch;
+pub mod metrics;
 pub mod models;
 pub mod notify;
 pub mod permissions;
@@ -399,6 +400,8 @@ pub fn run() {
             // ── 캔버스 채팅 D(채팅 패널 chat_*) — 여기 아래에 추가 ──
             chat::chat_send,
             chat::chat_pick_folder,
+            chat::chat_submit_blueprint,
+            chat::chat_pick_slot,
             models::list_models,
         ])
         .build(tauri::generate_context!())

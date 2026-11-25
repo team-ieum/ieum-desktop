@@ -18,10 +18,12 @@ impl Request {
             Some(Some(Value::String(t))) => t,
             Some(_) => return Err(Reply::err(Code::Unauthorized)),
         };
-        Ok(Request {
-            token,
-            op: Op::from_value(v)?,
-        })
+        let op = Op::from_value(v)?;
+        // 채팅 전용 동작은 모르는 동작과 같게 거절한다 — 터미널 에이전트가 사람이 고른 슬롯 경로를 쓰지 못하게.
+        if matches!(op, Op::Ui { .. } | Op::BindFolder { .. }) {
+            return Err(Reply::err(Code::BadRequest));
+        }
+        Ok(Request { token, op })
     }
 
     pub fn to_line(&self) -> String {

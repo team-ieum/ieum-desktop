@@ -9,8 +9,8 @@ use super::edit::{self, AI_EVENT};
 use super::fields;
 use super::guide::GUIDE;
 use super::{
-    AiDefault, ChatState, Code, Doc, Host, Op, PendingFinish, Reply, SaveError, node_hash,
-    workflow_hash,
+    AiDefault, BlueprintStatus, ChatState, Code, Doc, Host, Op, PendingFinish, Reply, SaveError,
+    clear_slot_paths, node_hash, workflow_hash,
 };
 
 /// 워크플로우 id별 잠금(프로세스 전역) — 한 워크플로우에는 한 번에 한 동작만.
@@ -18,7 +18,7 @@ use super::{
 static LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(Mutex::default);
 
-fn lock_of(workflow_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+pub(super) fn lock_of(workflow_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     LOCKS
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -59,8 +59,23 @@ impl Builder {
         if changes && self.host.user_editing(workflow_id) {
             return Reply::err(Code::UserEditing);
         }
+        // 설계서를 거치지 않은 변경 — outline은 워크플로우 구조를 안 바꾸고, bind-folder는 설계서대로 넣는 것이다.
+        let cancels = op.mutates() && !matches!(op, Op::Outline { .. } | Op::BindFolder { .. });
         match self.dispatch(workflow_id, op, ai).await {
-            Ok(data) => Reply::ok(data),
+            Ok(data) => {
+                if cancels {
+                    // 변경은 이미 저장됐다 — 취소 표시를 못 써도 실패로 알리면 AI가 같은 변경을 다시 한다.
+                    let _ = self.update_chat(workflow_id, |s| {
+                        if let Some(b) = s.blueprint.as_mut()
+                            && b.status == BlueprintStatus::Active
+                        {
+                            b.status = BlueprintStatus::Cancelled;
+                            clear_slot_paths(b);
+                        }
+                    });
+                }
+                Reply::ok(data)
+            }
             Err(reply) => reply,
         }
     }
@@ -157,6 +172,15 @@ impl Builder {
             }
             Op::Finish {} => return self.finish(id, &doc, &state).await,
             Op::Guide {} => return Ok(json!({"text": GUIDE})),
+            Op::Ui { messages } => return self.ui(id, &state, &messages),
+            Op::BindFolder {
+                id: node,
+                field,
+                slot,
+            } => {
+                self.bind_folder(id, doc, &state, &node, &field, &slot)?;
+                return Ok(Value::Null);
+            }
         }
         self.commit(id, doc)?;
         Ok(Value::Null)

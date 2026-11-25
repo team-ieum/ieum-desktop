@@ -63,6 +63,16 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         file: Option<String>,
     },
+    /// 채팅 전용(터미널은 `Request::parse`가 거절) — 설계서 A2UI 메시지 묶음.
+    Ui {
+        messages: Vec<Value>,
+    },
+    /// 채팅 전용 — 제출된 설계서의 앱 전용 칸 경로를 노드 폴더 칸에 넣는다. 경로는 AI에게 보이지 않는다.
+    BindFolder {
+        id: String,
+        field: String,
+        slot: String,
+    },
 }
 
 impl Op {
@@ -74,7 +84,7 @@ impl Op {
         serde_json::from_value(v).map_err(|_| Reply::err(Code::BadRequest))
     }
 
-    /// 저장본을 고치는 동작인가(outline·add·set·connect·disconnect·remove·rename·pick-folder).
+    /// 저장본을 고치는 동작인가(outline·add·set·connect·disconnect·remove·rename·pick-folder·bind-folder).
     pub fn mutates(&self) -> bool {
         matches!(
             self,
@@ -86,6 +96,7 @@ impl Op {
                 | Op::Remove { .. }
                 | Op::Rename { .. }
                 | Op::PickFolder { .. }
+                | Op::BindFolder { .. }
         )
     }
 }
