@@ -55,8 +55,10 @@ export function localCard(w: WorkflowEntry): CardData {
   const schedule = nodes.find((n) => n.event.startsWith("schedule."));
   const github = nodes.find((n) => n.event.startsWith("github.new_"));
   const repo = [github?.config.owner, github?.config.repo].every((v) => typeof v === "string" && v) ? `${github?.config.owner}/${github?.config.repo}` : undefined;
-  // 서비스 = 노드 event 앱(local.ai만 AI로 따로). 분기 같은 흐름 노드는 서비스가 아니다.
-  const services = [...new Set(nodes.map((n) => (n.event === "local.ai" ? "ai" : n.event.split(".")[0])))].filter((s) => s === "local" || s === "ai");
+  // 서비스 = 노드 event 앱(local.ai만 AI로 따로, GitHub는 웹과 같은 이름). 분기 같은 흐름 노드는 서비스가 아니다.
+  const services = [...new Set(nodes.map((n) => (n.event === "local.ai" ? "ai" : n.event.startsWith("github.") ? "GITHUB" : n.event.split(".")[0])))].filter(
+    (s) => s === "local" || s === "ai" || s === "GITHUB",
+  );
   return {
     id: w.id,
     name: w.name,
