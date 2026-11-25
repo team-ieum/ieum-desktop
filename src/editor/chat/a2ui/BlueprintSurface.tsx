@@ -129,6 +129,7 @@ const AppGateImpl = createComponentImplementation(
         event={props.target.event}
         field={props.target.field}
         path={slots[props.slot]?.path ?? null}
+        bound={slots[props.slot]?.boundNode != null}
         disabled={busy || locked}
         canChange={!locked}
         onPick={() => onPickSlot(props.slot)}

@@ -289,3 +289,17 @@ it("locked_app_gate_has_no_pick_again", async () => {
   expect(await screen.findByText("/h/in")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "다시 고르기" })).toBeNull();
 });
+
+it("bound_slot_shows_bound_label", async () => {
+  const b: Blueprint = {
+    ...receipt,
+    status: "submitted",
+    slots: {
+      watch: { ...slot("local.folder_new_file", "folder", null), boundNode: "n1" },
+      dest: { ...slot("local.file_move", "baseFolder", null), boundNode: "n2" },
+    },
+  };
+  render(surface(b, { locked: true }));
+  expect((await screen.findAllByText("노드에 넣었어요")).length).toBe(2);
+  expect(screen.queryByRole("button", { name: "폴더 고르기" })).toBeNull();
+});

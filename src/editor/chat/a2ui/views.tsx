@@ -208,6 +208,7 @@ export function AppGateView({
   event,
   field,
   path,
+  bound,
   disabled,
   canChange,
   onPick,
@@ -215,6 +216,7 @@ export function AppGateView({
   event: string;
   field: string;
   path: string | null;
+  bound: boolean;
   disabled: boolean;
   canChange: boolean;
   onPick: () => void;
@@ -242,7 +244,13 @@ export function AppGateView({
           {t("chat.blueprint.pickAgain")}
         </button>
       ) : null}
-      {!path ? (
+      {!path && bound ? (
+        <p className="flex items-center gap-1.5 font-semibold text-neutral-700">
+          <Check size={13} className="text-main-blue" aria-hidden="true" />
+          {t("chat.blueprint.slotBound")}
+        </p>
+      ) : null}
+      {!path && !bound ? (
         <button type="button" disabled={disabled} onClick={onPick} className={`${CARD_BUTTON} bg-white`}>
           <FolderOpen size={13} aria-hidden="true" />
           {t("chat.card.pickButton")}
