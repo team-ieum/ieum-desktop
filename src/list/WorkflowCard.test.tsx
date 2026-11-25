@@ -88,4 +88,7 @@ test("github_trigger_card_is_app_event_with_repo", () => {
   expect(c.trigger).toBe("event");
   expect(c.triggerDetail).toBe("o/r");
   expect(sched("github.new_pull_request", { owner: "o" }).triggerDetail).toBeUndefined();
+  expect(c.services).toEqual(["GITHUB"]);
+  const manual = localCard(entry({ workflow: { nodes: [{ id: "m", event: "manual.run", config: {} }, { id: "g", event: "github.create_issue", config: {} }], edges: [] } }));
+  expect(manual.services).toEqual(["GITHUB"]);
 });
