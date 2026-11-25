@@ -1,4 +1,4 @@
-import { Check, ChevronRight, CircleCheck, CircleX, FileText, Folder, FolderOpen, FolderSearch, ShieldCheck, Sparkles } from "lucide-react";
+import { Check, ChevronRight, CircleCheck, CircleX, FileText, Folder, FolderOpen, FolderSearch, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
 import { type ReactNode, useEffect, useId, useState } from "react";
 import { t, tDyn } from "../../../i18n";
 import { fieldKey } from "../../../nodes/defs";
@@ -209,12 +209,14 @@ export function AppGateView({
   field,
   path,
   disabled,
+  canChange,
   onPick,
 }: {
   event: string;
   field: string;
   path: string | null;
   disabled: boolean;
+  canChange: boolean;
   onPick: () => void;
 }) {
   const label = tDyn(fieldKey(event, field)) ?? field;
@@ -233,12 +235,19 @@ export function AppGateView({
           <Folder size={13} className="mt-px shrink-0 text-main-blue" aria-hidden="true" />
           {path}
         </p>
-      ) : (
+      ) : null}
+      {path && canChange ? (
+        <button type="button" disabled={disabled} onClick={onPick} className={`${CARD_BUTTON} bg-white`}>
+          <RefreshCw size={13} aria-hidden="true" />
+          {t("chat.blueprint.pickAgain")}
+        </button>
+      ) : null}
+      {!path ? (
         <button type="button" disabled={disabled} onClick={onPick} className={`${CARD_BUTTON} bg-white`}>
           <FolderOpen size={13} aria-hidden="true" />
           {t("chat.card.pickButton")}
         </button>
-      )}
+      ) : null}
     </div>
   );
 }

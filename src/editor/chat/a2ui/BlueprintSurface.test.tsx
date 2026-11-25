@@ -271,3 +271,21 @@ it("changed_turns_off_when_on_drops_early", () => {
   expect(screen.getByText("칸").className).not.toContain("bg-amber-50");
   vi.useRealTimers();
 });
+
+it("app_gate_can_pick_again_while_active", async () => {
+  const onPickSlot = vi.fn();
+  const b: Blueprint = { ...receipt, slots: { ...receipt.slots, watch: slot("local.folder_new_file", "folder", "/h/in") } };
+  const { rerender } = render(surface(b, { onPickSlot }));
+  expect(await screen.findByText("/h/in")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "다시 고르기" }));
+  expect(onPickSlot).toHaveBeenCalledWith("watch");
+  rerender(surface(b, { onPickSlot, busy: true }));
+  expect((screen.getByRole("button", { name: "다시 고르기" }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it("locked_app_gate_has_no_pick_again", async () => {
+  const b: Blueprint = { ...receipt, status: "submitted", slots: { ...receipt.slots, watch: slot("local.folder_new_file", "folder", "/h/in") } };
+  render(surface(b, { locked: true }));
+  expect(await screen.findByText("/h/in")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "다시 고르기" })).toBeNull();
+});
